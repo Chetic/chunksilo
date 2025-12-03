@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Ingestion pipeline for building a RAG index from PDF and DOCX documents.
+Ingestion pipeline for building a RAG index from PDF, DOCX, and Markdown documents.
 """
 import os
 import logging
@@ -38,7 +38,7 @@ def build_index():
     # Initialize reader
     reader = SimpleDirectoryReader(
         input_dir=str(DATA_DIR),
-        required_exts=[".pdf", ".docx"],
+        required_exts=[".pdf", ".docx", ".md"],
         recursive=True,
     )
     

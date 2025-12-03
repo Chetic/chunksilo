@@ -4,7 +4,7 @@ Run a **fully on-prem documentation assistant** that you can access from **Conti
 
 With this setup you get these capabilities:
 
-- **Ask questions** in Continue about your local PDF/DOCX docs (no upload to third-party services)
+- **Ask questions** in Continue about your local PDF/DOCX/Markdown docs (no upload to third-party services)
 - **Semantic search** over your docs using LlamaIndex
 - **Source citations** for each answer (which chunks/files were used)
 - **Local-only data flow**: docs and index stay on disk; only embeddings are generated locally
@@ -12,7 +12,7 @@ With this setup you get these capabilities:
 
 ## Features
 
-- Indexes PDF and DOCX documents from a local directory
+- Indexes PDF, DOCX, and Markdown documents from a local directory
 - Uses LlamaIndex for semantic search and retrieval
 - Exposes an MCP server with `retrieve_docs` tool that returns raw document chunks
 - **No LLM required in the MCP server** - it only does retrieval; your existing Continue LLM handles answer synthesis
@@ -21,11 +21,11 @@ With this setup you get these capabilities:
 ## Prerequisites
 
 - Python 3.9+
-- Documents in PDF or DOCX format
+- Documents in PDF, DOCX, or Markdown format
 
 The intended deployment is **on-prem**:
 
-- Your PDFs/DOCX live on your machines.
+- Your PDFs/DOCX/Markdown files live on your machines.
 - Indexes are stored locally on disk.
 - Answer generation is done by Continue's LLM (which you already have configured).
 - The MCP server only does retrieval - no LLM needed!
@@ -59,7 +59,7 @@ cp .env.example .env
 
 Edit `.env` file with your settings:
 
-- `DATA_DIR`: Directory containing PDF/DOCX files (default: `./data`)
+- `DATA_DIR`: Directory containing PDF/DOCX/Markdown files (default: `./data`)
 - `STORAGE_DIR`: Directory for index storage (default: `./storage`)
 - `EMB_MODEL_NAME`: Embedding model name used by LlamaIndex (default: `BAAI/bge-small-en-v1.5`). Any embedding model supported by LlamaIndex can be used; BGE-small is just a good default from Hugging Face.
 - `SIMILARITY_TOP_K`: Number of document chunks to retrieve per query (default: `5`)
@@ -70,10 +70,10 @@ Edit `.env` file with your settings:
 
 ### 1. Prepare Documents
 
-Place your PDF and DOCX files in the `data/` directory:
+Place your PDF, DOCX, and Markdown files in the `data/` directory:
 ```bash
 mkdir -p data
-# Copy your PDF/DOCX files to data/
+# Copy your PDF/DOCX/Markdown files to data/
 ```
 
 ### 2. Build the Index
@@ -84,7 +84,7 @@ python ingest.py
 ```
 
 This will:
-- Scan the `data/` directory for PDF and DOCX files
+- Scan the `data/` directory for PDF, DOCX, and Markdown files
 - Parse and chunk the documents
 - Generate embeddings
 - Build and persist the vector index to `storage/`
@@ -162,7 +162,7 @@ For concise testing instructions on how to run the Python test scripts, see `TES
 ├── .env.example       # Environment variable template
 ├── .gitignore         # Git ignore rules
 ├── README.md          # This file
-├── data/              # Input documents (PDF/DOCX)
+├── data/              # Input documents (PDF/DOCX/Markdown)
 └── storage/           # Persistent index storage
 ```
 
@@ -184,7 +184,7 @@ The first run will download the embedding model from Hugging Face. This may take
 
 ## Future Enhancements
 
-- Additional document sources (Markdown, Confluence, etc.)
+- Additional document sources (Confluence, Notion, etc.)
 - Vector database integration (pgvector, Qdrant)
 - Authentication and multi-tenancy
 - Incremental indexing

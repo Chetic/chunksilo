@@ -73,7 +73,7 @@ def load_llamaindex_index():
 @mcp.tool()
 async def retrieve_docs(query: str) -> dict[str, Any]:
     """
-    Search the local PDF/DOCX documentation corpus and return relevant chunks.
+    Search the local PDF/DOCX/Markdown documentation corpus and return relevant chunks.
     
     This tool performs semantic search and returns raw document chunks.
     The calling LLM (e.g., Continue) will synthesize the answer from these chunks.
