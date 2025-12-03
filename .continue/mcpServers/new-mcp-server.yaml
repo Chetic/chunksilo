@@ -1,0 +1,10 @@
+name: On-Prem Docs MCP
+version: 1.0.0
+schema: v1
+mcpServers:
+  - name: on-prem-docs-mcp
+    command: venv/bin/python
+    args:
+      - mcp_server.py
+    env:
+      STORAGE_DIR: storage
