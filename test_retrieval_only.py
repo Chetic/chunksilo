@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""
-Test the RAG system in retrieval-only mode (no LLM in the MCP server).
-Tests ingestion and index loading.
-"""
-import os
+"""Test the RAG system in retrieval-only mode (no LLM in the MCP server)."""
 import sys
 import traceback
 from pathlib import Path

@@ -29,25 +29,6 @@ _index_cache = None
 _embed_model_initialized = False
 
 
-def _get_heading_for_position(headings: list[dict], char_start: int | None) -> dict | None:
-    """
-    Find the most recent heading before the given character position.
-    Returns the heading dict or None if no heading found.
-    """
-    if not headings or char_start is None:
-        return None
-    
-    current_heading = None
-    for heading in headings:
-        heading_pos = heading.get('position', 0)
-        if heading_pos <= char_start:
-            current_heading = heading
-        else:
-            break
-    
-    return current_heading
-
-
 def _build_heading_path(headings: list[dict], char_start: int | None) -> tuple[str | None, list[str]]:
     """
     Build a human-readable heading path (e.g., ["Architecture", "CI/CD", "Deployment"])

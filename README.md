@@ -155,8 +155,8 @@ The `retrieve_docs` tool returns raw document chunks with metadata so the client
 - `text`: Full chunk text (not truncated)
 - `score`: Retrieval score for the chunk
 - `metadata`: Original metadata from LlamaIndex (including file path/page when available)
-- `citation`: Human-friendly citation string derived from the metadata (e.g., `docs/guide.pdf (page 3, chars 1200-1430)`)
-- `location`: Structured location details that the client can surface in answers, including file path, page, and character range when available. When document-level offsets are missing, `char_start`/`char_end` fall back to the chunk-local range so the model can always cite the span it used.
+- `citation`: Human-friendly citation string derived from the metadata (e.g., `docs/guide.pdf (page 3, section "Introduction")`)
+- `location`: Structured location details that the client can surface in answers, including file path, page (when available), and section/heading information. This mirrors the `file`, `page`, `heading`, and `heading_path` fields returned by the MCP server so clients can consistently display where a chunk came from.
 
 Responses also include a top-level `citations` array that lists unique citations used across all returned chunks. This makes it easy for clients to display or reference the sources alongside generated answers and ensures the model can explicitly cite which portion of each document it used.
 
