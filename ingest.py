@@ -2,8 +2,13 @@
 """
 Ingestion pipeline for building a RAG index from PDF, DOCX, and Markdown documents.
 """
-import os
+import argparse
+import itertools
 import logging
+import os
+import sys
+import threading
+import time
 from pathlib import Path
 from typing import List
 
@@ -26,6 +31,7 @@ load_dotenv()
 DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "./storage"))
 EMB_MODEL_NAME = os.getenv("EMB_MODEL_NAME", "BAAI/bge-small-en-v1.5")
+EMB_MODEL_CACHE_DIR = Path(os.getenv("EMB_MODEL_CACHE_DIR", "./models"))
 
 # Set up logging
 logging.basicConfig(
@@ -33,6 +39,98 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+class SimpleProgressBar:
+    """Lightweight progress bar using only the standard library."""
+
+    def __init__(self, total: int, desc: str, unit: str = "item", width: int = 30):
+        self.total = max(total, 0)
+        self.desc = desc
+        self.unit = unit
+        self.width = width
+        self.current = 0
+        if self.total > 0:
+            self._render()
+
+    def update(self, step: int = 1) -> None:
+        if self.total <= 0:
+            return
+        self.current = min(self.total, self.current + step)
+        self._render()
+        if self.current >= self.total:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+    def _render(self) -> None:
+        progress = self.current / self.total if self.total else 0
+        filled = int(self.width * progress)
+        bar = "#" * filled + "-" * (self.width - filled)
+        sys.stdout.write(
+            f"\r{self.desc} [{bar}] {progress * 100:5.1f}% ({self.current}/{self.total} {self.unit}s)"
+        )
+        sys.stdout.flush()
+
+
+class Spinner:
+    """Simple console spinner to indicate long-running steps."""
+
+    def __init__(self, desc: str, interval: float = 0.1):
+        self.desc = desc
+        self.interval = interval
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._line = desc
+
+    def __enter__(self):
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join()
+        # Clear spinner line
+        sys.stdout.write("\r" + " " * len(self._line) + "\r")
+        sys.stdout.flush()
+
+    def _spin(self) -> None:
+        for char in itertools.cycle("|/-\\"):
+            if self._stop_event.is_set():
+                break
+            self._line = f"{self.desc} {char}"
+            sys.stdout.write("\r" + self._line)
+            sys.stdout.flush()
+            time.sleep(self.interval)
+
+
+def _embedding_cache_path(model_name: str, cache_dir: Path) -> Path:
+    """Return the expected cache directory for a FastEmbed model."""
+
+    return cache_dir / f"models--{model_name.replace('/', '--')}"
+
+
+def ensure_embedding_model_cached(cache_dir: Path) -> None:
+    """Download the embedding model into a local cache for offline use."""
+
+    target_dir = _embedding_cache_path(EMB_MODEL_NAME, cache_dir)
+    if target_dir.exists():
+        logger.info(
+            "Embedding model already present in offline cache at %s", target_dir
+        )
+        return
+
+    logger.info("Downloading embedding model to offline cache at %s", cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with Spinner(
+        "Downloading embedding model (one-time download to bundle with release)"
+    ):
+        FastEmbedEmbedding(model_name=EMB_MODEL_NAME, cache_dir=str(cache_dir))
+    logger.info(
+        "Embedding model downloaded to %s. Include this cache directory in release artifacts for offline use.",
+        target_dir,
+    )
 
 
 def _parse_heading_level(style_name: str | None) -> int:
@@ -139,16 +237,34 @@ def load_docx_heading_documents(root_dir: Path) -> List[LlamaIndexDocument]:
     """
     Walk the DATA_DIR tree and load all .docx files as heading-based documents.
     """
+    docx_paths = list(root_dir.rglob("*.docx"))
+    if not docx_paths:
+        logger.info("No DOCX files found in data directory; skipping DOCX ingestion.")
+        return []
+
+    logger.info(
+        f"Found {len(docx_paths)} DOCX file(s); splitting by heading with progress bar..."
+    )
     all_docs: List[LlamaIndexDocument] = []
-    for docx_path in root_dir.rglob("*.docx"):
+    progress = SimpleProgressBar(len(docx_paths), desc="Processing DOCX files", unit="file")
+    for docx_path in docx_paths:
         all_docs.extend(split_docx_into_heading_documents(docx_path))
+        progress.update()
     return all_docs
 
 
-def build_index():
+def build_index(download_only: bool = False) -> None:
     """Build and persist the vector index from documents."""
     logger.info(f"Starting ingestion from {DATA_DIR}")
-    
+
+    # Ensure the embedding model is available offline
+    ensure_embedding_model_cached(EMB_MODEL_CACHE_DIR)
+    if download_only:
+        logger.info(
+            "Embedding model cache downloaded; skipping index build because --download-model was provided."
+        )
+        return
+
     # Ensure data directory exists
     if not DATA_DIR.exists():
         logger.error(f"Data directory {DATA_DIR} does not exist!")
@@ -156,6 +272,12 @@ def build_index():
 
     # Discover whether there are any PDF/Markdown files before constructing the reader
     pdf_md_files = list(DATA_DIR.rglob("*.pdf")) + list(DATA_DIR.rglob("*.md"))
+    docx_files = list(DATA_DIR.rglob("*.docx"))
+    total_files = len(pdf_md_files) + len(docx_files)
+    logger.info(
+        f"Discovered {len(pdf_md_files)} PDF/Markdown and {len(docx_files)} DOCX file(s) (total: {total_files})."
+    )
+
     docs: List[LlamaIndexDocument] = []
 
     if pdf_md_files:
@@ -165,13 +287,15 @@ def build_index():
             required_exts=[".pdf", ".md"],
             recursive=True,
         )
-        
+
         # Load documents (PDF/Markdown)
-        logger.info("Loading PDF/Markdown documents...")
+        logger.info(
+            f"Loading {len(pdf_md_files)} PDF/Markdown file(s) into LlamaIndex documents..."
+        )
         docs.extend(reader.load_data())
     else:
         logger.info("No PDF/Markdown files found in data directory; skipping PDF/MD ingestion.")
-    
+
     # Load DOCX documents as one document per heading section
     logger.info("Loading DOCX documents (one chunk per heading)...")
     docx_docs = load_docx_heading_documents(DATA_DIR)
@@ -181,19 +305,26 @@ def build_index():
         logger.warning(f"No documents found in {DATA_DIR}")
         return
     logger.info(f"Loaded {len(docs)} documents (including DOCX heading chunks)")
-    
+
     # Initialize embedding model
     logger.info(f"Initializing embedding model: {EMB_MODEL_NAME}")
-    embed_model = FastEmbedEmbedding(model_name=EMB_MODEL_NAME)
+    with Spinner("Initializing embedding model from offline cache"):
+        embed_model = FastEmbedEmbedding(
+            model_name=EMB_MODEL_NAME, cache_dir=str(EMB_MODEL_CACHE_DIR)
+        )
     Settings.embed_model = embed_model
-    
-    # Build index
-    logger.info("Building vector index...")
-    index = VectorStoreIndex.from_documents(
-        docs,
-        embed_model=embed_model,
-        show_progress=True,
+    logger.info("Embedding model initialized")
+
+    logger.info(
+        "Indexing documents with overall progress bar (progress reflects full document processing)..."
     )
+    storage_context = StorageContext.from_defaults()
+    index = VectorStoreIndex([], storage_context=storage_context, embed_model=embed_model)
+
+    progress = SimpleProgressBar(len(docs), desc="Indexing documents", unit="doc")
+    for doc in docs:
+        index.insert(doc, show_progress=True)
+        progress.update()
     
     # Persist index
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -204,8 +335,16 @@ def build_index():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Build the document index")
+    parser.add_argument(
+        "--download-model",
+        action="store_true",
+        help="Download the embedding model into the offline cache and exit",
+    )
+    args = parser.parse_args()
+
     try:
-        build_index()
+        build_index(download_only=args.download_model)
     except Exception as e:
         logger.error(f"Ingestion failed: {e}", exc_info=True)
         raise
