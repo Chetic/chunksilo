@@ -2,6 +2,7 @@
 """
 Ingestion pipeline for building a RAG index from PDF, DOCX, and Markdown documents.
 """
+import argparse
 import itertools
 import logging
 import os
@@ -30,6 +31,7 @@ load_dotenv()
 DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "./storage"))
 EMB_MODEL_NAME = os.getenv("EMB_MODEL_NAME", "BAAI/bge-small-en-v1.5")
+EMB_MODEL_CACHE_DIR = Path(os.getenv("EMB_MODEL_CACHE_DIR", "./models"))
 
 # Set up logging
 logging.basicConfig(
@@ -101,6 +103,34 @@ class Spinner:
             sys.stdout.write("\r" + self._line)
             sys.stdout.flush()
             time.sleep(self.interval)
+
+
+def _embedding_cache_path(model_name: str, cache_dir: Path) -> Path:
+    """Return the expected cache directory for a FastEmbed model."""
+
+    return cache_dir / f"models--{model_name.replace('/', '--')}"
+
+
+def ensure_embedding_model_cached(cache_dir: Path) -> None:
+    """Download the embedding model into a local cache for offline use."""
+
+    target_dir = _embedding_cache_path(EMB_MODEL_NAME, cache_dir)
+    if target_dir.exists():
+        logger.info(
+            "Embedding model already present in offline cache at %s", target_dir
+        )
+        return
+
+    logger.info("Downloading embedding model to offline cache at %s", cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with Spinner(
+        "Downloading embedding model (one-time download to bundle with release)"
+    ):
+        FastEmbedEmbedding(model_name=EMB_MODEL_NAME, cache_dir=str(cache_dir))
+    logger.info(
+        "Embedding model downloaded to %s. Include this cache directory in release artifacts for offline use.",
+        target_dir,
+    )
 
 
 def _parse_heading_level(style_name: str | None) -> int:
@@ -223,10 +253,18 @@ def load_docx_heading_documents(root_dir: Path) -> List[LlamaIndexDocument]:
     return all_docs
 
 
-def build_index():
+def build_index(download_only: bool = False) -> None:
     """Build and persist the vector index from documents."""
     logger.info(f"Starting ingestion from {DATA_DIR}")
-    
+
+    # Ensure the embedding model is available offline
+    ensure_embedding_model_cached(EMB_MODEL_CACHE_DIR)
+    if download_only:
+        logger.info(
+            "Embedding model cache downloaded; skipping index build because --download-model was provided."
+        )
+        return
+
     # Ensure data directory exists
     if not DATA_DIR.exists():
         logger.error(f"Data directory {DATA_DIR} does not exist!")
@@ -270,10 +308,10 @@ def build_index():
 
     # Initialize embedding model
     logger.info(f"Initializing embedding model: {EMB_MODEL_NAME}")
-    with Spinner(
-        "Initializing embedding model (downloading weights on first run — this may take a minute)"
-    ):
-        embed_model = FastEmbedEmbedding(model_name=EMB_MODEL_NAME)
+    with Spinner("Initializing embedding model from offline cache"):
+        embed_model = FastEmbedEmbedding(
+            model_name=EMB_MODEL_NAME, cache_dir=str(EMB_MODEL_CACHE_DIR)
+        )
     Settings.embed_model = embed_model
     logger.info("Embedding model initialized")
 
@@ -297,8 +335,16 @@ def build_index():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Build the document index")
+    parser.add_argument(
+        "--download-model",
+        action="store_true",
+        help="Download the embedding model into the offline cache and exit",
+    )
+    args = parser.parse_args()
+
     try:
-        build_index()
+        build_index(download_only=args.download_model)
     except Exception as e:
         logger.error(f"Ingestion failed: {e}", exc_info=True)
         raise
