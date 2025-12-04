@@ -59,6 +59,7 @@ Edit `.env` file with your settings:
 - `EMB_MODEL_NAME`: Embedding model name used by LlamaIndex (default: `BAAI/bge-small-en-v1.5`). FastEmbed supports various embedding models from HuggingFace. The default is a quantized ONNX BGE-small model that is already vendored in `./models` for offline use.
 - `EMB_MODEL_CACHE_DIR`: Directory where the embedding model is cached for offline use (default: `./models`). Include this directory in release artifacts so deployments do not need to download the model.
 - `SIMILARITY_TOP_K`: Number of document chunks to retrieve per query (default: `5`)
+- `OFFLINE`: For the MCP server, set to `1` (default) to enforce offline mode and prevent HuggingFace libraries from making network requests. Set to `0` to allow network access if needed.
 
 **Note:** The MCP server does **not** need any LLM configuration (API base, model, API key). It only performs semantic search and returns raw chunks. Continue's LLM (which you already have configured) will synthesize the answer from these chunks.
 
@@ -85,6 +86,11 @@ This stores the FastEmbed model in `./models/` (configurable via `EMB_MODEL_CACH
 Include this directory in your release package so deployments never need internet
 access. The manual GitHub release workflow automatically downloads the model into the
 packaged `models/` directory so the published ZIP works offline without extra steps.
+
+The ingestion script and MCP server use `huggingface_hub`'s `snapshot_download` with
+`local_files_only=True` to locate cached models and pass them directly to FastEmbed
+via the `specific_model_path` parameter. This completely bypasses FastEmbed's
+download step that would otherwise make API calls, enabling true offline operation.
 
 ### 3. Build the Index
 
@@ -209,6 +215,18 @@ If you see "Storage directory does not exist", run `python ingest.py` first.
 The first run will download the embedding model. FastEmbed automatically downloads and caches the model on first use. This may take a few minutes, but subsequent runs will use the cached model.
 
 For offline deployments and release builds, run `python ingest.py --download-model` ahead of time and include the resulting `models/` directory in the release artifact so the embedding model is available without internet access.
+
+### Offline Mode
+
+When running with `--offline` flag or in an offline environment, the script automatically sets HuggingFace environment variables (`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `HF_DATASETS_OFFLINE=1`) to prevent any network requests. The MCP server also defaults to offline mode to ensure no network access is attempted.
+
+**Note:** Even with offline mode enabled, FastEmbed may attempt to validate the model from HuggingFace before using the cached version. This is a known limitation of FastEmbed's download logic. The script will verify the cache exists before attempting to initialize the model, but if FastEmbed still tries to download, you may see error messages. The download attempts will fail gracefully in offline mode, and FastEmbed should eventually use the cached model if it's properly cached.
+
+If you see network connection errors even in offline mode, verify that:
+- The model is fully cached in `EMB_MODEL_CACHE_DIR` (default: `./models`)
+- You're using the `--offline` flag when running `ingest.py`
+- The `OFFLINE` environment variable is set to `1` (or not set, which defaults to offline mode)
+- The cached model directory exists at `models/models--qdrant--bge-small-en-v1.5-onnx-q/` (or equivalent for your model)
 
 ## Future Enhancements
 

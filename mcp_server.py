@@ -21,6 +21,22 @@ STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "./storage"))
 SIMILARITY_TOP_K = int(os.getenv("SIMILARITY_TOP_K", "5"))
 # Default to the quantized ONNX BGE-small model that is already vendored in ./models
 EMB_MODEL_NAME = os.getenv("EMB_MODEL_NAME", "BAAI/bge-small-en-v1.5")
+EMB_MODEL_CACHE_DIR = Path(os.getenv("EMB_MODEL_CACHE_DIR", "./models"))
+
+# Configure offline mode for HuggingFace libraries to prevent network requests
+# The MCP server is intended to run in offline environments where models are already cached.
+# Set OFFLINE=0 in environment to allow network access if needed.
+_offline_mode = os.getenv("OFFLINE", "1").lower() not in ("0", "false", "no")
+if _offline_mode:
+    # Enable offline mode to prevent HuggingFace libraries from making network requests
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["HF_DATASETS_OFFLINE"] = "1"
+    # Point HuggingFace Hub to our cache directory so it can find cached models
+    cache_dir_abs = EMB_MODEL_CACHE_DIR.resolve()
+    os.environ["HF_HOME"] = str(cache_dir_abs)
+    os.environ["HF_HUB_CACHE"] = str(cache_dir_abs)
+    os.environ["HF_DATASETS_CACHE"] = str(cache_dir_abs)
 
 # Initialize FastMCP server
 mcp = FastMCP("llamaindex-docs-rag")
@@ -95,6 +111,41 @@ def _build_citation(
     return str(file_path)
 
 
+def _get_cached_model_path(cache_dir: Path, model_name: str) -> Path | None:
+    """
+    Get the cached model directory path using huggingface_hub's snapshot_download.
+    This works completely offline and bypasses fastembed's download_model API calls.
+    
+    Args:
+        cache_dir: Directory where models are cached
+        model_name: FastEmbed model name (e.g., 'BAAI/bge-small-en-v1.5')
+        
+    Returns:
+        Path to the cached model directory, or None if not found or huggingface_hub unavailable
+    """
+    try:
+        from huggingface_hub import snapshot_download
+        from fastembed import TextEmbedding
+        models = TextEmbedding.list_supported_models()
+        model_info = [m for m in models if m.get("model") == model_name]
+        if model_info:
+            hf_source = model_info[0].get("sources", {}).get("hf")
+            if hf_source:
+                cache_dir_abs = cache_dir.resolve()
+                # Use snapshot_download with local_files_only=True to get cached model path
+                # This works completely offline and bypasses fastembed's API call
+                model_dir = snapshot_download(
+                    repo_id=hf_source,
+                    local_files_only=True,
+                    cache_dir=str(cache_dir_abs)
+                )
+                return Path(model_dir).resolve()
+    except (ImportError, Exception):
+        # huggingface_hub might not be available, or model not in cache
+        pass
+    return None
+
+
 def _ensure_embed_model():
     """
     Ensure the same embedding model used during ingestion is available at query time.
@@ -102,13 +153,28 @@ def _ensure_embed_model():
     If this is not set, LlamaIndex falls back to its default (typically an OpenAI
     embedding model), which would require an OPENAI_API_KEY and cause failures
     inside the MCP server.
+    
+    Uses cached model path in offline mode to bypass fastembed's download_model API calls.
     """
     global _embed_model_initialized
 
     if _embed_model_initialized:
         return
 
-    embed_model = FastEmbedEmbedding(model_name=EMB_MODEL_NAME)
+    # Try to use cached model path in offline mode to bypass fastembed's download step
+    cached_model_path = _get_cached_model_path(EMB_MODEL_CACHE_DIR, EMB_MODEL_NAME)
+    if cached_model_path and _offline_mode:
+        # Use specific_model_path to bypass fastembed's download_model API call
+        embed_model = FastEmbedEmbedding(
+            model_name=EMB_MODEL_NAME,
+            cache_dir=str(EMB_MODEL_CACHE_DIR),
+            specific_model_path=str(cached_model_path)
+        )
+    else:
+        # Normal initialization (non-offline or cached path not available)
+        embed_model = FastEmbedEmbedding(
+            model_name=EMB_MODEL_NAME, cache_dir=str(EMB_MODEL_CACHE_DIR)
+        )
     Settings.embed_model = embed_model
     _embed_model_initialized = True
 

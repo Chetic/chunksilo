@@ -12,6 +12,13 @@ import time
 from pathlib import Path
 from typing import List
 
+# Check for --offline flag early and set environment variables BEFORE any imports
+# This is critical because HuggingFace libraries read these variables at import time
+if "--offline" in sys.argv:
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["HF_DATASETS_OFFLINE"] = "1"
+
 from dotenv import load_dotenv
 from docx import Document
 
@@ -112,6 +119,126 @@ def _embedding_cache_path(model_name: str, cache_dir: Path) -> Path:
     return cache_dir / f"models--{model_name.replace('/', '--')}"
 
 
+def _verify_model_cache_exists(cache_dir: Path) -> bool:
+    """
+    Verify that the cached model directory exists and contains the expected model files.
+    
+    FastEmbed caches models in HuggingFace Hub format. This checks if the cache directory
+    structure exists and contains the model files.
+    
+    Args:
+        cache_dir: Directory where models are cached
+        
+    Returns:
+        True if the cached model appears to be present, False otherwise
+    """
+    # FastEmbed uses HuggingFace Hub format for caching
+    # The model name maps to a HuggingFace source which determines the cache directory name
+    from fastembed import TextEmbedding
+    
+    try:
+        models = TextEmbedding.list_supported_models()
+        model_info = [m for m in models if m.get("model") == EMB_MODEL_NAME]
+        if not model_info:
+            return False
+        
+        model_info = model_info[0]
+        hf_source = model_info.get("sources", {}).get("hf")
+        if not hf_source:
+            return False
+        
+        # Expected cache directory format: models--org--repo
+        expected_dir = cache_dir / f"models--{hf_source.replace('/', '--')}"
+        if not expected_dir.exists():
+            return False
+        
+        # Check for snapshot directory with model files
+        snapshots_dir = expected_dir / "snapshots"
+        if not snapshots_dir.exists():
+            return False
+        
+        # Check if any snapshot contains the model file
+        model_file = model_info.get("model_file", "model_optimized.onnx")
+        for snapshot in snapshots_dir.iterdir():
+            if snapshot.is_dir():
+                model_path = snapshot / model_file
+                if model_path.exists() or model_path.is_symlink():
+                    return True
+        
+        return False
+    except Exception:
+        # If we can't verify, assume it's not cached
+        return False
+
+
+def _get_cached_model_path(cache_dir: Path, model_name: str) -> Path | None:
+    """
+    Get the cached model directory path using huggingface_hub's snapshot_download.
+    This works completely offline and bypasses fastembed's download_model API calls.
+    
+    Args:
+        cache_dir: Directory where models are cached
+        model_name: FastEmbed model name (e.g., 'BAAI/bge-small-en-v1.5')
+        
+    Returns:
+        Path to the cached model directory, or None if not found or huggingface_hub unavailable
+    """
+    try:
+        from huggingface_hub import snapshot_download
+        from fastembed import TextEmbedding
+        models = TextEmbedding.list_supported_models()
+        model_info = [m for m in models if m.get("model") == model_name]
+        if model_info:
+            hf_source = model_info[0].get("sources", {}).get("hf")
+            if hf_source:
+                cache_dir_abs = cache_dir.resolve()
+                # Use snapshot_download with local_files_only=True to get cached model path
+                # This works completely offline and bypasses fastembed's API call
+                model_dir = snapshot_download(
+                    repo_id=hf_source,
+                    local_files_only=True,
+                    cache_dir=str(cache_dir_abs)
+                )
+                return Path(model_dir).resolve()
+    except (ImportError, Exception):
+        # huggingface_hub might not be available, or model not in cache
+        pass
+    return None
+
+
+def _create_fastembed_embedding(cache_dir: Path, offline: bool = False):
+    """
+    Create a FastEmbedEmbedding instance, using cached model path in offline mode
+    to bypass fastembed's download_model API calls.
+    
+    Args:
+        cache_dir: Directory where models are cached
+        offline: If True, try to use cached model path to bypass download step
+        
+    Returns:
+        FastEmbedEmbedding instance
+    """
+    if offline:
+        # Try to get cached model path to bypass fastembed's download step
+        cached_model_path = _get_cached_model_path(cache_dir, EMB_MODEL_NAME)
+        if cached_model_path:
+            logger.info(
+                f"Using cached model path to bypass download: {cached_model_path}"
+            )
+            return FastEmbedEmbedding(
+                model_name=EMB_MODEL_NAME,
+                cache_dir=str(cache_dir),
+                specific_model_path=str(cached_model_path)
+            )
+        else:
+            logger.warning(
+                "Could not find cached model path, falling back to normal initialization"
+            )
+    
+    # Normal initialization (non-offline or fallback)
+    return FastEmbedEmbedding(model_name=EMB_MODEL_NAME, cache_dir=str(cache_dir))
+
+
 def ensure_embedding_model_cached(cache_dir: Path, offline: bool = False) -> None:
     """
     Ensure the embedding model is available in the local cache.
@@ -123,27 +250,75 @@ def ensure_embedding_model_cached(cache_dir: Path, offline: bool = False) -> Non
     Raises:
         FileNotFoundError: If offline=True and model is not available locally
     """
-    # Try to initialize the model to check if it's cached (FastEmbed handles cache lookup automatically)
-    try:
-        logger.info("Checking if embedding model is available in cache...")
-        FastEmbedEmbedding(model_name=EMB_MODEL_NAME, cache_dir=str(cache_dir))
-        logger.info(
-            "Embedding model available (either cached or will be downloaded)"
-        )
-        return
-    except Exception as e:
-        if offline:
+    # First, verify the cache exists by checking the file system
+    if offline:
+        logger.info("Verifying embedding model cache...")
+        if _verify_model_cache_exists(cache_dir):
+            logger.info("Embedding model found in cache")
+        else:
             logger.error(
-                "Offline mode enabled, but embedding model not available: %s",
-                e,
-            )
-            logger.error(
-                "Model name: %s (configured via EMB_MODEL_NAME)",
-                EMB_MODEL_NAME,
-            )
-            logger.error(
-                "Cache directory: %s (configured via EMB_MODEL_CACHE_DIR)",
+                "Offline mode enabled, but embedding model cache not found in %s",
                 cache_dir,
+            )
+            raise FileNotFoundError(
+                f"Embedding model '{EMB_MODEL_NAME}' not found in cache directory '{cache_dir}'. "
+                "Run without --offline flag to download the model, or ensure the model is already cached."
+            )
+    
+    # Try to initialize the model using our helper function
+    # In offline mode, this uses snapshot_download to get the cached model path
+    # and passes it as specific_model_path to bypass fastembed's download_model API calls.
+    try:
+        logger.info("Initializing embedding model from cache...")
+        cache_dir_abs = cache_dir.resolve()
+        if offline:
+            os.environ["HF_HUB_CACHE"] = str(cache_dir_abs)
+        
+        _create_fastembed_embedding(cache_dir, offline=offline)
+        logger.info("Embedding model initialized successfully")
+        return
+    except (ValueError, Exception) as e:
+        error_str = str(e).lower()
+        # Check if the error is about network/download failure but model files exist
+        is_network_error = (
+            "offline" in error_str
+            or "cannot reach" in error_str
+            or "could not load model" in error_str
+            or "could not download" in error_str
+        )
+        
+        if offline and is_network_error:
+            # Double-check that model files actually exist
+            if _verify_model_cache_exists(cache_dir):
+                # Model files exist, but fastembed tried to make an API call anyway.
+                # This is a known limitation of fastembed in offline mode.
+                logger.error(
+                    "FastEmbed attempted a network request to verify the model, "
+                    "even though the model files exist in the cache. "
+                    "This is a FastEmbed limitation in offline mode."
+                )
+                raise FileNotFoundError(
+                    f"Embedding model '{EMB_MODEL_NAME}' files exist in cache directory '{cache_dir}', "
+                    "but FastEmbed attempted a network request to verify the model. "
+                    "This is a known FastEmbed limitation. "
+                    "To work around this, temporarily run without --offline flag to allow "
+                    "FastEmbed to verify the model once, then subsequent runs with --offline should work."
+                ) from e
+            else:
+                # Model files don't actually exist
+                logger.error(
+                    "Offline mode enabled, but embedding model cache not found in %s",
+                    cache_dir,
+                )
+                raise FileNotFoundError(
+                    f"Embedding model '{EMB_MODEL_NAME}' not found in cache directory '{cache_dir}'. "
+                    "Run without --offline flag to download the model, or ensure the model is already cached."
+                ) from e
+        elif offline:
+            # Other error in offline mode
+            logger.error(
+                "Offline mode enabled, but embedding model initialization failed: %s",
+                e,
             )
             raise FileNotFoundError(
                 f"Embedding model '{EMB_MODEL_NAME}' not available in cache directory '{cache_dir}'. "
@@ -157,7 +332,7 @@ def ensure_embedding_model_cached(cache_dir: Path, offline: bool = False) -> Non
     with Spinner(
         "Downloading embedding model (one-time download to bundle with release)"
     ):
-        FastEmbedEmbedding(model_name=EMB_MODEL_NAME, cache_dir=str(cache_dir))
+        _create_fastembed_embedding(cache_dir, offline=False)
     logger.info(
         "Embedding model downloaded. Include the cache directory in release artifacts for offline use."
     )
@@ -283,8 +458,42 @@ def load_docx_heading_documents(root_dir: Path) -> List[LlamaIndexDocument]:
     return all_docs
 
 
+def configure_offline_mode(offline: bool, cache_dir: Path) -> None:
+    """
+    Configure environment variables to enforce offline mode for HuggingFace libraries.
+    
+    This prevents HuggingFace Hub, Transformers, and related libraries from making
+    network requests even when models are cached locally.
+    
+    Note: Environment variables should be set BEFORE importing HuggingFace libraries.
+    This function ensures they're set and logs the configuration.
+    
+    Args:
+        offline: If True, set environment variables to force offline mode
+        cache_dir: Directory where models are cached (used for HF_HOME/HF_HUB_CACHE)
+    """
+    if offline:
+        # Ensure offline variables are set (they should already be set at import time)
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        os.environ["HF_DATASETS_OFFLINE"] = "1"
+        # Point HuggingFace Hub to our cache directory so it can find cached models
+        cache_dir_abs = cache_dir.resolve()
+        os.environ["HF_HOME"] = str(cache_dir_abs)
+        os.environ["HF_HUB_CACHE"] = str(cache_dir_abs)
+        # Also set HF_DATASETS_CACHE to prevent datasets library from making network requests
+        os.environ["HF_DATASETS_CACHE"] = str(cache_dir_abs)
+        logger.info(
+            "Offline mode enabled: HuggingFace libraries configured to avoid network requests. "
+            f"Cache directory: {cache_dir_abs}"
+        )
+
+
 def build_index(download_only: bool = False, offline: bool = False) -> None:
     """Build and persist the vector index from documents."""
+    # Configure offline mode before any HuggingFace/FastEmbed operations
+    configure_offline_mode(offline, EMB_MODEL_CACHE_DIR)
+    
     logger.info(f"Starting ingestion from {DATA_DIR}")
 
     # Ensure the embedding model is available offline
@@ -339,9 +548,7 @@ def build_index(download_only: bool = False, offline: bool = False) -> None:
     # Initialize embedding model
     logger.info(f"Initializing embedding model: {EMB_MODEL_NAME}")
     with Spinner("Initializing embedding model from offline cache"):
-        embed_model = FastEmbedEmbedding(
-            model_name=EMB_MODEL_NAME, cache_dir=str(EMB_MODEL_CACHE_DIR)
-        )
+        embed_model = _create_fastembed_embedding(EMB_MODEL_CACHE_DIR, offline=offline)
     Settings.embed_model = embed_model
     logger.info("Embedding model initialized")
 
