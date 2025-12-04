@@ -18,17 +18,24 @@ This will:
 
 ### 2. End-to-end retrieval test (MCP server logic)
 
-To exercise the same retrieval logic that the MCP server uses (`retrieve_docs`), run:
+To exercise the same retrieval logic that the MCP server uses (`retrieve_docs`), run the corresponding pytest:
 
 ```bash
 source venv/bin/activate
-python test_system.py
+pytest test_system.py
 ```
 
 This will:
 - Ensure the index exists (or rebuild it)
 - Call into the MCP server logic (via `retrieve_docs`) to retrieve chunks
 - Print sample queries and information about the retrieved chunks (count, scores, previews)
+
+You can also run the full test suite (including ingestion and system tests) with:
+
+```bash
+source venv/bin/activate
+pytest
+```
 
 ### 3. Manual MCP server test
 

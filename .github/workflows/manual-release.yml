@@ -104,7 +104,13 @@ jobs:
           set -eo pipefail
           PACKAGE_ROOT="release_package/on-prem-docs-mcp"
           mkdir -p "$PACKAGE_ROOT"
-          rsync -a --exclude ".git" --exclude "release_package" --exclude "*.zip" ./ "$PACKAGE_ROOT/"
+          
+          # Copy only the required files and directories
+          cp mcp_server.py "$PACKAGE_ROOT/"
+          cp ingest.py "$PACKAGE_ROOT/"
+          cp requirements.txt "$PACKAGE_ROOT/"
+          cp README.md "$PACKAGE_ROOT/"
+          cp -r .continue "$PACKAGE_ROOT/"
 
           echo "${{ steps.version.outputs.next_version }}" > "$PACKAGE_ROOT/VERSION"
 
