@@ -89,7 +89,8 @@ python ingest.py --download-model
 
 This stores the FastEmbed model in `./models/` (configurable via `EMB_MODEL_CACHE_DIR`).
 Include this directory in your release package so deployments never need internet
-access.
+access. The manual GitHub release workflow automatically downloads the model into the
+packaged `models/` directory so the published ZIP works offline without extra steps.
 
 ### 3. Build the Index
 
