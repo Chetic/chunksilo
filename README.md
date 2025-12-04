@@ -165,6 +165,10 @@ Responses also include a top-level `citations` array that lists unique citations
 
 For concise testing instructions on how to run the Python test scripts, see `TESTING.md`.
 
+## Commit messages
+
+Please use **conventional commits without a scope** when contributing (for example: `feat: add progress bar`, `fix: address ingestion bug`, `chore: update docs`). Clear, scope-free messages keep release notes accurate and easy to generate.
+
 ## Project Structure
 
 ```
