@@ -2,9 +2,12 @@
 """
 Ingestion pipeline for building a RAG index from PDF, DOCX, and Markdown documents.
 """
+import itertools
+import logging
 import os
 import sys
-import logging
+import threading
+import time
 from pathlib import Path
 from typing import List
 
@@ -65,6 +68,39 @@ class SimpleProgressBar:
             f"\r{self.desc} [{bar}] {progress * 100:5.1f}% ({self.current}/{self.total} {self.unit}s)"
         )
         sys.stdout.flush()
+
+
+class Spinner:
+    """Simple console spinner to indicate long-running steps."""
+
+    def __init__(self, desc: str, interval: float = 0.1):
+        self.desc = desc
+        self.interval = interval
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._line = desc
+
+    def __enter__(self):
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join()
+        # Clear spinner line
+        sys.stdout.write("\r" + " " * len(self._line) + "\r")
+        sys.stdout.flush()
+
+    def _spin(self) -> None:
+        for char in itertools.cycle("|/-\\"):
+            if self._stop_event.is_set():
+                break
+            self._line = f"{self.desc} {char}"
+            sys.stdout.write("\r" + self._line)
+            sys.stdout.flush()
+            time.sleep(self.interval)
 
 
 def _parse_heading_level(style_name: str | None) -> int:
@@ -231,11 +267,15 @@ def build_index():
         logger.warning(f"No documents found in {DATA_DIR}")
         return
     logger.info(f"Loaded {len(docs)} documents (including DOCX heading chunks)")
-    
+
     # Initialize embedding model
     logger.info(f"Initializing embedding model: {EMB_MODEL_NAME}")
-    embed_model = FastEmbedEmbedding(model_name=EMB_MODEL_NAME)
+    with Spinner(
+        "Initializing embedding model (downloading weights on first run — this may take a minute)"
+    ):
+        embed_model = FastEmbedEmbedding(model_name=EMB_MODEL_NAME)
     Settings.embed_model = embed_model
+    logger.info("Embedding model initialized")
 
     logger.info(
         "Indexing documents with overall progress bar (progress reflects full document processing)..."
