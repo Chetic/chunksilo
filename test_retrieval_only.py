@@ -5,14 +5,16 @@ Tests ingestion and index loading.
 """
 import os
 import sys
+import traceback
 from pathlib import Path
 from dotenv import load_dotenv
+import pytest
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from ingest import build_index
-from mcp_server import load_llamaindex_index
+from ingest import DATA_DIR, build_index
+from mcp_server import STORAGE_DIR, load_llamaindex_index
 
 load_dotenv()
 
@@ -22,16 +24,12 @@ def test_ingestion():
     print("=" * 60)
     print("Testing Ingestion Pipeline")
     print("=" * 60)
-    
-    try:
-        build_index()
-        print("✓ Ingestion completed successfully")
-        return True
-    except Exception as e:
-        print(f"✗ Ingestion failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+
+    if not DATA_DIR.exists():
+        pytest.skip("DATA_DIR is missing; add documents before running ingestion tests.")
+
+    build_index()
+    print("✓ Ingestion completed successfully")
 
 
 def test_index_loading():
@@ -39,29 +37,25 @@ def test_index_loading():
     print("\n" + "=" * 60)
     print("Testing Index Loading")
     print("=" * 60)
-    
-    try:
-        index = load_llamaindex_index()
-        print("✓ Index loaded successfully")
-        
-        # Test retrieval (without generation - no LLM needed)
-        print("\nTesting retrieval (without LLM generation)...")
-        retriever = index.as_retriever(similarity_top_k=3)
-        query = "What is this document about?"
-        nodes = retriever.retrieve(query)
-        
-        print(f"✓ Retrieved {len(nodes)} relevant chunks")
-        if nodes:
-            print(f"  Top chunk preview: {nodes[0].node.get_content()[:100]}...")
-            if len(nodes) > 1:
-                print(f"  Second chunk preview: {nodes[1].node.get_content()[:100]}...")
-        
-        return True
-    except Exception as e:
-        print(f"✗ Index loading failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+
+    if not STORAGE_DIR.exists():
+        pytest.skip("STORAGE_DIR is missing; run ingestion before index loading tests.")
+
+    index = load_llamaindex_index()
+    print("✓ Index loaded successfully")
+
+    # Test retrieval (without generation - no LLM needed)
+    print("\nTesting retrieval (without LLM generation)...")
+    retriever = index.as_retriever(similarity_top_k=3)
+    query = "What is this document about?"
+    nodes = retriever.retrieve(query)
+
+    print(f"✓ Retrieved {len(nodes)} relevant chunks")
+    if nodes:
+        print(f"  Top chunk preview: {nodes[0].node.get_content()[:100]}...")
+        if len(nodes) > 1:
+            print(f"  Second chunk preview: {nodes[1].node.get_content()[:100]}...")
+
 
 
 def main():
@@ -76,15 +70,15 @@ def main():
     }
     
     # Test ingestion
-    results["ingestion"] = test_ingestion()
-    
-    if not results["ingestion"]:
-        print("\n⚠ Warning: Ingestion failed. Make sure you have documents in the data/ directory.")
-        return
-    
-    # Test index loading
-    results["index_loading"] = test_index_loading()
-    
+    for name, fn in ("ingestion", test_ingestion), ("index_loading", test_index_loading):
+        try:
+            fn()
+            results[name] = True
+        except Exception as e:
+            print(f"✗ {name.replace('_', ' ').title()} failed: {e}")
+            traceback.print_exc()
+            results[name] = False
+
     # Summary
     print("\n" + "=" * 60)
     print("Test Summary")

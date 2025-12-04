@@ -40,8 +40,18 @@ def _build_citation(metadata: dict[str, Any]) -> str:
     )
 
     page = metadata.get("page_label") or metadata.get("page_number") or metadata.get("page")
+    start_char = metadata.get("start_char_idx")
+    end_char = metadata.get("end_char_idx")
+
+    parts: list[str] = []
     if page:
-        return f"{file_path} (page {page})"
+        parts.append(f"page {page}")
+    if start_char is not None and end_char is not None:
+        parts.append(f"chars {start_char}-{end_char}")
+
+    if parts:
+        joined = ", ".join(parts)
+        return f"{file_path} ({joined})"
 
     return str(file_path)
 
@@ -120,11 +130,22 @@ async def retrieve_docs(query: str) -> dict[str, Any]:
         for node in nodes:
             metadata = dict(node.node.metadata or {})
             citation = _build_citation(metadata)
+            location = {
+                "file": metadata.get("file_path")
+                or metadata.get("file_name")
+                or metadata.get("source"),
+                "page": metadata.get("page_label")
+                or metadata.get("page_number")
+                or metadata.get("page"),
+                "char_start": metadata.get("start_char_idx"),
+                "char_end": metadata.get("end_char_idx"),
+            }
             chunk_data = {
                 "text": node.node.get_content(),  # Full content, not truncated
                 "score": float(node.score) if hasattr(node, 'score') and node.score is not None else 0.0,
                 "metadata": metadata,
                 "citation": citation,
+                "location": location,
             }
             citation_list.append(citation)
             chunks.append(chunk_data)
