@@ -38,7 +38,11 @@ jobs:
           git fetch --tags --force
           LAST_TAG=$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null || true)
           if [ -z "$LAST_TAG" ]; then
-            CURRENT="0.0.0"
+            # First release: always start at 1.0.0 regardless of bump type
+            NEXT_VERSION="1.0.0"
+            echo "last_tag=" >> "$GITHUB_OUTPUT"
+            echo "next_version=$NEXT_VERSION" >> "$GITHUB_OUTPUT"
+            exit 0
           else
             CURRENT=${LAST_TAG#v}
           fi
@@ -69,15 +73,18 @@ jobs:
         run: |
           set -eo pipefail
           NOTES_FILE="release-notes.md"
-          RANGE="${{ steps.version.outputs.last_tag }}..HEAD"
-          if [ -z "${{ steps.version.outputs.last_tag }}" ]; then
+          LAST_TAG="${{ steps.version.outputs.last_tag }}"
+          if [ -z "$LAST_TAG" ]; then
             RANGE="HEAD"
+          else
+            RANGE="$LAST_TAG..HEAD"
           fi
 
           echo "## Changes" > "$NOTES_FILE"
           HAS_CHANGES=false
+          PATTERN='^(feat|fix|perf|refactor|docs)(\([^)]+\))?:\ (.+)$'
           while IFS= read -r SUBJECT; do
-            if [[ $SUBJECT =~ ^(feat|fix|perf|refactor|docs)(\([^)]+\))?:\ (.+)$ ]]; then
+            if [[ $SUBJECT =~ $PATTERN ]]; then
               TYPE=${BASH_REMATCH[1]}
               SUMMARY=${BASH_REMATCH[3]}
               case "$TYPE" in
