@@ -30,6 +30,7 @@ load_dotenv()
 # Configuration
 DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "./storage"))
+# Default to the quantized ONNX BGE-small model that is already vendored in ./models
 EMB_MODEL_NAME = os.getenv("EMB_MODEL_NAME", "BAAI/bge-small-en-v1.5")
 EMB_MODEL_CACHE_DIR = Path(os.getenv("EMB_MODEL_CACHE_DIR", "./models"))
 
@@ -111,15 +112,45 @@ def _embedding_cache_path(model_name: str, cache_dir: Path) -> Path:
     return cache_dir / f"models--{model_name.replace('/', '--')}"
 
 
-def ensure_embedding_model_cached(cache_dir: Path) -> None:
-    """Download the embedding model into a local cache for offline use."""
-
-    target_dir = _embedding_cache_path(EMB_MODEL_NAME, cache_dir)
-    if target_dir.exists():
+def ensure_embedding_model_cached(cache_dir: Path, offline: bool = False) -> None:
+    """
+    Ensure the embedding model is available in the local cache.
+    
+    Args:
+        cache_dir: Directory where the model should be cached
+        offline: If True, fail if model is not available locally instead of downloading
+        
+    Raises:
+        FileNotFoundError: If offline=True and model is not available locally
+    """
+    # Try to initialize the model to check if it's cached (FastEmbed handles cache lookup automatically)
+    try:
+        logger.info("Checking if embedding model is available in cache...")
+        FastEmbedEmbedding(model_name=EMB_MODEL_NAME, cache_dir=str(cache_dir))
         logger.info(
-            "Embedding model already present in offline cache at %s", target_dir
+            "Embedding model available (either cached or will be downloaded)"
         )
         return
+    except Exception as e:
+        if offline:
+            logger.error(
+                "Offline mode enabled, but embedding model not available: %s",
+                e,
+            )
+            logger.error(
+                "Model name: %s (configured via EMB_MODEL_NAME)",
+                EMB_MODEL_NAME,
+            )
+            logger.error(
+                "Cache directory: %s (configured via EMB_MODEL_CACHE_DIR)",
+                cache_dir,
+            )
+            raise FileNotFoundError(
+                f"Embedding model '{EMB_MODEL_NAME}' not available in cache directory '{cache_dir}'. "
+                "Run without --offline flag to download the model, or ensure the model is already cached."
+            ) from e
+        # Not offline, so FastEmbed will download it when we initialize below
+        pass
 
     logger.info("Downloading embedding model to offline cache at %s", cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -128,8 +159,7 @@ def ensure_embedding_model_cached(cache_dir: Path) -> None:
     ):
         FastEmbedEmbedding(model_name=EMB_MODEL_NAME, cache_dir=str(cache_dir))
     logger.info(
-        "Embedding model downloaded to %s. Include this cache directory in release artifacts for offline use.",
-        target_dir,
+        "Embedding model downloaded. Include the cache directory in release artifacts for offline use."
     )
 
 
@@ -253,12 +283,12 @@ def load_docx_heading_documents(root_dir: Path) -> List[LlamaIndexDocument]:
     return all_docs
 
 
-def build_index(download_only: bool = False) -> None:
+def build_index(download_only: bool = False, offline: bool = False) -> None:
     """Build and persist the vector index from documents."""
     logger.info(f"Starting ingestion from {DATA_DIR}")
 
     # Ensure the embedding model is available offline
-    ensure_embedding_model_cached(EMB_MODEL_CACHE_DIR)
+    ensure_embedding_model_cached(EMB_MODEL_CACHE_DIR, offline=offline)
     if download_only:
         logger.info(
             "Embedding model cache downloaded; skipping index build because --download-model was provided."
@@ -323,7 +353,7 @@ def build_index(download_only: bool = False) -> None:
 
     progress = SimpleProgressBar(len(docs), desc="Indexing documents", unit="doc")
     for doc in docs:
-        index.insert(doc, show_progress=True)
+        index.insert(doc)
         progress.update()
     
     # Persist index
@@ -341,10 +371,15 @@ if __name__ == "__main__":
         action="store_true",
         help="Download the embedding model into the offline cache and exit",
     )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Run entirely offline; fail if embedding model is not available locally",
+    )
     args = parser.parse_args()
 
     try:
-        build_index(download_only=args.download_model)
+        build_index(download_only=args.download_model, offline=args.offline)
     except Exception as e:
         logger.error(f"Ingestion failed: {e}", exc_info=True)
         raise

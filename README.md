@@ -50,19 +50,13 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-4. Set up environment variables:
-```bash
-cp .env.example .env
-# Edit .env with your configuration
-```
-
 ## Configuration
 
 Edit `.env` file with your settings:
 
 - `DATA_DIR`: Directory containing PDF/DOCX/Markdown files (default: `./data`)
 - `STORAGE_DIR`: Directory for index storage (default: `./storage`)
-- `EMB_MODEL_NAME`: Embedding model name used by LlamaIndex (default: `BAAI/bge-small-en-v1.5`). FastEmbed supports various embedding models from HuggingFace. BGE-small is a good default that's optimized for CPU.
+- `EMB_MODEL_NAME`: Embedding model name used by LlamaIndex (default: `BAAI/bge-small-en-v1.5`). FastEmbed supports various embedding models from HuggingFace. The default is a quantized ONNX BGE-small model that is already vendored in `./models` for offline use.
 - `EMB_MODEL_CACHE_DIR`: Directory where the embedding model is cached for offline use (default: `./models`). Include this directory in release artifacts so deployments do not need to download the model.
 - `SIMILARITY_TOP_K`: Number of document chunks to retrieve per query (default: `5`)
 
@@ -191,7 +185,7 @@ Please use **conventional commits without a scope** when contributing (for examp
 ├── ingest.py          # Document ingestion and index building
 ├── mcp_server.py      # MCP server implementation
 ├── requirements.txt   # Python dependencies
-├── .env.example       # Environment variable template
+├── .env       # Environment variable template
 ├── .gitignore         # Git ignore rules
 ├── README.md          # This file
 ├── data/              # Input documents (PDF/DOCX/Markdown)

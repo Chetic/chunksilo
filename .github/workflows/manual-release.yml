@@ -125,6 +125,7 @@ jobs:
           cp ingest.py "$PACKAGE_ROOT/"
           cp requirements.txt "$PACKAGE_ROOT/"
           cp README.md "$PACKAGE_ROOT/"
+          cp .env "$PACKAGE_ROOT/"
           cp -r .continue "$PACKAGE_ROOT/"
 
           # Include the cached embedding model for offline environments

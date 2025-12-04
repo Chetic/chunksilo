@@ -19,6 +19,7 @@ load_dotenv()
 # Configuration
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "./storage"))
 SIMILARITY_TOP_K = int(os.getenv("SIMILARITY_TOP_K", "5"))
+# Default to the quantized ONNX BGE-small model that is already vendored in ./models
 EMB_MODEL_NAME = os.getenv("EMB_MODEL_NAME", "BAAI/bge-small-en-v1.5")
 
 # Initialize FastMCP server
