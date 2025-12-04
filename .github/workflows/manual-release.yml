@@ -1,0 +1,136 @@
+name: Manual Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: "Select semantic version bump type"
+        required: true
+        default: patch
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Determine next version
+        id: version
+        run: |
+          set -eo pipefail
+          git fetch --tags --force
+          LAST_TAG=$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null || true)
+          if [ -z "$LAST_TAG" ]; then
+            CURRENT="0.0.0"
+          else
+            CURRENT=${LAST_TAG#v}
+          fi
+
+          IFS='.' read -r MAJOR MINOR PATCH <<<"$CURRENT"
+          case "${{ github.event.inputs.bump_type }}" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            *)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+
+          NEXT_VERSION="$MAJOR.$MINOR.$PATCH"
+
+          echo "last_tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
+          echo "next_version=$NEXT_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build release notes from conventional commits
+        id: notes
+        run: |
+          set -eo pipefail
+          NOTES_FILE="release-notes.md"
+          RANGE="${{ steps.version.outputs.last_tag }}..HEAD"
+          if [ -z "${{ steps.version.outputs.last_tag }}" ]; then
+            RANGE="HEAD"
+          fi
+
+          echo "## Changes" > "$NOTES_FILE"
+          HAS_CHANGES=false
+          while IFS= read -r SUBJECT; do
+            if [[ $SUBJECT =~ ^(feat|fix|perf|refactor|docs)(\([^)]+\))?:\ (.+)$ ]]; then
+              TYPE=${BASH_REMATCH[1]}
+              SUMMARY=${BASH_REMATCH[3]}
+              case "$TYPE" in
+                feat) LABEL="Feature";;
+                fix) LABEL="Fix";;
+                perf) LABEL="Performance";;
+                refactor) LABEL="Refactor";;
+                docs) LABEL="Docs";;
+              esac
+              echo "- ${LABEL}: ${SUMMARY}" >> "$NOTES_FILE"
+              HAS_CHANGES=true
+            fi
+          done < <(git log $RANGE --pretty=format:"%s")
+
+          if [ "$HAS_CHANGES" = false ]; then
+            echo "- No user-facing conventional commit changes since last release." >> "$NOTES_FILE"
+          fi
+
+          echo "file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare standalone release package
+        id: package
+        run: |
+          set -eo pipefail
+          PACKAGE_ROOT="release_package/on-prem-docs-mcp"
+          mkdir -p "$PACKAGE_ROOT"
+          rsync -a --exclude ".git" --exclude "release_package" --exclude "*.zip" ./ "$PACKAGE_ROOT/"
+
+          echo "${{ steps.version.outputs.next_version }}" > "$PACKAGE_ROOT/VERSION"
+
+          python -m pip install --upgrade pip
+          python -m pip download -r "$PACKAGE_ROOT/requirements.txt" -d "$PACKAGE_ROOT/dependencies"
+
+          (cd release_package && zip -r "../on-prem-docs-mcp-${{ steps.version.outputs.next_version }}.zip" .)
+
+          echo "asset_path=on-prem-docs-mcp-${{ steps.version.outputs.next_version }}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eo pipefail
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git tag -a "v${{ steps.version.outputs.next_version }}" -m "Release v${{ steps.version.outputs.next_version }}"
+          git push origin "v${{ steps.version.outputs.next_version }}"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.next_version }}
+          name: Release v${{ steps.version.outputs.next_version }}
+          body_path: ${{ steps.notes.outputs.file }}
+          files: ${{ steps.package.outputs.asset_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
