@@ -29,6 +29,23 @@ _index_cache = None
 _embed_model_initialized = False
 
 
+def _build_citation(metadata: dict[str, Any]) -> str:
+    """Return a human-friendly citation string from node metadata."""
+
+    file_path = (
+        metadata.get("file_path")
+        or metadata.get("file_name")
+        or metadata.get("source")
+        or "Unknown source"
+    )
+
+    page = metadata.get("page_label") or metadata.get("page_number") or metadata.get("page")
+    if page:
+        return f"{file_path} (page {page})"
+
+    return str(file_path)
+
+
 def _ensure_embed_model():
     """
     Ensure the same embedding model used during ingestion is available at query time.
@@ -90,29 +107,38 @@ async def retrieve_docs(query: str) -> dict[str, Any]:
     try:
         # Load index
         index = load_llamaindex_index()
-        
+
         # Use retriever (no LLM needed - just retrieval)
         retriever = index.as_retriever(similarity_top_k=SIMILARITY_TOP_K)
-        
+
         # Retrieve relevant chunks
         nodes = retriever.retrieve(query)
-        
+
         # Format chunks with full content and metadata
         chunks = []
+        citation_list = []
         for node in nodes:
+            metadata = dict(node.node.metadata or {})
+            citation = _build_citation(metadata)
             chunk_data = {
                 "text": node.node.get_content(),  # Full content, not truncated
                 "score": float(node.score) if hasattr(node, 'score') and node.score is not None else 0.0,
-                "metadata": node.node.metadata,
+                "metadata": metadata,
+                "citation": citation,
             }
+            citation_list.append(citation)
             chunks.append(chunk_data)
-        
+
         elapsed = time.time() - start_time
-        
+
+        # Deduplicate citations while preserving order
+        unique_citations = list(dict.fromkeys(citation_list))
+
         return {
             "chunks": chunks,
             "query": query,
             "num_chunks": len(chunks),
+            "citations": unique_citations,
             "retrieval_time": f"{elapsed:.2f}s",
         }
         

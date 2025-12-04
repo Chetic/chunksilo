@@ -148,6 +148,17 @@ cn chat
 
 From within the CLI chat, you can ask the model to call the `retrieve_docs` tool exposed by this server.
 
+### Response Fields and Citations
+
+The `retrieve_docs` tool returns raw document chunks with metadata so the client LLM can answer questions and cite sources. Each chunk includes:
+
+- `text`: Full chunk text (not truncated)
+- `score`: Retrieval score for the chunk
+- `metadata`: Original metadata from LlamaIndex (including file path/page when available)
+- `citation`: Human-friendly citation string derived from the metadata
+
+Responses also include a top-level `citations` array that lists unique citations used across all returned chunks. This makes it easy for clients to display or reference the sources alongside generated answers.
+
 ## Testing
 
 For concise testing instructions on how to run the Python test scripts, see `TESTING.md`.
