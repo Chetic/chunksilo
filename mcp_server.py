@@ -6,22 +6,28 @@ Returns raw document chunks for the calling LLM to synthesize.
 import os
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from dotenv import load_dotenv
 
 from mcp.server.fastmcp import FastMCP
 from llama_index.core import StorageContext, load_index_from_storage, Settings
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
+from sentence_transformers import CrossEncoder
 
 # Load environment variables
 load_dotenv()
 
 # Configuration
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "./storage"))
-SIMILARITY_TOP_K = int(os.getenv("SIMILARITY_TOP_K", "5"))
-# Default to the quantized ONNX BGE-small model that is already vendored in ./models
-EMB_MODEL_NAME = os.getenv("EMB_MODEL_NAME", "BAAI/bge-small-en-v1.5")
-EMB_MODEL_CACHE_DIR = Path(os.getenv("EMB_MODEL_CACHE_DIR", "./models"))
+RETRIEVAL_MODEL_CACHE_DIR = Path(os.getenv("RETRIEVAL_MODEL_CACHE_DIR", "./models"))
+RETRIEVAL_EMBED_MODEL_NAME = os.getenv(
+    "RETRIEVAL_EMBED_MODEL_NAME", "BAAI/bge-small-en-v1.5"
+)
+RETRIEVAL_RERANK_MODEL_NAME = os.getenv(
+    "RETRIEVAL_RERANK_MODEL_NAME", "cross-encoder/ms-marco-MiniLM-L-6-v2"
+)
+RETRIEVAL_EMBED_TOP_K = int(os.getenv("RETRIEVAL_EMBED_TOP_K", "10"))
+RETRIEVAL_RERANK_TOP_K = int(os.getenv("RETRIEVAL_RERANK_TOP_K", "5"))
 
 # Configure offline mode for HuggingFace libraries to prevent network requests
 # The MCP server is intended to run in offline environments where models are already cached.
@@ -33,7 +39,7 @@ if _offline_mode:
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     os.environ["HF_DATASETS_OFFLINE"] = "1"
     # Point HuggingFace Hub to our cache directory so it can find cached models
-    cache_dir_abs = EMB_MODEL_CACHE_DIR.resolve()
+    cache_dir_abs = RETRIEVAL_MODEL_CACHE_DIR.resolve()
     os.environ["HF_HOME"] = str(cache_dir_abs)
     os.environ["HF_HUB_CACHE"] = str(cache_dir_abs)
     os.environ["HF_DATASETS_CACHE"] = str(cache_dir_abs)
@@ -44,6 +50,7 @@ mcp = FastMCP("llamaindex-docs-rag")
 # Global caches
 _index_cache = None
 _embed_model_initialized = False
+_reranker_model: CrossEncoder | None = None
 
 
 def _build_heading_path(headings: list[dict], char_start: int | None) -> tuple[str | None, list[str]]:
@@ -111,39 +118,47 @@ def _build_citation(
     return str(file_path)
 
 
-def _get_cached_model_path(cache_dir: Path, model_name: str) -> Path | None:
+def _get_cached_embedding_model_path(cache_dir: Path, model_name: str) -> Path | None:
     """
-    Get the cached model directory path using huggingface_hub's snapshot_download.
-    This works completely offline and bypasses fastembed's download_model API calls.
-    
-    Args:
-        cache_dir: Directory where models are cached
-        model_name: FastEmbed model name (e.g., 'BAAI/bge-small-en-v1.5')
-        
-    Returns:
-        Path to the cached model directory, or None if not found or huggingface_hub unavailable
+    Locate a cached FastEmbed model directory using huggingface_hub's snapshot_download.
     """
     try:
         from huggingface_hub import snapshot_download
         from fastembed import TextEmbedding
+
         models = TextEmbedding.list_supported_models()
         model_info = [m for m in models if m.get("model") == model_name]
         if model_info:
             hf_source = model_info[0].get("sources", {}).get("hf")
             if hf_source:
                 cache_dir_abs = cache_dir.resolve()
-                # Use snapshot_download with local_files_only=True to get cached model path
-                # This works completely offline and bypasses fastembed's API call
                 model_dir = snapshot_download(
                     repo_id=hf_source,
                     local_files_only=True,
-                    cache_dir=str(cache_dir_abs)
+                    cache_dir=str(cache_dir_abs),
                 )
                 return Path(model_dir).resolve()
     except (ImportError, Exception):
-        # huggingface_hub might not be available, or model not in cache
         pass
     return None
+
+
+def _get_cached_hf_model_path(cache_dir: Path, model_name: str) -> Path | None:
+    """
+    Locate a cached Hugging Face model directory (used for rerankers).
+    """
+    try:
+        from huggingface_hub import snapshot_download
+
+        cache_dir_abs = cache_dir.resolve()
+        model_dir = snapshot_download(
+            repo_id=model_name,
+            local_files_only=True,
+            cache_dir=str(cache_dir_abs),
+        )
+        return Path(model_dir).resolve()
+    except (ImportError, Exception):
+        return None
 
 
 def _ensure_embed_model():
@@ -162,21 +177,79 @@ def _ensure_embed_model():
         return
 
     # Try to use cached model path in offline mode to bypass fastembed's download step
-    cached_model_path = _get_cached_model_path(EMB_MODEL_CACHE_DIR, EMB_MODEL_NAME)
+    cached_model_path = _get_cached_embedding_model_path(
+        RETRIEVAL_MODEL_CACHE_DIR, RETRIEVAL_EMBED_MODEL_NAME
+    )
     if cached_model_path and _offline_mode:
-        # Use specific_model_path to bypass fastembed's download_model API call
         embed_model = FastEmbedEmbedding(
-            model_name=EMB_MODEL_NAME,
-            cache_dir=str(EMB_MODEL_CACHE_DIR),
-            specific_model_path=str(cached_model_path)
+            model_name=RETRIEVAL_EMBED_MODEL_NAME,
+            cache_dir=str(RETRIEVAL_MODEL_CACHE_DIR),
+            specific_model_path=str(cached_model_path),
         )
     else:
-        # Normal initialization (non-offline or cached path not available)
         embed_model = FastEmbedEmbedding(
-            model_name=EMB_MODEL_NAME, cache_dir=str(EMB_MODEL_CACHE_DIR)
+            model_name=RETRIEVAL_EMBED_MODEL_NAME,
+            cache_dir=str(RETRIEVAL_MODEL_CACHE_DIR),
         )
     Settings.embed_model = embed_model
     _embed_model_initialized = True
+
+
+def _ensure_reranker() -> CrossEncoder:
+    """Load the cross-encoder reranker model (cached for reuse)."""
+    global _reranker_model
+
+    if _reranker_model is not None:
+        return _reranker_model
+
+    cached_model_path = _get_cached_hf_model_path(
+        RETRIEVAL_MODEL_CACHE_DIR, RETRIEVAL_RERANK_MODEL_NAME
+    )
+
+    if cached_model_path and _offline_mode:
+        _reranker_model = CrossEncoder(str(cached_model_path), device="cpu")
+    elif _offline_mode and cached_model_path is None:
+        raise FileNotFoundError(
+            "Offline mode enabled, but reranker model is not available in the cache. "
+            "Download the reranker with ingest.py --download-model or allow network access."
+        )
+    else:
+        _reranker_model = CrossEncoder(
+            RETRIEVAL_RERANK_MODEL_NAME,
+            cache_dir=str(RETRIEVAL_MODEL_CACHE_DIR),
+            device="cpu",
+        )
+
+    return _reranker_model
+
+
+def _rerank_nodes(query: str, nodes: Iterable[Any]) -> list[Any]:
+    """Rerank retrieved nodes using the cross-encoder model and return top results."""
+
+    if RETRIEVAL_RERANK_TOP_K <= 0:
+        return list(nodes)
+
+    reranker = _ensure_reranker()
+
+    node_list = list(nodes)
+    if not node_list:
+        return []
+
+    pairs = [(query, node.node.get_content() or "") for node in node_list]
+    scores = reranker.predict(pairs)
+
+    scored = []
+    for node, score in zip(node_list, scores):
+        try:
+            score_value = float(score)
+        except (TypeError, ValueError):
+            score_value = 0.0
+        node.score = score_value
+        scored.append(node)
+
+    scored.sort(key=lambda n: getattr(n, "score", 0), reverse=True)
+    limit = min(RETRIEVAL_RERANK_TOP_K, len(scored))
+    return scored[:limit]
 
 
 def load_llamaindex_index():
@@ -245,11 +318,12 @@ Following these steps is **mandatory** for a complete, trustworthy response.
         # Load index
         index = load_llamaindex_index()
 
-        # Use retriever (no LLM needed - just retrieval)
-        retriever = index.as_retriever(similarity_top_k=SIMILARITY_TOP_K)
+        # Step 1: embedding-based retrieval
+        retriever = index.as_retriever(similarity_top_k=RETRIEVAL_EMBED_TOP_K)
+        retrieved_nodes = retriever.retrieve(query)
 
-        # Retrieve relevant chunks
-        nodes = retriever.retrieve(query)
+        # Step 2: cross-encoder reranking
+        nodes = _rerank_nodes(query, retrieved_nodes)
 
         # Format chunks with full content and metadata
         chunks = []
