@@ -63,6 +63,7 @@ Edit `.env` file with your settings:
 - `DATA_DIR`: Directory containing PDF/DOCX/Markdown files (default: `./data`)
 - `STORAGE_DIR`: Directory for index storage (default: `./storage`)
 - `EMB_MODEL_NAME`: Embedding model name used by LlamaIndex (default: `BAAI/bge-small-en-v1.5`). FastEmbed supports various embedding models from HuggingFace. BGE-small is a good default that's optimized for CPU.
+- `EMB_MODEL_CACHE_DIR`: Directory where the embedding model is cached for offline use (default: `./models`). Include this directory in release artifacts so deployments do not need to download the model.
 - `SIMILARITY_TOP_K`: Number of document chunks to retrieve per query (default: `5`)
 
 **Note:** The MCP server does **not** need any LLM configuration (API base, model, API key). It only performs semantic search and returns raw chunks. Continue's LLM (which you already have configured) will synthesize the answer from these chunks.
@@ -77,9 +78,23 @@ mkdir -p data
 # Copy your PDF/DOCX/Markdown files to data/
 ```
 
-### 2. Build the Index
+### 2. Download the embedding model for offline use
 
-Run the ingestion script to build the index:
+The server runs fully offline once the embedding model is cached locally. To vendor the
+model into the repository (so it can be included in a release artifact), run:
+
+```bash
+python ingest.py --download-model
+```
+
+This stores the FastEmbed model in `./models/` (configurable via `EMB_MODEL_CACHE_DIR`).
+Include this directory in your release package so deployments never need internet
+access. The manual GitHub release workflow automatically downloads the model into the
+packaged `models/` directory so the published ZIP works offline without extra steps.
+
+### 3. Build the Index
+
+Run the ingestion script to build the index (uses the offline model cache):
 ```bash
 python ingest.py
 ```
@@ -87,7 +102,7 @@ python ingest.py
 This will:
 - Scan the `data/` directory for PDF, DOCX, and Markdown files
 - Parse and chunk the documents
-- Generate embeddings
+- Generate embeddings using the locally cached model
 - Build and persist the vector index to `storage/`
 
 ### 3. Configure Continue's LLM
@@ -165,6 +180,10 @@ Responses also include a top-level `citations` array that lists unique citations
 
 For concise testing instructions on how to run the Python test scripts, see `TESTING.md`.
 
+## Commit messages
+
+Please use **conventional commits without a scope** when contributing (for example: `feat: add progress bar`, `fix: address ingestion bug`, `chore: update docs`). Clear, scope-free messages keep release notes accurate and easy to generate.
+
 ## Project Structure
 
 ```
@@ -194,6 +213,8 @@ If you see "Storage directory does not exist", run `python ingest.py` first.
 ### Embedding Model Download
 
 The first run will download the embedding model. FastEmbed automatically downloads and caches the model on first use. This may take a few minutes, but subsequent runs will use the cached model.
+
+For offline deployments and release builds, run `python ingest.py --download-model` ahead of time and include the resulting `models/` directory in the release artifact so the embedding model is available without internet access.
 
 ## Future Enhancements
 
