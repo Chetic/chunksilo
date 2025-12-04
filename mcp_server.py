@@ -138,19 +138,39 @@ def load_llamaindex_index():
 @mcp.tool()
 async def retrieve_docs(query: str) -> dict[str, Any]:
     """
-    Search the local PDF/DOCX/Markdown documentation corpus and return relevant chunks.
+Search the local PDF / DOCX / Markdown documentation corpus and return the most relevant chunks.
 
-    **Mandatory**: When you use information from these chunks in your answer to the user,
-    you MUST include source citations. A response that omits citations is incomplete.
+Your primary responsibility when using this tool is not just to find information, but to **show clearly where it came from.** That means:
 
-    Each returned chunk includes:
-    - `text`: Full chunk text content (may start with SOURCE_* helper lines)
-    - `citation`: Human-readable citation string (use this field in your answer)
-    - `location`: Structured location details (file, page, heading, heading_path)
-    - `metadata`: Original document metadata
+1. **Every time you use information from a retrieved chunk in your answer, you must add a source citation.**
+2. **Always place each citation on its own separate line, immediately after the sentence or paragraph it supports.**
+3. **An answer without citations is considered incomplete and may be treated as incorrect, even if the content is otherwise good.**
 
-    Responses from this tool also include a top-level `citations` array listing all unique
-    citation strings. Use these values when citing sources in your final answer.
+When this tool returns results, each chunk includes:
+
+- `text`: Full chunk text content (may start with `SOURCE_*` helper lines).
+- `citation`: A human-readable citation string. **This is what you should paste or adapt directly into your answer when you reference that chunk, on its own line.**
+- `location`: Structured location details (file, page, heading, heading_path).
+- `metadata`: Original document metadata.
+
+At the top level, the tool response also includes a `citations` array listing all unique citation strings.
+
+To write a high-quality answer:
+
+- As you draft your reasoning or explanation, **immediately attach the appropriate `citation` string whenever you use a fact, definition, procedure, or example from a chunk.**
+- **Put that citation on a new line by itself**, directly after the relevant text. For example:
+
+  - Your explanatory text here…
+  - `Citation: <paste citation string here>`
+
+- Prefer citing **exactly the chunks you actually used**, not the whole list of returned results.
+
+Before you consider your answer finished, do a quick check:
+
+- “Have I added at least one citation for every distinct document I used?”
+- “Are all my citations on their own separate lines, immediately after the text they support?”
+
+Following these steps is **mandatory** for a complete, trustworthy response.
     """
     start_time = time.time()
     
