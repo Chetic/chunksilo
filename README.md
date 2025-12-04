@@ -20,7 +20,7 @@ With this setup you get these capabilities:
 
 ## Prerequisites
 
-- Python 3.9+
+- Python 3.10+
 - Documents in PDF, DOCX, or Markdown format
 
 The intended deployment is **on-prem**:
