@@ -17,7 +17,7 @@ from llama_index.core import (
     SimpleDirectoryReader,
     Document as LlamaIndexDocument,
 )
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
 # Load environment variables
 load_dotenv()
@@ -184,7 +184,7 @@ def build_index():
     
     # Initialize embedding model
     logger.info(f"Initializing embedding model: {EMB_MODEL_NAME}")
-    embed_model = HuggingFaceEmbedding(model_name=EMB_MODEL_NAME)
+    embed_model = FastEmbedEmbedding(model_name=EMB_MODEL_NAME)
     Settings.embed_model = embed_model
     
     # Build index

@@ -14,6 +14,7 @@ With this setup you get these capabilities:
 
 - Indexes PDF, DOCX, and Markdown documents from a local directory
 - Uses LlamaIndex for semantic search and retrieval
+- **CPU-optimized embedding stack** using FastEmbed (no PyTorch required, much lighter dependencies)
 - Exposes an MCP server with `retrieve_docs` tool that returns raw document chunks
 - **No LLM required in the MCP server** - it only does retrieval; your existing Continue LLM handles answer synthesis
 - Persistent index storage (no re-indexing on restart)
@@ -61,7 +62,7 @@ Edit `.env` file with your settings:
 
 - `DATA_DIR`: Directory containing PDF/DOCX/Markdown files (default: `./data`)
 - `STORAGE_DIR`: Directory for index storage (default: `./storage`)
-- `EMB_MODEL_NAME`: Embedding model name used by LlamaIndex (default: `BAAI/bge-small-en-v1.5`). Any embedding model supported by LlamaIndex can be used; BGE-small is just a good default from Hugging Face.
+- `EMB_MODEL_NAME`: Embedding model name used by LlamaIndex (default: `BAAI/bge-small-en-v1.5`). FastEmbed supports various embedding models from HuggingFace. BGE-small is a good default that's optimized for CPU.
 - `SIMILARITY_TOP_K`: Number of document chunks to retrieve per query (default: `5`)
 
 **Note:** The MCP server does **not** need any LLM configuration (API base, model, API key). It only performs semantic search and returns raw chunks. Continue's LLM (which you already have configured) will synthesize the answer from these chunks.
@@ -192,7 +193,7 @@ If you see "Storage directory does not exist", run `python ingest.py` first.
 
 ### Embedding Model Download
 
-The first run will download the embedding model from Hugging Face. This may take a few minutes.
+The first run will download the embedding model. FastEmbed automatically downloads and caches the model on first use. This may take a few minutes, but subsequent runs will use the cached model.
 
 ## Future Enhancements
 

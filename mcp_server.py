@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 from mcp.server.fastmcp import FastMCP
 from llama_index.core import StorageContext, load_index_from_storage, Settings
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
 # Load environment variables
 load_dotenv()
@@ -107,7 +107,7 @@ def _ensure_embed_model():
     if _embed_model_initialized:
         return
 
-    embed_model = HuggingFaceEmbedding(model_name=EMB_MODEL_NAME)
+    embed_model = FastEmbedEmbedding(model_name=EMB_MODEL_NAME)
     Settings.embed_model = embed_model
     _embed_model_initialized = True
 
@@ -126,7 +126,7 @@ def load_llamaindex_index():
         )
 
     # Make sure the embedding model is configured before using the index so that
-    # query embeddings use the same model as ingestion (HuggingFace, not OpenAI).
+    # query embeddings use the same model as ingestion (FastEmbed, not OpenAI).
     _ensure_embed_model()
 
     storage_context = StorageContext.from_defaults(persist_dir=str(STORAGE_DIR))
