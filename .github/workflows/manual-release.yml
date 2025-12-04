@@ -109,7 +109,7 @@ jobs:
         id: package
         run: |
           set -eo pipefail
-          PACKAGE_ROOT="release_package/on-prem-docs-mcp"
+          PACKAGE_ROOT="release_package/opd-mcp"
           mkdir -p "$PACKAGE_ROOT"
 
           # Install dependencies so we can download the embedding model into the release bundle
@@ -140,9 +140,9 @@ jobs:
 
           python -m pip download -r "$PACKAGE_ROOT/requirements.txt" -d "$PACKAGE_ROOT/dependencies"
 
-          (cd release_package && zip -r "../on-prem-docs-mcp-${{ steps.version.outputs.next_version }}.zip" .)
+          (cd release_package && zip -r "../opd-mcp-${{ steps.version.outputs.next_version }}.zip" .)
 
-          echo "asset_path=on-prem-docs-mcp-${{ steps.version.outputs.next_version }}.zip" >> "$GITHUB_OUTPUT"
+          echo "asset_path=opd-mcp-${{ steps.version.outputs.next_version }}.zip" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag
         env:

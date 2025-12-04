@@ -35,8 +35,8 @@ The intended deployment is **on-prem**:
 
 1. Clone this repository and navigate to the project directory:
 ```bash
-git clone git@github.com:Chetic/on-prem-docs-mcp.git
-cd on-prem-docs-mcp
+git clone git@github.com:Chetic/opd-mcp.git
+cd opd-mcp
 ```
 
 2. Create a virtual environment:
@@ -126,8 +126,8 @@ Add this server to your MCP client configuration. Below are examples for **Conti
 
 1. Install the **Continue** extension from the VS Code Marketplace.
 2. Create (or edit) a YAML MCP server config file, for example:
-   - macOS/Linux: `~/.continue/mcpServers/on-prem-docs-mcp.yaml`
-   - Windows: `%USERPROFILE%\\.continue\\mcpServers\\on-prem-docs-mcp.yaml`
+   - macOS/Linux: `~/.continue/mcpServers/opd-mcp.yaml`
+   - Windows: `%USERPROFILE%\\.continue\\mcpServers\\opd-mcp.yaml`
 3. Add an MCP server entry in YAML:
 
 ```yaml
@@ -135,17 +135,17 @@ name: On-Prem Docs MCP
 version: 1.0.0
 schema: v1
 mcpServers:
-  - name: on-prem-docs-mcp
+  - name: opd-mcp
     command: python
     args:
-      - path/to/on-prem-docs-mcp/mcp_server.py
+      - path/to/opd-mcp/mcp_server.py
     env:
-      STORAGE_DIR: path/to/on-prem-docs-mcp/storage
+      STORAGE_DIR: path/to/opd-mcp/storage
 ```
 
 **Note:** No LLM configuration needed! The MCP server only does retrieval. Continue's LLM handles answer synthesis.
 
-Replace `path/to/on-prem-docs-mcp` with the path where you cloned the repository. After saving, reload VS Code; the `on-prem-docs-mcp` tools (including `retrieve_docs`) should appear in Continue's tool list.
+Replace `path/to/opd-mcp` with the path where you cloned the repository. After saving, reload VS Code; the `opd-mcp` tools (including `retrieve_docs`) should appear in Continue's tool list.
 
 #### Continue CLI
 
