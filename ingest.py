@@ -37,9 +37,19 @@ load_dotenv()
 # Configuration
 DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "./storage"))
-# Default to the quantized ONNX BGE-small model that is already vendored in ./models
-EMB_MODEL_NAME = os.getenv("EMB_MODEL_NAME", "BAAI/bge-small-en-v1.5")
-EMB_MODEL_CACHE_DIR = Path(os.getenv("EMB_MODEL_CACHE_DIR", "./models"))
+
+# Stage 1 (embedding/vector search) configuration
+RETRIEVAL_EMBED_MODEL_NAME = os.getenv(
+    "RETRIEVAL_EMBED_MODEL_NAME", "BAAI/bge-small-en-v1.5"
+)
+
+# Stage 2 (FlashRank reranking, CPU-only, ONNX-based) configuration
+RETRIEVAL_RERANK_MODEL_NAME = os.getenv(
+    "RETRIEVAL_RERANK_MODEL_NAME", "ms-marco-MiniLM-L-12-v2"
+)
+
+# Shared cache directory for embedding and reranking models
+RETRIEVAL_MODEL_CACHE_DIR = Path(os.getenv("RETRIEVAL_MODEL_CACHE_DIR", "./models"))
 
 # Set up logging
 logging.basicConfig(
@@ -138,7 +148,7 @@ def _verify_model_cache_exists(cache_dir: Path) -> bool:
     
     try:
         models = TextEmbedding.list_supported_models()
-        model_info = [m for m in models if m.get("model") == EMB_MODEL_NAME]
+        model_info = [m for m in models if m.get("model") == RETRIEVAL_EMBED_MODEL_NAME]
         if not model_info:
             return False
         
@@ -220,13 +230,13 @@ def _create_fastembed_embedding(cache_dir: Path, offline: bool = False):
     """
     if offline:
         # Try to get cached model path to bypass fastembed's download step
-        cached_model_path = _get_cached_model_path(cache_dir, EMB_MODEL_NAME)
+        cached_model_path = _get_cached_model_path(cache_dir, RETRIEVAL_EMBED_MODEL_NAME)
         if cached_model_path:
             logger.info(
                 f"Using cached model path to bypass download: {cached_model_path}"
             )
             return FastEmbedEmbedding(
-                model_name=EMB_MODEL_NAME,
+                model_name=RETRIEVAL_EMBED_MODEL_NAME,
                 cache_dir=str(cache_dir),
                 specific_model_path=str(cached_model_path)
             )
@@ -236,7 +246,9 @@ def _create_fastembed_embedding(cache_dir: Path, offline: bool = False):
             )
     
     # Normal initialization (non-offline or fallback)
-    return FastEmbedEmbedding(model_name=EMB_MODEL_NAME, cache_dir=str(cache_dir))
+    return FastEmbedEmbedding(
+        model_name=RETRIEVAL_EMBED_MODEL_NAME, cache_dir=str(cache_dir)
+    )
 
 
 def ensure_embedding_model_cached(cache_dir: Path, offline: bool = False) -> None:
@@ -261,7 +273,7 @@ def ensure_embedding_model_cached(cache_dir: Path, offline: bool = False) -> Non
                 cache_dir,
             )
             raise FileNotFoundError(
-                f"Embedding model '{EMB_MODEL_NAME}' not found in cache directory '{cache_dir}'. "
+                f"Embedding model '{RETRIEVAL_EMBED_MODEL_NAME}' not found in cache directory '{cache_dir}'. "
                 "Run without --offline flag to download the model, or ensure the model is already cached."
             )
     
@@ -298,7 +310,7 @@ def ensure_embedding_model_cached(cache_dir: Path, offline: bool = False) -> Non
                     "This is a FastEmbed limitation in offline mode."
                 )
                 raise FileNotFoundError(
-                    f"Embedding model '{EMB_MODEL_NAME}' files exist in cache directory '{cache_dir}', "
+                    f"Embedding model '{RETRIEVAL_EMBED_MODEL_NAME}' files exist in cache directory '{cache_dir}', "
                     "but FastEmbed attempted a network request to verify the model. "
                     "This is a known FastEmbed limitation. "
                     "To work around this, temporarily run without --offline flag to allow "
@@ -311,7 +323,7 @@ def ensure_embedding_model_cached(cache_dir: Path, offline: bool = False) -> Non
                     cache_dir,
                 )
                 raise FileNotFoundError(
-                    f"Embedding model '{EMB_MODEL_NAME}' not found in cache directory '{cache_dir}'. "
+                    f"Embedding model '{RETRIEVAL_EMBED_MODEL_NAME}' not found in cache directory '{cache_dir}'. "
                     "Run without --offline flag to download the model, or ensure the model is already cached."
                 ) from e
         elif offline:
@@ -321,11 +333,58 @@ def ensure_embedding_model_cached(cache_dir: Path, offline: bool = False) -> Non
                 e,
             )
             raise FileNotFoundError(
-                f"Embedding model '{EMB_MODEL_NAME}' not available in cache directory '{cache_dir}'. "
+                f"Embedding model '{RETRIEVAL_EMBED_MODEL_NAME}' not available in cache directory '{cache_dir}'. "
                 "Run without --offline flag to download the model, or ensure the model is already cached."
             ) from e
         # Not offline, so FastEmbed will download it when we initialize below
         pass
+
+
+def ensure_rerank_model_cached(cache_dir: Path, offline: bool = False) -> Path:
+    """Ensure the reranking model is cached locally for CPU inference using FlashRank."""
+
+    try:
+        from flashrank import Ranker
+    except ImportError as exc:  # pragma: no cover - import guard
+        raise ImportError(
+            "flashrank is required for reranking. Install dependencies from requirements.txt."
+        ) from exc
+
+    cache_dir_abs = cache_dir.resolve()
+    logger.info("Ensuring rerank model is available in cache...")
+
+    # Map cross-encoder model names to FlashRank equivalents if needed
+    model_name = RETRIEVAL_RERANK_MODEL_NAME
+    # Note: FlashRank doesn't have L-6 models, so we map to L-12 equivalents
+    model_mapping = {
+        "cross-encoder/ms-marco-MiniLM-L-6-v2": "ms-marco-MiniLM-L-12-v2",  # L-6 not available, use L-12
+        "ms-marco-MiniLM-L-6-v2": "ms-marco-MiniLM-L-12-v2",  # Direct mapping for L-6
+    }
+    if model_name in model_mapping:
+        model_name = model_mapping[model_name]
+    elif model_name.startswith("cross-encoder/"):
+        # Extract model name after cross-encoder/ prefix and try to map
+        base_name = model_name.replace("cross-encoder/", "")
+        # If it's an L-6 model, map to L-12
+        if "L-6" in base_name:
+            model_name = base_name.replace("L-6", "L-12")
+        else:
+            model_name = base_name
+
+    try:
+        # FlashRank handles model downloading and caching internally
+        # Initialize the model to trigger download if needed
+        reranker = Ranker(model_name=model_name, cache_dir=str(cache_dir_abs))
+        logger.info(f"FlashRank model '{model_name}' initialized successfully")
+        # FlashRank caches models in its own format, return the cache directory
+        return cache_dir_abs
+    except Exception as exc:
+        if offline:
+            raise FileNotFoundError(
+                f"Rerank model '{model_name}' not found in cache directory '{cache_dir_abs}'. "
+                "Run without --offline to download it before packaging releases."
+            ) from exc
+        raise
 
     logger.info("Downloading embedding model to offline cache at %s", cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -492,15 +551,24 @@ def configure_offline_mode(offline: bool, cache_dir: Path) -> None:
 def build_index(download_only: bool = False, offline: bool = False) -> None:
     """Build and persist the vector index from documents."""
     # Configure offline mode before any HuggingFace/FastEmbed operations
-    configure_offline_mode(offline, EMB_MODEL_CACHE_DIR)
+    configure_offline_mode(offline, RETRIEVAL_MODEL_CACHE_DIR)
     
     logger.info(f"Starting ingestion from {DATA_DIR}")
 
     # Ensure the embedding model is available offline
-    ensure_embedding_model_cached(EMB_MODEL_CACHE_DIR, offline=offline)
+    ensure_embedding_model_cached(RETRIEVAL_MODEL_CACHE_DIR, offline=offline)
+    try:
+        ensure_rerank_model_cached(RETRIEVAL_MODEL_CACHE_DIR, offline=offline)
+    except FileNotFoundError as exc:
+        if download_only or offline:
+            raise
+        logger.warning(
+            "Rerank model could not be cached yet; continuing without it. Download it before packaging releases. Error: %s",
+            exc,
+        )
     if download_only:
         logger.info(
-            "Embedding model cache downloaded; skipping index build because --download-model was provided."
+            "Embedding and rerank model caches downloaded; skipping index build because --download-models was provided."
         )
         return
 
@@ -546,9 +614,9 @@ def build_index(download_only: bool = False, offline: bool = False) -> None:
     logger.info(f"Loaded {len(docs)} documents (including DOCX heading chunks)")
 
     # Initialize embedding model
-    logger.info(f"Initializing embedding model: {EMB_MODEL_NAME}")
+    logger.info(f"Initializing embedding model: {RETRIEVAL_EMBED_MODEL_NAME}")
     with Spinner("Initializing embedding model from offline cache"):
-        embed_model = _create_fastembed_embedding(EMB_MODEL_CACHE_DIR, offline=offline)
+        embed_model = _create_fastembed_embedding(RETRIEVAL_MODEL_CACHE_DIR, offline=offline)
     Settings.embed_model = embed_model
     logger.info("Embedding model initialized")
 
@@ -574,9 +642,9 @@ def build_index(download_only: bool = False, offline: bool = False) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Build the document index")
     parser.add_argument(
-        "--download-model",
+        "--download-models",
         action="store_true",
-        help="Download the embedding model into the offline cache and exit",
+        help="Download the retrieval models (embedding + reranker) into the offline cache and exit",
     )
     parser.add_argument(
         "--offline",
@@ -586,7 +654,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     try:
-        build_index(download_only=args.download_model, offline=args.offline)
+        build_index(download_only=args.download_models, offline=args.offline)
     except Exception as e:
         logger.error(f"Ingestion failed: {e}", exc_info=True)
         raise

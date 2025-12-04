@@ -18,10 +18,22 @@ load_dotenv()
 
 # Configuration
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "./storage"))
-SIMILARITY_TOP_K = int(os.getenv("SIMILARITY_TOP_K", "5"))
-# Default to the quantized ONNX BGE-small model that is already vendored in ./models
-EMB_MODEL_NAME = os.getenv("EMB_MODEL_NAME", "BAAI/bge-small-en-v1.5")
-EMB_MODEL_CACHE_DIR = Path(os.getenv("EMB_MODEL_CACHE_DIR", "./models"))
+
+# Two-stage retrieval configuration
+# Stage 1: vector search over embeddings
+RETRIEVAL_EMBED_TOP_K = int(os.getenv("RETRIEVAL_EMBED_TOP_K", "10"))
+RETRIEVAL_EMBED_MODEL_NAME = os.getenv(
+    "RETRIEVAL_EMBED_MODEL_NAME", "BAAI/bge-small-en-v1.5"
+)
+
+# Stage 2: FlashRank reranking (CPU-only, ONNX-based) of the vector search candidates
+RETRIEVAL_RERANK_TOP_K = int(os.getenv("RETRIEVAL_RERANK_TOP_K", "5"))
+RETRIEVAL_RERANK_MODEL_NAME = os.getenv(
+    "RETRIEVAL_RERANK_MODEL_NAME", "ms-marco-MiniLM-L-12-v2"
+)
+
+# Shared cache directory for embedding and reranker models
+RETRIEVAL_MODEL_CACHE_DIR = Path(os.getenv("RETRIEVAL_MODEL_CACHE_DIR", "./models"))
 
 # Configure offline mode for HuggingFace libraries to prevent network requests
 # The MCP server is intended to run in offline environments where models are already cached.
@@ -33,7 +45,7 @@ if _offline_mode:
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     os.environ["HF_DATASETS_OFFLINE"] = "1"
     # Point HuggingFace Hub to our cache directory so it can find cached models
-    cache_dir_abs = EMB_MODEL_CACHE_DIR.resolve()
+    cache_dir_abs = RETRIEVAL_MODEL_CACHE_DIR.resolve()
     os.environ["HF_HOME"] = str(cache_dir_abs)
     os.environ["HF_HUB_CACHE"] = str(cache_dir_abs)
     os.environ["HF_DATASETS_CACHE"] = str(cache_dir_abs)
@@ -44,6 +56,7 @@ mcp = FastMCP("llamaindex-docs-rag")
 # Global caches
 _index_cache = None
 _embed_model_initialized = False
+_reranker_model = None
 
 
 def _build_heading_path(headings: list[dict], char_start: int | None) -> tuple[str | None, list[str]]:
@@ -162,21 +175,75 @@ def _ensure_embed_model():
         return
 
     # Try to use cached model path in offline mode to bypass fastembed's download step
-    cached_model_path = _get_cached_model_path(EMB_MODEL_CACHE_DIR, EMB_MODEL_NAME)
+    cached_model_path = _get_cached_model_path(
+        RETRIEVAL_MODEL_CACHE_DIR, RETRIEVAL_EMBED_MODEL_NAME
+    )
     if cached_model_path and _offline_mode:
         # Use specific_model_path to bypass fastembed's download_model API call
         embed_model = FastEmbedEmbedding(
-            model_name=EMB_MODEL_NAME,
-            cache_dir=str(EMB_MODEL_CACHE_DIR),
+            model_name=RETRIEVAL_EMBED_MODEL_NAME,
+            cache_dir=str(RETRIEVAL_MODEL_CACHE_DIR),
             specific_model_path=str(cached_model_path)
         )
     else:
         # Normal initialization (non-offline or cached path not available)
         embed_model = FastEmbedEmbedding(
-            model_name=EMB_MODEL_NAME, cache_dir=str(EMB_MODEL_CACHE_DIR)
+            model_name=RETRIEVAL_EMBED_MODEL_NAME,
+            cache_dir=str(RETRIEVAL_MODEL_CACHE_DIR),
         )
     Settings.embed_model = embed_model
     _embed_model_initialized = True
+
+
+def _ensure_reranker():
+    """Load the FlashRank reranking model for CPU inference."""
+
+    global _reranker_model
+
+    if _reranker_model is not None:
+        return _reranker_model
+
+    try:
+        from flashrank import Ranker
+    except ImportError as exc:  # pragma: no cover - import guard
+        raise ImportError(
+            "flashrank is required for reranking. Please install dependencies from requirements.txt."
+        ) from exc
+
+    # FlashRank uses ONNX models and handles caching internally
+    # The model name should be a FlashRank-compatible model identifier
+    # Default to a lightweight model if the configured one isn't FlashRank-compatible
+    model_name = RETRIEVAL_RERANK_MODEL_NAME
+    
+    # Map cross-encoder model names to FlashRank equivalents if needed
+    # FlashRank supports models like 'ms-marco-TinyBERT-L-2-v2', 'ms-marco-MiniLM-L-12-v2', etc.
+    # Note: FlashRank doesn't have L-6 models, so we map to L-12 equivalents
+    model_mapping = {
+        "cross-encoder/ms-marco-MiniLM-L-6-v2": "ms-marco-MiniLM-L-12-v2",  # L-6 not available, use L-12
+        "ms-marco-MiniLM-L-6-v2": "ms-marco-MiniLM-L-12-v2",  # Direct mapping for L-6
+    }
+    if model_name in model_mapping:
+        model_name = model_mapping[model_name]
+    elif model_name.startswith("cross-encoder/"):
+        # Extract model name after cross-encoder/ prefix and try to map
+        base_name = model_name.replace("cross-encoder/", "")
+        # If it's an L-6 model, map to L-12
+        if "L-6" in base_name:
+            model_name = base_name.replace("L-6", "L-12")
+        else:
+            model_name = base_name
+
+    try:
+        _reranker_model = Ranker(model_name=model_name, cache_dir=str(RETRIEVAL_MODEL_CACHE_DIR))
+    except Exception as exc:
+        if _offline_mode:
+            raise FileNotFoundError(
+                f"Rerank model '{model_name}' not available in cache directory {RETRIEVAL_MODEL_CACHE_DIR}. "
+                "Download it before running in offline mode."
+            ) from exc
+        raise
+    
+    return _reranker_model
 
 
 def load_llamaindex_index():
@@ -246,10 +313,63 @@ Following these steps is **mandatory** for a complete, trustworthy response.
         index = load_llamaindex_index()
 
         # Use retriever (no LLM needed - just retrieval)
-        retriever = index.as_retriever(similarity_top_k=SIMILARITY_TOP_K)
+        retriever = index.as_retriever(similarity_top_k=RETRIEVAL_EMBED_TOP_K)
 
-        # Retrieve relevant chunks
+        # Retrieve relevant chunks (embedding stage)
         nodes = retriever.retrieve(query)
+
+        # Rerank the retrieved nodes with FlashRank (CPU-only, ONNX-based) and trim to the
+        # configured final Top K for the tool response.
+        rerank_scores: dict[int, float] = {}
+        if nodes:
+            rerank_limit = max(1, min(RETRIEVAL_RERANK_TOP_K, len(nodes)))
+            try:
+                reranker = _ensure_reranker()
+                # Prepare documents for reranking
+                documents = [node.node.get_content() or "" for node in nodes]
+                # FlashRank returns reranked documents (list of dicts with 'text' and 'score')
+                reranked_results = reranker.rerank(query, documents)
+                
+                # Create a mapping from document text to (index, node) for reliable matching
+                # Use index as primary key to handle duplicate text correctly
+                text_to_indices = {}
+                for idx, node in enumerate(nodes):
+                    node_text = node.node.get_content() or ""
+                    if node_text not in text_to_indices:
+                        text_to_indices[node_text] = []
+                    text_to_indices[node_text].append((idx, node))
+                
+                # Reorder nodes based on reranking results
+                reranked_nodes = []
+                seen_indices = set()
+                for result in reranked_results:
+                    # Handle both dict format {'text': ..., 'score': ...} and string format
+                    if isinstance(result, dict):
+                        doc_text = result.get("text", "")
+                        score = result.get("score", 0.0)
+                    else:
+                        # If result is just a string, use it as text
+                        doc_text = str(result)
+                        score = 0.0
+                    
+                    if doc_text in text_to_indices:
+                        # Get the first unused (index, node) pair for this text
+                        for idx, node in text_to_indices[doc_text]:
+                            if idx not in seen_indices:
+                                reranked_nodes.append(node)
+                                rerank_scores[id(node)] = float(score)
+                                seen_indices.add(idx)
+                                break
+                
+                # Add any nodes that weren't in reranked results (shouldn't happen, but safety)
+                for idx, node in enumerate(nodes):
+                    if idx not in seen_indices:
+                        reranked_nodes.append(node)
+                
+                nodes = reranked_nodes[:rerank_limit]
+            except Exception:
+                # Fall back to vector search ordering if reranking fails
+                nodes = nodes[:rerank_limit]
 
         # Format chunks with full content and metadata
         chunks = []
@@ -354,9 +474,10 @@ Following these steps is **mandatory** for a complete, trustworthy response.
                 "heading": heading_text,
                 "heading_path": heading_path or None,
             }
+            score_value = rerank_scores.get(id(node), getattr(node, "score", None))
             chunk_data = {
                 "text": display_text,  # Full content, not truncated, with header prefix
-                "score": round(float(node.score), 3) if hasattr(node, 'score') and node.score is not None else 0.0,
+                "score": round(float(score_value), 3) if score_value is not None else 0.0,
                 "metadata": metadata,
                 "citation": citation,
                 "location": location,
