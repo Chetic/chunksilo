@@ -29,7 +29,7 @@ _index_cache = None
 _embed_model_initialized = False
 
 
-def _build_citation(metadata: dict[str, Any]) -> str:
+def _build_citation(metadata: dict[str, Any], *, char_start: int | None, char_end: int | None) -> str:
     """Return a human-friendly citation string from node metadata."""
 
     file_path = (
@@ -40,14 +40,12 @@ def _build_citation(metadata: dict[str, Any]) -> str:
     )
 
     page = metadata.get("page_label") or metadata.get("page_number") or metadata.get("page")
-    start_char = metadata.get("start_char_idx")
-    end_char = metadata.get("end_char_idx")
 
     parts: list[str] = []
     if page:
         parts.append(f"page {page}")
-    if start_char is not None and end_char is not None:
-        parts.append(f"chars {start_char}-{end_char}")
+    if char_start is not None and char_end is not None:
+        parts.append(f"chars {char_start}-{char_end}")
 
     if parts:
         joined = ", ".join(parts)
@@ -129,19 +127,31 @@ async def retrieve_docs(query: str) -> dict[str, Any]:
         citation_list = []
         for node in nodes:
             metadata = dict(node.node.metadata or {})
-            citation = _build_citation(metadata)
+            chunk_text = node.node.get_content()
+
+            char_start = metadata.get("start_char_idx")
+            char_end = metadata.get("end_char_idx")
+
+            # Fall back to the chunk-local character range so we always return a usable span
+            # even when the ingestion pipeline doesn't provide document offsets.
+            if char_start is None and char_end is None and chunk_text:
+                char_start, char_end = 0, len(chunk_text) - 1
+
+            citation = _build_citation(metadata, char_start=char_start, char_end=char_end)
+
             location = {
                 "file": metadata.get("file_path")
                 or metadata.get("file_name")
-                or metadata.get("source"),
+                or metadata.get("source")
+                or "Unknown source",
                 "page": metadata.get("page_label")
                 or metadata.get("page_number")
                 or metadata.get("page"),
-                "char_start": metadata.get("start_char_idx"),
-                "char_end": metadata.get("end_char_idx"),
+                "char_start": char_start,
+                "char_end": char_end,
             }
             chunk_data = {
-                "text": node.node.get_content(),  # Full content, not truncated
+                "text": chunk_text,  # Full content, not truncated
                 "score": float(node.score) if hasattr(node, 'score') and node.score is not None else 0.0,
                 "metadata": metadata,
                 "citation": citation,
