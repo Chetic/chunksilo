@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 import pytest
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from ingest import DATA_DIR, build_index
 from mcp_server import STORAGE_DIR, load_llamaindex_index

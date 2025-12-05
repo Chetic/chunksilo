@@ -21,7 +21,8 @@ STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "./storage"))
 
 # Two-stage retrieval configuration
 # Stage 1: vector search over embeddings
-RETRIEVAL_EMBED_TOP_K = int(os.getenv("RETRIEVAL_EMBED_TOP_K", "10"))
+# Higher values provide more candidates for reranking, improving precision
+RETRIEVAL_EMBED_TOP_K = int(os.getenv("RETRIEVAL_EMBED_TOP_K", "20"))
 RETRIEVAL_EMBED_MODEL_NAME = os.getenv(
     "RETRIEVAL_EMBED_MODEL_NAME", "BAAI/bge-small-en-v1.5"
 )
@@ -246,6 +247,33 @@ def _ensure_reranker():
     return _reranker_model
 
 
+def _preprocess_query(query: str) -> str:
+    """
+    Preprocess queries with basic normalization.
+    
+    Techniques applied:
+    - Normalize whitespace
+    - Remove trailing punctuation that might interfere with matching
+    
+    Returns the original query if preprocessing results in an empty string.
+    """
+    if not query or not query.strip():
+        return query
+    
+    # Store original query to preserve it if preprocessing results in empty string
+    original_query = query
+    
+    # Normalize whitespace (collapse multiple spaces)
+    query = " ".join(query.split())
+    
+    # Remove trailing punctuation that might interfere with matching
+    query = query.rstrip(".,!?;")
+    
+    # If preprocessing resulted in an empty string, return original query
+    processed = query.strip()
+    return processed if processed else original_query
+
+
 def load_llamaindex_index():
     """Load the LlamaIndex from storage."""
     global _index_cache
@@ -309,14 +337,17 @@ Following these steps is **mandatory** for a complete, trustworthy response.
     start_time = time.time()
     
     try:
+        # Preprocess query to improve retrieval quality
+        enhanced_query = _preprocess_query(query)
+        
         # Load index
         index = load_llamaindex_index()
 
         # Use retriever (no LLM needed - just retrieval)
         retriever = index.as_retriever(similarity_top_k=RETRIEVAL_EMBED_TOP_K)
 
-        # Retrieve relevant chunks (embedding stage)
-        nodes = retriever.retrieve(query)
+        # Retrieve relevant chunks (embedding stage) using enhanced query
+        nodes = retriever.retrieve(enhanced_query)
 
         # Rerank the retrieved nodes with FlashRank (CPU-only, ONNX-based) and trim to the
         # configured final Top K for the tool response.
@@ -328,7 +359,8 @@ Following these steps is **mandatory** for a complete, trustworthy response.
                 # Prepare documents for reranking
                 documents = [node.node.get_content() or "" for node in nodes]
                 # FlashRank returns reranked documents (list of dicts with 'text' and 'score')
-                reranked_results = reranker.rerank(query, documents)
+                # Use enhanced query for better reranking
+                reranked_results = reranker.rerank(enhanced_query, documents)
                 
                 # Create a mapping from document text to (index, node) for reliable matching
                 # Use index as primary key to handle duplicate text correctly
