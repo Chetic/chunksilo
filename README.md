@@ -181,7 +181,7 @@ Responses also include a top-level `citations` array that lists unique citations
 
 ## Testing
 
-For concise testing instructions on how to run the Python test scripts, see `TESTING.md`.
+For concise testing instructions on how to run the Python test scripts, see `test/TESTING.md`.
 
 ## Commit messages
 
