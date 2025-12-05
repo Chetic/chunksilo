@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Ingestion pipeline for building a RAG index from PDF, DOCX, and Markdown documents.
+Ingestion pipeline for building a RAG index from PDF, DOCX, Markdown, and TXT documents.
 """
 import argparse
 import itertools
@@ -261,6 +261,7 @@ def ensure_embedding_model_cached(cache_dir: Path, offline: bool = False) -> Non
         
     Raises:
         FileNotFoundError: If offline=True and model is not available locally
+        RuntimeError: If offline=False and model download/initialization fails
     """
     # First, verify the cache exists by checking the file system
     if offline:
@@ -336,8 +337,17 @@ def ensure_embedding_model_cached(cache_dir: Path, offline: bool = False) -> Non
                 f"Embedding model '{RETRIEVAL_EMBED_MODEL_NAME}' not available in cache directory '{cache_dir}'. "
                 "Run without --offline flag to download the model, or ensure the model is already cached."
             ) from e
-        # Not offline, so FastEmbed will download it when we initialize below
-        pass
+        else:
+            # Not offline, but initialization failed (e.g., network issues)
+            # This should not happen silently - raise to abort packaging
+            logger.error(
+                "Failed to initialize/download embedding model: %s",
+                e,
+            )
+            raise RuntimeError(
+                f"Failed to download/initialize embedding model '{RETRIEVAL_EMBED_MODEL_NAME}' to cache directory '{cache_dir}'. "
+                "This may be due to network connectivity issues. Please retry the download."
+            ) from e
 
 
 def ensure_rerank_model_cached(cache_dir: Path, offline: bool = False) -> Path:
@@ -385,16 +395,6 @@ def ensure_rerank_model_cached(cache_dir: Path, offline: bool = False) -> Path:
                 "Run without --offline to download it before packaging releases."
             ) from exc
         raise
-
-    logger.info("Downloading embedding model to offline cache at %s", cache_dir)
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    with Spinner(
-        "Downloading embedding model (one-time download to bundle with release)"
-    ):
-        _create_fastembed_embedding(cache_dir, offline=False)
-    logger.info(
-        "Embedding model downloaded. Include the cache directory in release artifacts for offline use."
-    )
 
 
 def _parse_heading_level(style_name: str | None) -> int:
@@ -577,31 +577,31 @@ def build_index(download_only: bool = False, offline: bool = False) -> None:
         logger.error(f"Data directory {DATA_DIR} does not exist!")
         raise FileNotFoundError(f"Data directory {DATA_DIR} does not exist")
 
-    # Discover whether there are any PDF/Markdown files before constructing the reader
-    pdf_md_files = list(DATA_DIR.rglob("*.pdf")) + list(DATA_DIR.rglob("*.md"))
+    # Discover whether there are any PDF/Markdown/TXT files before constructing the reader
+    pdf_md_txt_files = list(DATA_DIR.rglob("*.pdf")) + list(DATA_DIR.rglob("*.md")) + list(DATA_DIR.rglob("*.txt"))
     docx_files = list(DATA_DIR.rglob("*.docx"))
-    total_files = len(pdf_md_files) + len(docx_files)
+    total_files = len(pdf_md_txt_files) + len(docx_files)
     logger.info(
-        f"Discovered {len(pdf_md_files)} PDF/Markdown and {len(docx_files)} DOCX file(s) (total: {total_files})."
+        f"Discovered {len(pdf_md_txt_files)} PDF/Markdown/TXT and {len(docx_files)} DOCX file(s) (total: {total_files})."
     )
 
     docs: List[LlamaIndexDocument] = []
 
-    if pdf_md_files:
+    if pdf_md_txt_files:
         # Initialize reader for non-DOCX formats
         reader = SimpleDirectoryReader(
             input_dir=str(DATA_DIR),
-            required_exts=[".pdf", ".md"],
+            required_exts=[".pdf", ".md", ".txt"],
             recursive=True,
         )
 
-        # Load documents (PDF/Markdown)
+        # Load documents (PDF/Markdown/TXT)
         logger.info(
-            f"Loading {len(pdf_md_files)} PDF/Markdown file(s) into LlamaIndex documents..."
+            f"Loading {len(pdf_md_txt_files)} PDF/Markdown/TXT file(s) into LlamaIndex documents..."
         )
         docs.extend(reader.load_data())
     else:
-        logger.info("No PDF/Markdown files found in data directory; skipping PDF/MD ingestion.")
+        logger.info("No PDF/Markdown/TXT files found in data directory; skipping PDF/MD/TXT ingestion.")
 
     # Load DOCX documents as one document per heading section
     logger.info("Loading DOCX documents (one chunk per heading)...")

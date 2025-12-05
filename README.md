@@ -4,7 +4,7 @@ Run a **fully on-prem documentation assistant** that you can access from **Conti
 
 With this setup you get these capabilities:
 
-- **Ask questions** in Continue about your local PDF/DOCX/Markdown docs (no upload to third-party services)
+- **Ask questions** in Continue about your local PDF/DOCX/Markdown/TXT docs (no upload to third-party services)
 - **Semantic search** over your docs using LlamaIndex
 - **Source citations** for each answer (which chunks/files were used)
 - **Local-only data flow**: docs and index stay on disk; only embeddings are generated locally
@@ -12,7 +12,7 @@ With this setup you get these capabilities:
 
 ## Features
 
-- Indexes PDF, DOCX, and Markdown documents from a local directory
+- Indexes PDF, DOCX, Markdown, and TXT documents from a local directory
 - Uses LlamaIndex for semantic search and retrieval
 - **CPU-optimized embedding stack** using FastEmbed (no PyTorch required for embeddings) with a lightweight CPU reranker
 - Exposes an MCP server with `retrieve_docs` tool that returns raw document chunks
@@ -21,12 +21,12 @@ With this setup you get these capabilities:
 
 ## Prerequisites
 
-- Python 3.10+
-- Documents in PDF, DOCX, or Markdown format
+- Python 3.11+
+- Documents in PDF, DOCX, Markdown, or TXT format
 
 The intended deployment is **on-prem**:
 
-- Your PDFs/DOCX/Markdown files live on your machines.
+- Your PDFs/DOCX/Markdown/TXT files live on your machines.
 - Indexes are stored locally on disk.
 - Answer generation is done by Continue's LLM (which you already have configured).
 - The MCP server only does retrieval - no LLM needed!
@@ -54,7 +54,7 @@ pip install -r requirements.txt
 
 Edit `.env` file with your settings:
 
-- `DATA_DIR`: Directory containing PDF/DOCX/Markdown files (default: `./data`)
+- `DATA_DIR`: Directory containing PDF/DOCX/Markdown/TXT files (default: `./data`)
 - `STORAGE_DIR`: Directory for index storage (default: `./storage`)
 - `RETRIEVAL_MODEL_CACHE_DIR`: Shared cache directory for the embedding and reranking models (default: `./models`). Include this directory in release artifacts so deployments do not need to download either model.
 - `RETRIEVAL_EMBED_MODEL_NAME`: Embedding model name used for the vector search stage (default: `BAAI/bge-small-en-v1.5`). The default is a quantized ONNX BGE-small model that is already vendored in `./models` for offline use.
@@ -69,10 +69,10 @@ Edit `.env` file with your settings:
 
 ### 1. Prepare Documents
 
-Place your PDF, DOCX, and Markdown files in the `data/` directory:
+Place your PDF, DOCX, Markdown, and TXT files in the `data/` directory:
 ```bash
 mkdir -p data
-# Copy your PDF/DOCX/Markdown files to data/
+# Copy your PDF/DOCX/Markdown/TXT files to data/
 ```
 
 ### 2. Download the retrieval models for offline use
@@ -103,7 +103,7 @@ python ingest.py
 ```
 
 This will:
-- Scan the `data/` directory for PDF, DOCX, and Markdown files
+- Scan the `data/` directory for PDF, DOCX, Markdown, and TXT files
 - Parse and chunk the documents
 - Generate embeddings using the locally cached model
 - Build and persist the vector index to `storage/`
@@ -197,7 +197,7 @@ Please use **conventional commits without a scope** when contributing (for examp
 ├── .env       # Environment variable template
 ├── .gitignore         # Git ignore rules
 ├── README.md          # This file
-├── data/              # Input documents (PDF/DOCX/Markdown)
+├── data/              # Input documents (PDF/DOCX/Markdown/TXT)
 └── storage/           # Persistent index storage
 ```
 

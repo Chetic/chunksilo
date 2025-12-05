@@ -272,7 +272,7 @@ def load_llamaindex_index():
 @mcp.tool()
 async def retrieve_docs(query: str) -> dict[str, Any]:
     """
-Search the local PDF / DOCX / Markdown documentation corpus and return the most relevant chunks.
+Search the local PDF / DOCX / Markdown / TXT documentation corpus and return the most relevant chunks.
 
 Your primary responsibility when using this tool is not just to find information, but to **show clearly where it came from.** That means:
 
