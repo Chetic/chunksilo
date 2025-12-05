@@ -60,10 +60,22 @@ if [ -f release_common/.env ]; then
   cp release_common/.env "$PACKAGE_ROOT/"
 fi
 
+# Copy RHEL 8.10 constraints file (tested and verified working versions)
+# Determine the correct path to the constraints file
+WORK_DIR="/workspace"
+[ ! -d "$WORK_DIR" ] && WORK_DIR="$PROJECT_ROOT"
+RHEL810_CONSTRAINTS="$WORK_DIR/scripts/rhel8.10-constraints.txt"
+if [ -f "$RHEL810_CONSTRAINTS" ]; then
+  cp "$RHEL810_CONSTRAINTS" "$PACKAGE_ROOT/rhel8.10-constraints.txt"
+  echo "Using RHEL 8.10 tested constraints file"
+else
+  echo "Warning: RHEL 8.10 constraints file not found at $RHEL810_CONSTRAINTS" >&2
+  echo "Falling back to minimal-constraints.txt (may result in incompatible packages)" >&2
+fi
+
 # Download dependencies for RHEL 8.10 compatibility
 # We're running in UBI 8.10 container which uses glibc 2.28, compatible with manylinux_2_28
-# Strategy: Let pip automatically select compatible wheels for the current system
-# This avoids dependency resolution issues from strict platform constraints
+# Strategy: Use tested RHEL 8.10 package versions to ensure compatibility
 python3.11 -m pip install --upgrade pip
 
 echo "Downloading dependencies for RHEL 8.10 (manylinux_2_28 compatible)..."
@@ -71,34 +83,30 @@ echo "Downloading dependencies for RHEL 8.10 (manylinux_2_28 compatible)..."
 # Create dependencies directory
 mkdir -p "$PACKAGE_ROOT/dependencies"
 
-# Strategy: Download compatible wheels for the current system (RHEL 8.10)
-# pip will automatically select wheels compatible with the current platform and Python version
-# This is simpler and more reliable than specifying platform constraints
-# We allow source distributions as fallback for packages without wheels
+# Use RHEL 8.10 constraints file if available, otherwise fall back to minimal-constraints.txt
+if [ -f "$PACKAGE_ROOT/rhel8.10-constraints.txt" ]; then
+  CONSTRAINTS_FILE="$PACKAGE_ROOT/rhel8.10-constraints.txt"
+  echo "Using RHEL 8.10 tested constraints for dependency resolution..."
+else
+  CONSTRAINTS_FILE="$PACKAGE_ROOT/minimal-constraints.txt"
+  echo "Using minimal-constraints.txt (RHEL 8.10 constraints not found)..."
+fi
 
-# Try 1: Download with constraints (preferred for version consistency)
-echo "Attempting to download dependencies with constraints..."
+# Download dependencies with RHEL 8.10 tested constraints
+# This ensures we get versions that are known to work on RHEL 8.10
+# The constraints file pins all transitive dependencies to tested versions
+echo "Attempting to download dependencies with RHEL 8.10 constraints..."
 if python3.11 -m pip download \
   -r "$PACKAGE_ROOT/requirements.txt" \
-  -c "$PACKAGE_ROOT/minimal-constraints.txt" \
+  -c "$CONSTRAINTS_FILE" \
   -d "$PACKAGE_ROOT/dependencies" \
   --no-cache-dir \
   --disable-pip-version-check 2>&1; then
-  echo "✓ Successfully downloaded dependencies with constraints"
+  echo "✓ Successfully downloaded dependencies with RHEL 8.10 constraints"
 else
-  echo "✗ Failed with constraints, trying without constraints..."
-  
-  # Try 2: Download without constraints (allows pip to resolve dependencies more freely)
-  if python3.11 -m pip download \
-    -r "$PACKAGE_ROOT/requirements.txt" \
-    -d "$PACKAGE_ROOT/dependencies" \
-    --no-cache-dir \
-    --disable-pip-version-check 2>&1; then
-    echo "✓ Successfully downloaded dependencies without constraints"
-  else
-    echo "Error: Failed to download dependencies" >&2
-    exit 1
-  fi
+  echo "Error: Failed to download dependencies with RHEL 8.10 constraints" >&2
+  echo "This may indicate a mismatch between requirements.txt and the constraints file" >&2
+  exit 1
 fi
 
 # Verify dependencies were downloaded
