@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create test DOCX and Markdown documents for testing."""
+"""Create test DOCX, Markdown, and TXT documents for testing."""
 from docx import Document
 from pathlib import Path
 
@@ -23,7 +23,7 @@ doc.add_paragraph(
 )
 
 doc.add_heading('Key Features', 1)
-doc.add_paragraph('1. Document Indexing: The system can index PDF, DOCX, and Markdown documents from a local directory.')
+doc.add_paragraph('1. Document Indexing: The system can index PDF, DOCX, Markdown, and TXT documents from a local directory.')
 doc.add_paragraph('2. Semantic Search: Uses vector embeddings to find relevant document chunks based on semantic similarity.')
 doc.add_paragraph('3. MCP Integration: Exposes retrieval capabilities via the Model Context Protocol (MCP).')
 doc.add_paragraph('4. Answer Synthesis by the Client: A separate LLM client (e.g., Continue) uses the retrieved chunks to generate answers.')
@@ -36,7 +36,7 @@ doc.add_paragraph('- LLM Client (e.g., Continue): Calls the MCP tool to retrieve
 
 doc.add_heading('Usage', 1)
 doc.add_paragraph('To use the system:')
-doc.add_paragraph('1. Place PDF, DOCX, or Markdown files in the data directory')
+doc.add_paragraph('1. Place PDF, DOCX, Markdown, or TXT files in the data directory')
 doc.add_paragraph('2. Run the ingestion script to build the index')
 doc.add_paragraph('3. Start the MCP server')
 doc.add_paragraph('4. Use an MCP-aware client (such as Continue) to call the retrieval tool and generate answers from the returned chunks')
@@ -58,7 +58,7 @@ This document describes a sample retrieval-augmented system implementation. The 
 
 ## Key Features
 
-1. **Document Indexing**: The system can index PDF, DOCX, and Markdown documents from a local directory.
+1. **Document Indexing**: The system can index PDF, DOCX, Markdown, and TXT documents from a local directory.
 2. **Semantic Search**: Uses vector embeddings to find relevant document chunks based on semantic similarity.
 3. **MCP Integration**: Exposes retrieval capabilities via the Model Context Protocol (MCP).
 4. **Answer Synthesis by the Client**: A separate LLM client (e.g., Continue) uses the retrieved chunks to generate answers.
@@ -75,7 +75,7 @@ The system consists of three main components:
 
 To use the system:
 
-1. Place PDF, DOCX, or Markdown files in the data directory
+1. Place PDF, DOCX, Markdown, or TXT files in the data directory
 2. Run the ingestion script to build the index
 3. Start the MCP server
 4. Use an MCP-aware client (such as Continue) to call the retrieval tool and generate answers from the returned chunks

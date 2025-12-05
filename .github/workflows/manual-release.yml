@@ -112,13 +112,13 @@ jobs:
           PACKAGE_ROOT="release_package/opd-mcp"
           mkdir -p "$PACKAGE_ROOT"
 
-          # Install dependencies so we can download the embedding model into the release bundle
+          # Install dependencies so we can download the retrieval models into the release bundle
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-          # Download the embedding model directly into the packaged cache directory
-          export EMB_MODEL_CACHE_DIR="$PACKAGE_ROOT/models"
-          python ingest.py --download-model
+          # Download the embedding + rerank models directly into the packaged cache directory
+          export RETRIEVAL_MODEL_CACHE_DIR="$PACKAGE_ROOT/models"
+          python ingest.py --download-models
 
           # Copy only the required files and directories
           cp mcp_server.py "$PACKAGE_ROOT/"
@@ -128,11 +128,11 @@ jobs:
           cp .env "$PACKAGE_ROOT/"
           cp -r .continue "$PACKAGE_ROOT/"
 
-          # Include the cached embedding model for offline environments
+          # Include the cached embedding and rerank models for offline environments
           if [ -d "$PACKAGE_ROOT/models" ]; then
-            echo "Cached embedding model stored in $PACKAGE_ROOT/models"
+            echo "Cached retrieval models stored in $PACKAGE_ROOT/models"
           else
-            echo "Expected cached embedding model at $PACKAGE_ROOT/models but it was not found." >&2
+            echo "Expected cached retrieval models at $PACKAGE_ROOT/models but they were not found." >&2
             exit 1
           fi
 
