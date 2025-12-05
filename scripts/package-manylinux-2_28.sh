@@ -55,6 +55,10 @@ mkdir -p "$PACKAGE_ROOT"
 
 # Copy common files and models
 cp -r release_common/* "$PACKAGE_ROOT/"
+# Explicitly copy hidden files (like .env) that aren't matched by *
+if [ -f release_common/.env ]; then
+  cp release_common/.env "$PACKAGE_ROOT/"
+fi
 
 # Download dependencies for RHEL 8.10 compatibility
 # We're running in UBI 8.10 container which uses glibc 2.28, compatible with manylinux_2_28
