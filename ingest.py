@@ -29,6 +29,7 @@ from llama_index.core import (
     SimpleDirectoryReader,
     Document as LlamaIndexDocument,
 )
+from llama_index.core.node_parser import SentenceSplitter
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
 # Load environment variables
@@ -50,6 +51,13 @@ RETRIEVAL_RERANK_MODEL_NAME = os.getenv(
 
 # Shared cache directory for embedding and reranking models
 RETRIEVAL_MODEL_CACHE_DIR = Path(os.getenv("RETRIEVAL_MODEL_CACHE_DIR", "./models"))
+
+# Text chunking configuration for optimal retrieval
+# Chunk size in tokens: 512-1024 tokens is optimal for RAG systems
+# Smaller chunks improve precision but may lose context
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))
+# Overlap: 10-20% of chunk size preserves context across boundaries
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "100"))
 
 # Set up logging
 logging.basicConfig(
@@ -619,6 +627,16 @@ def build_index(download_only: bool = False, offline: bool = False) -> None:
         embed_model = _create_fastembed_embedding(RETRIEVAL_MODEL_CACHE_DIR, offline=offline)
     Settings.embed_model = embed_model
     logger.info("Embedding model initialized")
+
+    # Configure text splitter for optimal chunking
+    # Using sentence-aware splitting with optimal chunk size and overlap
+    text_splitter = SentenceSplitter(
+        chunk_size=CHUNK_SIZE,
+        chunk_overlap=CHUNK_OVERLAP,
+        separator=" ",
+    )
+    Settings.text_splitter = text_splitter
+    logger.info(f"Configured text splitter: chunk_size={CHUNK_SIZE}, chunk_overlap={CHUNK_OVERLAP}")
 
     logger.info(
         "Indexing documents with overall progress bar (progress reflects full document processing)..."

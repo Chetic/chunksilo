@@ -58,12 +58,22 @@ Edit `.env` file with your settings:
 - `STORAGE_DIR`: Directory for index storage (default: `./storage`)
 - `RETRIEVAL_MODEL_CACHE_DIR`: Shared cache directory for the embedding and reranking models (default: `./models`). Include this directory in release artifacts so deployments do not need to download either model.
 - `RETRIEVAL_EMBED_MODEL_NAME`: Embedding model name used for the vector search stage (default: `BAAI/bge-small-en-v1.5`). The default is a quantized ONNX BGE-small model that is already vendored in `./models` for offline use.
-- `RETRIEVAL_EMBED_TOP_K`: Number of vector search candidates to pass from the embedding stage into the reranker (default: `10`).
+- `RETRIEVAL_EMBED_TOP_K`: Number of vector search candidates to pass from the embedding stage into the reranker (default: `20`). Higher values provide more candidates for reranking, improving precision at the cost of slightly increased processing time.
 - `RETRIEVAL_RERANK_MODEL_NAME`: Cross-encoder reranking model used after the embedding step (default: `cross-encoder/ms-marco-MiniLM-L-6-v2`).
 - `RETRIEVAL_RERANK_TOP_K`: Final number of reranked chunks returned by the `retrieve_docs` tool (default: `5`).
+- `CHUNK_SIZE`: Token size for document chunking (default: `512`). Optimal range is typically 512-1024 tokens for RAG systems.
+- `CHUNK_OVERLAP`: Token overlap between chunks to preserve context across boundaries (default: `100`). Typically set to 10-20% of chunk size.
 - `OFFLINE`: For the MCP server, set to `1` (default) to enforce offline mode and prevent HuggingFace libraries from making network requests. Set to `0` to allow network access if needed.
 
 **Note:** The MCP server does **not** need any LLM configuration (API base, model, API key). It only performs semantic search and returns raw chunks. Continue's LLM (which you already have configured) will synthesize the answer from these chunks.
+
+### Retrieval Strategy
+
+The system uses optimized chunking and retrieval techniques:
+
+- **Sentence-aware chunking**: Documents are split using sentence boundaries with configurable chunk size (default: 512 tokens) and overlap (default: 100 tokens) to preserve context across boundaries.
+- **Two-stage retrieval**: First, semantic search retrieves candidate chunks using embeddings. Then, a reranker refines the results to return the most relevant chunks.
+- **Query normalization**: Queries are normalized (whitespace and punctuation) to improve matching consistency.
 
 ## Usage
 
