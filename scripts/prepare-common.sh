@@ -1,0 +1,46 @@
+#!/bin/bash
+# Script to prepare common release files (equivalent to the prepare job)
+# This creates the release_common directory with all shared files and models
+
+set -eo pipefail
+
+COMMON_ROOT="release_common"
+VERSION="${1:-dev}"
+
+echo "Preparing common release files for version: $VERSION"
+
+# Create directory
+mkdir -p "$COMMON_ROOT"
+
+# Install dependencies so we can download the retrieval models
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+
+# Generate constraints file from installed packages to guide dependency resolution
+# This helps pip know what versions work together, reducing backtracking
+# Note: pip will find compatible versions for target platform if exact versions aren't available
+python -m pip freeze > "$COMMON_ROOT/minimal-constraints.txt"
+
+# Copy common files that are the same for all platforms
+cp mcp_server.py "$COMMON_ROOT/"
+cp ingest.py "$COMMON_ROOT/"
+cp requirements.txt "$COMMON_ROOT/"
+cp README.md "$COMMON_ROOT/"
+cp .env "$COMMON_ROOT/"
+cp -r .continue "$COMMON_ROOT/"
+
+echo "$VERSION" > "$COMMON_ROOT/VERSION"
+
+# Download the embedding + rerank models once (they're the same for all platforms)
+export RETRIEVAL_MODEL_CACHE_DIR="$COMMON_ROOT/models"
+python ingest.py --download-models
+
+# Verify models were downloaded
+if [ -d "$COMMON_ROOT/models" ]; then
+  echo "Cached retrieval models stored in $COMMON_ROOT/models"
+else
+  echo "Expected cached retrieval models at $COMMON_ROOT/models but they were not found." >&2
+  exit 1
+fi
+
+echo "Common files prepared in $COMMON_ROOT/"

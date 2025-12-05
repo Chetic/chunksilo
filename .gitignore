@@ -33,6 +33,11 @@ test_data/
 test_storage/
 test_results/
 
+# Local build artifacts
+release_common/
+release_package_manylinux_2_34/
+build-output/
+
 # IDE
 .vscode/
 .idea/

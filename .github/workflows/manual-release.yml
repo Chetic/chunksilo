@@ -111,40 +111,7 @@ jobs:
 
       - name: Prepare common release files and models
         run: |
-          set -eo pipefail
-          COMMON_ROOT="release_common"
-          mkdir -p "$COMMON_ROOT"
-
-          # Install dependencies so we can download the retrieval models
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-
-          # Generate constraints file from installed packages to guide dependency resolution
-          # This helps pip know what versions work together, reducing backtracking
-          # Note: pip will find compatible versions for target platform if exact versions aren't available
-          python -m pip freeze > "$COMMON_ROOT/minimal-constraints.txt"
-
-          # Copy common files that are the same for all platforms
-          cp mcp_server.py "$COMMON_ROOT/"
-          cp ingest.py "$COMMON_ROOT/"
-          cp requirements.txt "$COMMON_ROOT/"
-          cp README.md "$COMMON_ROOT/"
-          cp .env "$COMMON_ROOT/"
-          cp -r .continue "$COMMON_ROOT/"
-
-          echo "${{ steps.version.outputs.next_version }}" > "$COMMON_ROOT/VERSION"
-
-          # Download the embedding + rerank models once (they're the same for all platforms)
-          export RETRIEVAL_MODEL_CACHE_DIR="$COMMON_ROOT/models"
-          python ingest.py --download-models
-
-          # Verify models were downloaded
-          if [ -d "$COMMON_ROOT/models" ]; then
-            echo "Cached retrieval models stored in $COMMON_ROOT/models"
-          else
-            echo "Expected cached retrieval models at $COMMON_ROOT/models but they were not found." >&2
-            exit 1
-          fi
+          ./scripts/prepare-common.sh "${{ steps.version.outputs.next_version }}"
 
       - name: Upload common files artifact
         id: upload
@@ -161,98 +128,6 @@ jobs:
           path: ${{ steps.notes.outputs.file }}
           retention-days: 1
 
-  package_manylinux_2_28:
-    needs: prepare
-    runs-on: ubuntu-latest
-    container:
-      image: registry.access.redhat.com/ubi8/ubi:8.10
-    outputs:
-      asset_path: ${{ steps.package.outputs.asset_path }}
-    steps:
-      - name: Install dependencies
-        run: |
-          dnf install -y python3.11 python3.11-pip zip git which
-
-      - name: Download common files artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: release-common-${{ needs.prepare.outputs.version }}
-          path: release_common
-
-      - name: Prepare manylinux_2_28 release package
-        id: package
-        run: |
-          set -eo pipefail
-          PACKAGE_ROOT="release_package_manylinux_2_28/opd-mcp"
-          mkdir -p "$PACKAGE_ROOT"
-
-          # Copy common files and models
-          cp -r release_common/* "$PACKAGE_ROOT/"
-
-          # Download wheels for manylinux_2_28 x86_64 compatibility
-          # manylinux_2_28 requires glibc 2.28+ (compatible with systems using glibc 2.28 or newer)
-          # This includes distributions like RHEL 8, CentOS 8, Ubuntu 20.04+, Debian 11+, etc.
-          # Use legacy resolver to prevent backtracking
-          # Pin pip to version that supports legacy resolver (before 24.0)
-          python3.11 -m pip install --upgrade "pip<24.0"
-          # Try to download wheels first (preferred for offline use)
-          python3.11 -m pip download \
-            -r "$PACKAGE_ROOT/requirements.txt" \
-            -c "$PACKAGE_ROOT/minimal-constraints.txt" \
-            -d "$PACKAGE_ROOT/dependencies" \
-            --platform manylinux_2_28_x86_64 \
-            --python-version 3.11 \
-            --implementation cp \
-            --abi cp311 \
-            --only-binary=:all: \
-            --no-cache-dir \
-            --disable-pip-version-check \
-            --use-deprecated=legacy-resolver || \
-          # Fallback 1: if constraints cause conflicts, retry without them
-          python3.11 -m pip download \
-            -r "$PACKAGE_ROOT/requirements.txt" \
-            -d "$PACKAGE_ROOT/dependencies" \
-            --platform manylinux_2_28_x86_64 \
-            --python-version 3.11 \
-            --implementation cp \
-            --abi cp311 \
-            --only-binary=:all: \
-            --no-cache-dir \
-            --disable-pip-version-check \
-            --use-deprecated=legacy-resolver || \
-          # Fallback 2: Allow source distributions for packages without wheels
-          # Some packages may not have wheels for manylinux_2_28
-          # This ensures the package is still offline-ready (users can build from source)
-          # Note: When allowing source distributions, we must remove platform/abi/implementation
-          # constraints as pip requires --only-binary=:all: when using --platform
-          python3.11 -m pip download \
-            -r "$PACKAGE_ROOT/requirements.txt" \
-            -c "$PACKAGE_ROOT/minimal-constraints.txt" \
-            -d "$PACKAGE_ROOT/dependencies" \
-            --python-version 3.11 \
-            --no-cache-dir \
-            --disable-pip-version-check \
-            --use-deprecated=legacy-resolver || \
-          # Fallback 3: Try without constraints and allowing source distributions
-          python3.11 -m pip download \
-            -r "$PACKAGE_ROOT/requirements.txt" \
-            -d "$PACKAGE_ROOT/dependencies" \
-            --python-version 3.11 \
-            --no-cache-dir \
-            --disable-pip-version-check \
-            --use-deprecated=legacy-resolver
-
-          (cd release_package_manylinux_2_28 && zip -r "../opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_28_x86_64.zip" .)
-
-          echo "asset_path=opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_28_x86_64.zip" >> "$GITHUB_OUTPUT"
-
-      - name: Upload package artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: package-manylinux-2_28-${{ needs.prepare.outputs.version }}
-          path: opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_28_x86_64.zip
-          retention-days: 1
-
   package_manylinux_2_34:
     needs: prepare
     runs-on: ubuntu-latest
@@ -261,6 +136,9 @@ jobs:
     outputs:
       asset_path: ${{ steps.package.outputs.asset_path }}
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
       - name: Install dependencies
         run: |
           dnf install -y python3.11 python3.11-pip zip git which
@@ -274,70 +152,7 @@ jobs:
       - name: Prepare manylinux_2_34 release package
         id: package
         run: |
-          set -eo pipefail
-          PACKAGE_ROOT="release_package_manylinux_2_34/opd-mcp"
-          mkdir -p "$PACKAGE_ROOT"
-
-          # Copy common files and models
-          cp -r release_common/* "$PACKAGE_ROOT/"
-
-          # Download wheels for manylinux_2_34 x86_64 compatibility
-          # manylinux_2_34 requires glibc 2.34+ (compatible with systems using glibc 2.34 or newer)
-          # This includes distributions like RHEL 9, Fedora 35+, Ubuntu 22.04+, Debian 12+, etc.
-          # Use legacy resolver to prevent backtracking
-          # Pin pip to version that supports legacy resolver (before 24.0)
-          python3.11 -m pip install --upgrade "pip<24.0"
-          # Try to download wheels first (preferred for offline use)
-          python3.11 -m pip download \
-            -r "$PACKAGE_ROOT/requirements.txt" \
-            -c "$PACKAGE_ROOT/minimal-constraints.txt" \
-            -d "$PACKAGE_ROOT/dependencies" \
-            --platform manylinux_2_34_x86_64 \
-            --python-version 3.11 \
-            --implementation cp \
-            --abi cp311 \
-            --only-binary=:all: \
-            --no-cache-dir \
-            --disable-pip-version-check \
-            --use-deprecated=legacy-resolver || \
-          # Fallback 1: Try without constraints to allow pip to find compatible versions
-          # Constraints may pin versions that aren't available for manylinux_2_34
-          python3.11 -m pip download \
-            -r "$PACKAGE_ROOT/requirements.txt" \
-            -d "$PACKAGE_ROOT/dependencies" \
-            --platform manylinux_2_34_x86_64 \
-            --python-version 3.11 \
-            --implementation cp \
-            --abi cp311 \
-            --only-binary=:all: \
-            --no-cache-dir \
-            --disable-pip-version-check \
-            --use-deprecated=legacy-resolver || \
-          # Fallback 2: Allow source distributions for packages without wheels
-          # Some packages (e.g., mmh3, pymupdf) may not have wheels for manylinux_2_34
-          # This ensures the package is still offline-ready (users can build from source)
-          # Note: When allowing source distributions, we must remove platform/abi/implementation
-          # constraints as pip requires --only-binary=:all: when using --platform
-          python3.11 -m pip download \
-            -r "$PACKAGE_ROOT/requirements.txt" \
-            -c "$PACKAGE_ROOT/minimal-constraints.txt" \
-            -d "$PACKAGE_ROOT/dependencies" \
-            --python-version 3.11 \
-            --no-cache-dir \
-            --disable-pip-version-check \
-            --use-deprecated=legacy-resolver || \
-          # Fallback 3: Try without constraints and allowing source distributions
-          python3.11 -m pip download \
-            -r "$PACKAGE_ROOT/requirements.txt" \
-            -d "$PACKAGE_ROOT/dependencies" \
-            --python-version 3.11 \
-            --no-cache-dir \
-            --disable-pip-version-check \
-            --use-deprecated=legacy-resolver
-
-          (cd release_package_manylinux_2_34 && zip -r "../opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_34_x86_64.zip" .)
-
-          echo "asset_path=opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_34_x86_64.zip" >> "$GITHUB_OUTPUT"
+          ./scripts/package-manylinux-2_34.sh "${{ needs.prepare.outputs.version }}"
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
@@ -347,7 +162,7 @@ jobs:
           retention-days: 1
 
   release:
-    needs: [prepare, package_manylinux_2_28, package_manylinux_2_34]
+    needs: [prepare, package_manylinux_2_34]
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -373,14 +188,12 @@ jobs:
         id: find_artifacts
         run: |
           set -eo pipefail
-          MANYLINUX_2_28=$(find packages -name "*manylinux_2_28*.zip" -type f | head -1)
           MANYLINUX_2_34=$(find packages -name "*manylinux_2_34*.zip" -type f | head -1)
-          if [ -z "$MANYLINUX_2_28" ] || [ -z "$MANYLINUX_2_34" ]; then
+          if [ -z "$MANYLINUX_2_34" ]; then
             echo "Error: Could not find package artifacts"
             find packages -type f || true
             exit 1
           fi
-          echo "manylinux_2_28=$MANYLINUX_2_28" >> "$GITHUB_OUTPUT"
           echo "manylinux_2_34=$MANYLINUX_2_34" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag
@@ -400,7 +213,6 @@ jobs:
           name: Release v${{ needs.prepare.outputs.version }}
           body_path: release-notes.md
           files: |
-            ${{ steps.find_artifacts.outputs.manylinux_2_28 }}
             ${{ steps.find_artifacts.outputs.manylinux_2_34 }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
