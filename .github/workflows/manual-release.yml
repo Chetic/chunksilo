@@ -17,8 +17,12 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  prepare:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.next_version }}
+      last_tag: ${{ steps.version.outputs.last_tag }}
+      notes_file: ${{ steps.notes.outputs.file }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -106,7 +110,6 @@ jobs:
           echo "file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Prepare common release files and models
-        id: common_files
         run: |
           set -eo pipefail
           COMMON_ROOT="release_common"
@@ -143,8 +146,41 @@ jobs:
             exit 1
           fi
 
+      - name: Upload common files artifact
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-common-${{ steps.version.outputs.next_version }}
+          path: release_common
+          retention-days: 1
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes-${{ steps.version.outputs.next_version }}
+          path: ${{ steps.notes.outputs.file }}
+          retention-days: 1
+
+  package_manylinux_2_28:
+    needs: prepare
+    runs-on: ubuntu-latest
+    container:
+      image: registry.access.redhat.com/ubi8/ubi:8.10
+    outputs:
+      asset_path: ${{ steps.package.outputs.asset_path }}
+    steps:
+      - name: Install dependencies
+        run: |
+          dnf install -y python3.11 python3.11-pip zip git which
+
+      - name: Download common files artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-common-${{ needs.prepare.outputs.version }}
+          path: release_common
+
       - name: Prepare manylinux_2_28 release package
-        id: package_manylinux_2_28
+        id: package
         run: |
           set -eo pipefail
           PACKAGE_ROOT="release_package_manylinux_2_28/opd-mcp"
@@ -156,8 +192,11 @@ jobs:
           # Download wheels for manylinux_2_28 x86_64 compatibility
           # manylinux_2_28 requires glibc 2.28+ (compatible with systems using glibc 2.28 or newer)
           # This includes distributions like RHEL 8, CentOS 8, Ubuntu 20.04+, Debian 11+, etc.
-          # Use minimal constraints as hints (pip will find compatible versions for target platform)
-          python -m pip download \
+          # Use legacy resolver to prevent backtracking
+          # Pin pip to version that supports legacy resolver (before 24.0)
+          python3.11 -m pip install --upgrade "pip<24.0"
+          # Try to download wheels first (preferred for offline use)
+          python3.11 -m pip download \
             -r "$PACKAGE_ROOT/requirements.txt" \
             -c "$PACKAGE_ROOT/minimal-constraints.txt" \
             -d "$PACKAGE_ROOT/dependencies" \
@@ -167,9 +206,10 @@ jobs:
             --abi cp311 \
             --only-binary=:all: \
             --no-cache-dir \
-            --disable-pip-version-check || \
-          # Fallback: if constraints cause conflicts, retry without them
-          python -m pip download \
+            --disable-pip-version-check \
+            --use-deprecated=legacy-resolver || \
+          # Fallback 1: if constraints cause conflicts, retry without them
+          python3.11 -m pip download \
             -r "$PACKAGE_ROOT/requirements.txt" \
             -d "$PACKAGE_ROOT/dependencies" \
             --platform manylinux_2_28_x86_64 \
@@ -178,14 +218,61 @@ jobs:
             --abi cp311 \
             --only-binary=:all: \
             --no-cache-dir \
-            --disable-pip-version-check
+            --disable-pip-version-check \
+            --use-deprecated=legacy-resolver || \
+          # Fallback 2: Allow source distributions for packages without wheels
+          # Some packages may not have wheels for manylinux_2_28
+          # This ensures the package is still offline-ready (users can build from source)
+          # Note: When allowing source distributions, we must remove platform/abi/implementation
+          # constraints as pip requires --only-binary=:all: when using --platform
+          python3.11 -m pip download \
+            -r "$PACKAGE_ROOT/requirements.txt" \
+            -c "$PACKAGE_ROOT/minimal-constraints.txt" \
+            -d "$PACKAGE_ROOT/dependencies" \
+            --python-version 3.11 \
+            --no-cache-dir \
+            --disable-pip-version-check \
+            --use-deprecated=legacy-resolver || \
+          # Fallback 3: Try without constraints and allowing source distributions
+          python3.11 -m pip download \
+            -r "$PACKAGE_ROOT/requirements.txt" \
+            -d "$PACKAGE_ROOT/dependencies" \
+            --python-version 3.11 \
+            --no-cache-dir \
+            --disable-pip-version-check \
+            --use-deprecated=legacy-resolver
 
-          (cd release_package_manylinux_2_28 && zip -r "../opd-mcp-${{ steps.version.outputs.next_version }}-manylinux_2_28_x86_64.zip" .)
+          (cd release_package_manylinux_2_28 && zip -r "../opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_28_x86_64.zip" .)
 
-          echo "asset_path_manylinux_2_28=opd-mcp-${{ steps.version.outputs.next_version }}-manylinux_2_28_x86_64.zip" >> "$GITHUB_OUTPUT"
+          echo "asset_path=opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_28_x86_64.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-manylinux-2_28-${{ needs.prepare.outputs.version }}
+          path: opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_28_x86_64.zip
+          retention-days: 1
+
+  package_manylinux_2_34:
+    needs: prepare
+    runs-on: ubuntu-latest
+    container:
+      image: registry.access.redhat.com/ubi9/ubi:9.6
+    outputs:
+      asset_path: ${{ steps.package.outputs.asset_path }}
+    steps:
+      - name: Install dependencies
+        run: |
+          dnf install -y python3.11 python3.11-pip zip git which
+
+      - name: Download common files artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-common-${{ needs.prepare.outputs.version }}
+          path: release_common
 
       - name: Prepare manylinux_2_34 release package
-        id: package_manylinux_2_34
+        id: package
         run: |
           set -eo pipefail
           PACKAGE_ROOT="release_package_manylinux_2_34/opd-mcp"
@@ -197,8 +284,11 @@ jobs:
           # Download wheels for manylinux_2_34 x86_64 compatibility
           # manylinux_2_34 requires glibc 2.34+ (compatible with systems using glibc 2.34 or newer)
           # This includes distributions like RHEL 9, Fedora 35+, Ubuntu 22.04+, Debian 12+, etc.
-          # Use minimal constraints as hints (pip will find compatible versions for target platform)
-          python -m pip download \
+          # Use legacy resolver to prevent backtracking
+          # Pin pip to version that supports legacy resolver (before 24.0)
+          python3.11 -m pip install --upgrade "pip<24.0"
+          # Try to download wheels first (preferred for offline use)
+          python3.11 -m pip download \
             -r "$PACKAGE_ROOT/requirements.txt" \
             -c "$PACKAGE_ROOT/minimal-constraints.txt" \
             -d "$PACKAGE_ROOT/dependencies" \
@@ -208,9 +298,11 @@ jobs:
             --abi cp311 \
             --only-binary=:all: \
             --no-cache-dir \
-            --disable-pip-version-check || \
-          # Fallback: if constraints cause conflicts, retry without them
-          python -m pip download \
+            --disable-pip-version-check \
+            --use-deprecated=legacy-resolver || \
+          # Fallback 1: Try without constraints to allow pip to find compatible versions
+          # Constraints may pin versions that aren't available for manylinux_2_34
+          python3.11 -m pip download \
             -r "$PACKAGE_ROOT/requirements.txt" \
             -d "$PACKAGE_ROOT/dependencies" \
             --platform manylinux_2_34_x86_64 \
@@ -219,11 +311,77 @@ jobs:
             --abi cp311 \
             --only-binary=:all: \
             --no-cache-dir \
-            --disable-pip-version-check
+            --disable-pip-version-check \
+            --use-deprecated=legacy-resolver || \
+          # Fallback 2: Allow source distributions for packages without wheels
+          # Some packages (e.g., mmh3, pymupdf) may not have wheels for manylinux_2_34
+          # This ensures the package is still offline-ready (users can build from source)
+          # Note: When allowing source distributions, we must remove platform/abi/implementation
+          # constraints as pip requires --only-binary=:all: when using --platform
+          python3.11 -m pip download \
+            -r "$PACKAGE_ROOT/requirements.txt" \
+            -c "$PACKAGE_ROOT/minimal-constraints.txt" \
+            -d "$PACKAGE_ROOT/dependencies" \
+            --python-version 3.11 \
+            --no-cache-dir \
+            --disable-pip-version-check \
+            --use-deprecated=legacy-resolver || \
+          # Fallback 3: Try without constraints and allowing source distributions
+          python3.11 -m pip download \
+            -r "$PACKAGE_ROOT/requirements.txt" \
+            -d "$PACKAGE_ROOT/dependencies" \
+            --python-version 3.11 \
+            --no-cache-dir \
+            --disable-pip-version-check \
+            --use-deprecated=legacy-resolver
 
-          (cd release_package_manylinux_2_34 && zip -r "../opd-mcp-${{ steps.version.outputs.next_version }}-manylinux_2_34_x86_64.zip" .)
+          (cd release_package_manylinux_2_34 && zip -r "../opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_34_x86_64.zip" .)
 
-          echo "asset_path_manylinux_2_34=opd-mcp-${{ steps.version.outputs.next_version }}-manylinux_2_34_x86_64.zip" >> "$GITHUB_OUTPUT"
+          echo "asset_path=opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_34_x86_64.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-manylinux-2_34-${{ needs.prepare.outputs.version }}
+          path: opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_34_x86_64.zip
+          retention-days: 1
+
+  release:
+    needs: [prepare, package_manylinux_2_28, package_manylinux_2_34]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          merge-multiple: false
+          path: packages
+
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes-${{ needs.prepare.outputs.version }}
+          path: .
+
+      - name: Find package artifacts
+        id: find_artifacts
+        run: |
+          set -eo pipefail
+          MANYLINUX_2_28=$(find packages -name "*manylinux_2_28*.zip" -type f | head -1)
+          MANYLINUX_2_34=$(find packages -name "*manylinux_2_34*.zip" -type f | head -1)
+          if [ -z "$MANYLINUX_2_28" ] || [ -z "$MANYLINUX_2_34" ]; then
+            echo "Error: Could not find package artifacts"
+            find packages -type f || true
+            exit 1
+          fi
+          echo "manylinux_2_28=$MANYLINUX_2_28" >> "$GITHUB_OUTPUT"
+          echo "manylinux_2_34=$MANYLINUX_2_34" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag
         env:
@@ -232,17 +390,17 @@ jobs:
           set -eo pipefail
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          git tag -a "v${{ steps.version.outputs.next_version }}" -m "Release v${{ steps.version.outputs.next_version }}"
-          git push origin "v${{ steps.version.outputs.next_version }}"
+          git tag -a "v${{ needs.prepare.outputs.version }}" -m "Release v${{ needs.prepare.outputs.version }}"
+          git push origin "v${{ needs.prepare.outputs.version }}"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v${{ steps.version.outputs.next_version }}
-          name: Release v${{ steps.version.outputs.next_version }}
-          body_path: ${{ steps.notes.outputs.file }}
+          tag_name: v${{ needs.prepare.outputs.version }}
+          name: Release v${{ needs.prepare.outputs.version }}
+          body_path: release-notes.md
           files: |
-            ${{ steps.package_manylinux_2_28.outputs.asset_path_manylinux_2_28 }}
-            ${{ steps.package_manylinux_2_34.outputs.asset_path_manylinux_2_34 }}
+            ${{ steps.find_artifacts.outputs.manylinux_2_28 }}
+            ${{ steps.find_artifacts.outputs.manylinux_2_34 }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
