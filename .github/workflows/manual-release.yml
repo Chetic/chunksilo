@@ -161,8 +161,41 @@ jobs:
           path: opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_34_x86_64.zip
           retention-days: 1
 
+  package_manylinux_2_28:
+    needs: prepare
+    runs-on: ubuntu-latest
+    container:
+      image: registry.access.redhat.com/ubi8/ubi:8.10
+    outputs:
+      asset_path: ${{ steps.package.outputs.asset_path }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          dnf install -y python3.11 python3.11-pip zip git which
+
+      - name: Download common files artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-common-${{ needs.prepare.outputs.version }}
+          path: release_common
+
+      - name: Prepare manylinux_2_28 release package
+        id: package
+        run: |
+          ./scripts/package-manylinux-2_28.sh "${{ needs.prepare.outputs.version }}"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-manylinux-2_28-${{ needs.prepare.outputs.version }}
+          path: opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_28_x86_64.zip
+          retention-days: 1
+
   release:
-    needs: [prepare, package_manylinux_2_34]
+    needs: [prepare, package_manylinux_2_34, package_manylinux_2_28]
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -189,12 +222,14 @@ jobs:
         run: |
           set -eo pipefail
           MANYLINUX_2_34=$(find packages -name "*manylinux_2_34*.zip" -type f | head -1)
-          if [ -z "$MANYLINUX_2_34" ]; then
+          MANYLINUX_2_28=$(find packages -name "*manylinux_2_28*.zip" -type f | head -1)
+          if [ -z "$MANYLINUX_2_34" ] || [ -z "$MANYLINUX_2_28" ]; then
             echo "Error: Could not find package artifacts"
             find packages -type f || true
             exit 1
           fi
           echo "manylinux_2_34=$MANYLINUX_2_34" >> "$GITHUB_OUTPUT"
+          echo "manylinux_2_28=$MANYLINUX_2_28" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag
         env:
@@ -214,5 +249,6 @@ jobs:
           body_path: release-notes.md
           files: |
             ${{ steps.find_artifacts.outputs.manylinux_2_34 }}
+            ${{ steps.find_artifacts.outputs.manylinux_2_28 }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

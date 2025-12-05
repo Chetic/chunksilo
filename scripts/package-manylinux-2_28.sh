@@ -1,18 +1,18 @@
 #!/bin/bash
-# Script to build manylinux_2_34 package
+# Script to build manylinux_2_28 package for RHEL 8.10
 # Works both locally (via Docker) and in CI (directly in container)
 
 set -eo pipefail
 
 VERSION="${1:-dev}"
-CONTAINER_IMAGE="registry.access.redhat.com/ubi9/ubi:9.6"
+CONTAINER_IMAGE="registry.access.redhat.com/ubi8/ubi:8.10"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # If we're not in GitHub Actions and not in a container, run via Docker
 if [ -z "$GITHUB_ACTIONS" ] && [ ! -f /etc/redhat-release ]; then
   # Local execution - use Docker
-  echo "Building manylinux_2_34 package for version: $VERSION (via Docker)"
+  echo "Building manylinux_2_28 package for version: $VERSION (via Docker)"
   
   # Check if release_common exists
   if [ ! -d "$PROJECT_ROOT/release_common" ]; then
@@ -30,14 +30,14 @@ if [ -z "$GITHUB_ACTIONS" ] && [ ! -f /etc/redhat-release ]; then
     -e GITHUB_ACTIONS=1 \
     -e LOCAL_DOCKER=1 \
     "$CONTAINER_IMAGE" \
-    bash /workspace/scripts/package-manylinux-2_34.sh "$VERSION"
+    bash /workspace/scripts/package-manylinux-2_28.sh "$VERSION"
   
-  echo "Package built successfully: build-output/opd-mcp-${VERSION}-manylinux_2_34_x86_64.zip"
+  echo "Package built successfully: build-output/opd-mcp-${VERSION}-manylinux_2_28_x86_64.zip"
   exit 0
 fi
 
 # We're in CI or already in container - run the packaging logic
-echo "Building manylinux_2_34 package for version: $VERSION"
+echo "Building manylinux_2_28 package for version: $VERSION"
 
 # Check if release_common exists
 if [ ! -d "release_common" ]; then
@@ -49,25 +49,25 @@ fi
 # Note: Some packages may require additional build tools, but we install the essentials
 dnf install -y python3.11 python3.11-pip zip git which gcc gcc-c++ make
 
-# Prepare manylinux_2_34 release package
-PACKAGE_ROOT="release_package_manylinux_2_34/opd-mcp"
+# Prepare manylinux_2_28 release package
+PACKAGE_ROOT="release_package_manylinux_2_28/opd-mcp"
 mkdir -p "$PACKAGE_ROOT"
 
 # Copy common files and models
 cp -r release_common/* "$PACKAGE_ROOT/"
 
-# Download dependencies for RHEL 9.6 compatibility
-# We're running in UBI 9.6 container which uses glibc 2.34+, compatible with manylinux_2_34
+# Download dependencies for RHEL 8.10 compatibility
+# We're running in UBI 8.10 container which uses glibc 2.28, compatible with manylinux_2_28
 # Strategy: Let pip automatically select compatible wheels for the current system
 # This avoids dependency resolution issues from strict platform constraints
 python3.11 -m pip install --upgrade pip
 
-echo "Downloading dependencies for RHEL 9.6 (manylinux_2_34 compatible)..."
+echo "Downloading dependencies for RHEL 8.10 (manylinux_2_28 compatible)..."
 
 # Create dependencies directory
 mkdir -p "$PACKAGE_ROOT/dependencies"
 
-# Strategy: Download compatible wheels for the current system (RHEL 9.6)
+# Strategy: Download compatible wheels for the current system (RHEL 8.10)
 # pip will automatically select wheels compatible with the current platform and Python version
 # This is simpler and more reliable than specifying platform constraints
 # We allow source distributions as fallback for packages without wheels
@@ -111,26 +111,26 @@ WORK_DIR="/workspace"
 
 if [ -n "$GITHUB_ACTIONS" ] && [ -z "$LOCAL_DOCKER" ]; then
   # In actual CI, output to current directory
-  OUTPUT_ZIP="opd-mcp-${VERSION}-manylinux_2_34_x86_64.zip"
+  OUTPUT_ZIP="opd-mcp-${VERSION}-manylinux_2_28_x86_64.zip"
   ZIP_PATH="../$OUTPUT_ZIP"
   FINAL_OUTPUT="$OUTPUT_ZIP"
 else
   # Local Docker execution or when LOCAL_DOCKER is set, output to build-output directory
   OUTPUT_DIR="$WORK_DIR/build-output"
   mkdir -p "$OUTPUT_DIR"
-  OUTPUT_ZIP="$OUTPUT_DIR/opd-mcp-${VERSION}-manylinux_2_34_x86_64.zip"
+  OUTPUT_ZIP="$OUTPUT_DIR/opd-mcp-${VERSION}-manylinux_2_28_x86_64.zip"
   # Create zip in current directory first, then move it
-  TEMP_ZIP="opd-mcp-${VERSION}-manylinux_2_34_x86_64.zip"
+  TEMP_ZIP="opd-mcp-${VERSION}-manylinux_2_28_x86_64.zip"
   ZIP_PATH="../$TEMP_ZIP"
   FINAL_OUTPUT="$OUTPUT_ZIP"
 fi
 
 # Create zip file
-(cd "$WORK_DIR/release_package_manylinux_2_34" && zip -r "$ZIP_PATH" .)
+(cd "$WORK_DIR/release_package_manylinux_2_28" && zip -r "$ZIP_PATH" .)
 
 # Move to final location if needed (for local Docker execution)
 if [ -n "$LOCAL_DOCKER" ] || [ -z "$GITHUB_ACTIONS" ]; then
-  # The zip was created relative to release_package_manylinux_2_34, so it's in WORK_DIR
+  # The zip was created relative to release_package_manylinux_2_28, so it's in WORK_DIR
   # Move it to the build-output directory
   if [ -f "$WORK_DIR/$TEMP_ZIP" ]; then
     mkdir -p "$WORK_DIR/build-output"
