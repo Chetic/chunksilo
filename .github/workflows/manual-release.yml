@@ -105,44 +105,90 @@ jobs:
 
           echo "file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare standalone release package
-        id: package
+      - name: Prepare common release files and models
+        id: common_files
         run: |
           set -eo pipefail
-          PACKAGE_ROOT="release_package/opd-mcp"
-          mkdir -p "$PACKAGE_ROOT"
+          COMMON_ROOT="release_common"
+          mkdir -p "$COMMON_ROOT"
 
-          # Install dependencies so we can download the retrieval models into the release bundle
+          # Install dependencies so we can download the retrieval models
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-          # Download the embedding + rerank models directly into the packaged cache directory
-          export RETRIEVAL_MODEL_CACHE_DIR="$PACKAGE_ROOT/models"
+          # Copy common files that are the same for all platforms
+          cp mcp_server.py "$COMMON_ROOT/"
+          cp ingest.py "$COMMON_ROOT/"
+          cp requirements.txt "$COMMON_ROOT/"
+          cp README.md "$COMMON_ROOT/"
+          cp .env "$COMMON_ROOT/"
+          cp -r .continue "$COMMON_ROOT/"
+
+          echo "${{ steps.version.outputs.next_version }}" > "$COMMON_ROOT/VERSION"
+
+          # Download the embedding + rerank models once (they're the same for all platforms)
+          export RETRIEVAL_MODEL_CACHE_DIR="$COMMON_ROOT/models"
           python ingest.py --download-models
 
-          # Copy only the required files and directories
-          cp mcp_server.py "$PACKAGE_ROOT/"
-          cp ingest.py "$PACKAGE_ROOT/"
-          cp requirements.txt "$PACKAGE_ROOT/"
-          cp README.md "$PACKAGE_ROOT/"
-          cp .env "$PACKAGE_ROOT/"
-          cp -r .continue "$PACKAGE_ROOT/"
-
-          # Include the cached embedding and rerank models for offline environments
-          if [ -d "$PACKAGE_ROOT/models" ]; then
-            echo "Cached retrieval models stored in $PACKAGE_ROOT/models"
+          # Verify models were downloaded
+          if [ -d "$COMMON_ROOT/models" ]; then
+            echo "Cached retrieval models stored in $COMMON_ROOT/models"
           else
-            echo "Expected cached retrieval models at $PACKAGE_ROOT/models but they were not found." >&2
+            echo "Expected cached retrieval models at $COMMON_ROOT/models but they were not found." >&2
             exit 1
           fi
 
-          echo "${{ steps.version.outputs.next_version }}" > "$PACKAGE_ROOT/VERSION"
+      - name: Prepare manylinux_2_28 release package
+        id: package_manylinux_2_28
+        run: |
+          set -eo pipefail
+          PACKAGE_ROOT="release_package_manylinux_2_28/opd-mcp"
+          mkdir -p "$PACKAGE_ROOT"
 
-          python -m pip download -r "$PACKAGE_ROOT/requirements.txt" -d "$PACKAGE_ROOT/dependencies"
+          # Copy common files and models
+          cp -r release_common/* "$PACKAGE_ROOT/"
 
-          (cd release_package && zip -r "../opd-mcp-${{ steps.version.outputs.next_version }}.zip" .)
+          # Download wheels for manylinux_2_28 x86_64 compatibility
+          # manylinux_2_28 requires glibc 2.28+ (compatible with systems using glibc 2.28 or newer)
+          # This includes distributions like RHEL 8, CentOS 8, Ubuntu 20.04+, Debian 11+, etc.
+          python -m pip download \
+            -r "$PACKAGE_ROOT/requirements.txt" \
+            -d "$PACKAGE_ROOT/dependencies" \
+            --platform manylinux_2_28_x86_64 \
+            --python-version 3.11 \
+            --implementation cp \
+            --abi cp311 \
+            --only-binary=:all:
 
-          echo "asset_path=opd-mcp-${{ steps.version.outputs.next_version }}.zip" >> "$GITHUB_OUTPUT"
+          (cd release_package_manylinux_2_28 && zip -r "../opd-mcp-${{ steps.version.outputs.next_version }}-manylinux_2_28_x86_64.zip" .)
+
+          echo "asset_path_manylinux_2_28=opd-mcp-${{ steps.version.outputs.next_version }}-manylinux_2_28_x86_64.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare manylinux_2_34 release package
+        id: package_manylinux_2_34
+        run: |
+          set -eo pipefail
+          PACKAGE_ROOT="release_package_manylinux_2_34/opd-mcp"
+          mkdir -p "$PACKAGE_ROOT"
+
+          # Copy common files and models
+          cp -r release_common/* "$PACKAGE_ROOT/"
+
+          # Download wheels for manylinux_2_34 x86_64 compatibility
+          # manylinux_2_34 requires glibc 2.34+ (compatible with systems using glibc 2.34 or newer)
+          # This includes distributions like RHEL 9, Fedora 35+, Ubuntu 22.04+, Debian 12+, etc.
+          python -m pip download \
+            -r "$PACKAGE_ROOT/requirements.txt" \
+            -d "$PACKAGE_ROOT/dependencies" \
+            --platform manylinux_2_34_x86_64 \
+            --python-version 3.11 \
+            --implementation cp \
+            --abi cp311 \
+            --only-binary=:all:
+
+          (cd release_package_manylinux_2_34 && zip -r "../opd-mcp-${{ steps.version.outputs.next_version }}-manylinux_2_34_x86_64.zip" .)
+
+          echo "asset_path_manylinux_2_34=opd-mcp-${{ steps.version.outputs.next_version }}-manylinux_2_34_x86_64.zip" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag
         env:
@@ -160,6 +206,8 @@ jobs:
           tag_name: v${{ steps.version.outputs.next_version }}
           name: Release v${{ steps.version.outputs.next_version }}
           body_path: ${{ steps.notes.outputs.file }}
-          files: ${{ steps.package.outputs.asset_path }}
+          files: |
+            ${{ steps.package_manylinux_2_28.outputs.asset_path_manylinux_2_28 }}
+            ${{ steps.package_manylinux_2_34.outputs.asset_path_manylinux_2_34 }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
