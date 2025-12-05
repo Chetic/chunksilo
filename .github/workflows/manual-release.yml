@@ -116,6 +116,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
+          # Generate constraints file from installed packages to guide dependency resolution
+          # This helps pip know what versions work together, reducing backtracking
+          # Note: pip will find compatible versions for target platform if exact versions aren't available
+          python -m pip freeze > "$COMMON_ROOT/minimal-constraints.txt"
+
           # Copy common files that are the same for all platforms
           cp mcp_server.py "$COMMON_ROOT/"
           cp ingest.py "$COMMON_ROOT/"
@@ -151,7 +156,19 @@ jobs:
           # Download wheels for manylinux_2_28 x86_64 compatibility
           # manylinux_2_28 requires glibc 2.28+ (compatible with systems using glibc 2.28 or newer)
           # This includes distributions like RHEL 8, CentOS 8, Ubuntu 20.04+, Debian 11+, etc.
-          # Note: pip will resolve dependencies for the target platform, which may take some time
+          # Use minimal constraints as hints (pip will find compatible versions for target platform)
+          python -m pip download \
+            -r "$PACKAGE_ROOT/requirements.txt" \
+            -c "$PACKAGE_ROOT/minimal-constraints.txt" \
+            -d "$PACKAGE_ROOT/dependencies" \
+            --platform manylinux_2_28_x86_64 \
+            --python-version 3.11 \
+            --implementation cp \
+            --abi cp311 \
+            --only-binary=:all: \
+            --no-cache-dir \
+            --disable-pip-version-check || \
+          # Fallback: if constraints cause conflicts, retry without them
           python -m pip download \
             -r "$PACKAGE_ROOT/requirements.txt" \
             -d "$PACKAGE_ROOT/dependencies" \
@@ -159,7 +176,9 @@ jobs:
             --python-version 3.11 \
             --implementation cp \
             --abi cp311 \
-            --only-binary=:all:
+            --only-binary=:all: \
+            --no-cache-dir \
+            --disable-pip-version-check
 
           (cd release_package_manylinux_2_28 && zip -r "../opd-mcp-${{ steps.version.outputs.next_version }}-manylinux_2_28_x86_64.zip" .)
 
@@ -178,7 +197,19 @@ jobs:
           # Download wheels for manylinux_2_34 x86_64 compatibility
           # manylinux_2_34 requires glibc 2.34+ (compatible with systems using glibc 2.34 or newer)
           # This includes distributions like RHEL 9, Fedora 35+, Ubuntu 22.04+, Debian 12+, etc.
-          # Note: pip will resolve dependencies for the target platform, which may take some time
+          # Use minimal constraints as hints (pip will find compatible versions for target platform)
+          python -m pip download \
+            -r "$PACKAGE_ROOT/requirements.txt" \
+            -c "$PACKAGE_ROOT/minimal-constraints.txt" \
+            -d "$PACKAGE_ROOT/dependencies" \
+            --platform manylinux_2_34_x86_64 \
+            --python-version 3.11 \
+            --implementation cp \
+            --abi cp311 \
+            --only-binary=:all: \
+            --no-cache-dir \
+            --disable-pip-version-check || \
+          # Fallback: if constraints cause conflicts, retry without them
           python -m pip download \
             -r "$PACKAGE_ROOT/requirements.txt" \
             -d "$PACKAGE_ROOT/dependencies" \
@@ -186,7 +217,9 @@ jobs:
             --python-version 3.11 \
             --implementation cp \
             --abi cp311 \
-            --only-binary=:all:
+            --only-binary=:all: \
+            --no-cache-dir \
+            --disable-pip-version-check
 
           (cd release_package_manylinux_2_34 && zip -r "../opd-mcp-${{ steps.version.outputs.next_version }}-manylinux_2_34_x86_64.zip" .)
 
