@@ -53,12 +53,11 @@ dnf install -y python3.11 python3.11-pip zip git which gcc gcc-c++ make
 PACKAGE_ROOT="release_package_manylinux_2_34/opd-mcp"
 mkdir -p "$PACKAGE_ROOT"
 
-# Copy common files and models
+# Copy common files and models (including hidden files/directories)
+# Enable dotglob to match hidden files with *
+shopt -s dotglob
 cp -r release_common/* "$PACKAGE_ROOT/"
-# Explicitly copy hidden files (like .env) that aren't matched by *
-if [ -f release_common/.env ]; then
-  cp release_common/.env "$PACKAGE_ROOT/"
-fi
+shopt -u dotglob
 
 # Download dependencies for RHEL 9.6 compatibility
 # We're running in UBI 9.6 container which uses glibc 2.34+, compatible with manylinux_2_34
