@@ -32,12 +32,8 @@ cp mcp_server.py "$COMMON_ROOT/"
 cp ingest.py "$COMMON_ROOT/"
 cp requirements.txt "$COMMON_ROOT/"
 cp README.md "$COMMON_ROOT/"
-if [ -f .env ]; then
-  cp .env "$COMMON_ROOT/"
-else
-  echo "Warning: .env file not found, but continuing..." >&2
-fi
-cp -r .continue "$COMMON_ROOT/"
+cp env.template "$COMMON_ROOT/"
+cp -r continue-config "$COMMON_ROOT/"
 
 echo "$VERSION" > "$COMMON_ROOT/VERSION"
 

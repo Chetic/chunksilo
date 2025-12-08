@@ -33,3 +33,4 @@ OFFLINE=0 python test_large_scale.py
 - **Test files are excluded from the release package**: The release workflow only includes production files (`mcp_server.py`, `ingest.py`, `requirements.txt`, etc.). Test files remain in the repository for development but are not packaged for end users.
 - **Tests require online access**: The large-scale test suite downloads documents from the web, so run with `OFFLINE=0`.
 - **Test artifacts are gitignored**: Generated test data, storage, and results are in `.gitignore` to keep the repository clean.
+
