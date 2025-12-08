@@ -34,7 +34,7 @@ This creates a `release_common/` directory with:
 - All Python source files
 - Requirements and constraints
 - Downloaded models
-- Configuration files
+- Configuration files (Continue, Roo Code, Cline + rules)
 
 #### 2. Build Package
 

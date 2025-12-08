@@ -43,8 +43,19 @@ python mcp_server.py
 ```
 
 Configure Continue (VS Code or CLI):
-- Copy `continue-config/mcpServers/opd-mcp.yaml` to `~/.continue/mcpServers/opd-mcp.yaml` (update paths).
+- Copy `config/continue-config/mcpServers/opd-mcp.yaml` to `~/.continue/mcpServers/opd-mcp.yaml` (update paths).
+- Copy the rule file in `config/continue-config/rules/` if you want the citation rule applied.
 - Continue handles the LLM; no LLM config needed here.
+
+Configure Roo Code:
+- Copy `config/roo-config/mcp.json` to either the global Roo config (`~/.roo/mcp_settings.json`) or workspace config (`.roo/mcp.json`) and update paths.
+- Copy `config/roo-config/rules/` into `~/.roo/rules/` or `.roo/rules/` to apply the citation rule in the system prompt.
+- Roo Code reads environment variables from the MCP entry; update `DATA_DIR`, `STORAGE_DIR`, and `RETRIEVAL_MODEL_CACHE_DIR` to match your paths.
+
+Configure Cline:
+- Copy `config/cline-config/cline_mcp_settings.json` into your `cline_mcp_settings.json` (opened via Cline → MCP Servers → Configure) and update paths.
+- Copy `config/cline-config/.clinerules` alongside that file or into a workspace root to enforce the citation rule in the system prompt.
+- The MCP entry sets `DATA_DIR`, `STORAGE_DIR`, and `RETRIEVAL_MODEL_CACHE_DIR`; adjust for your environment.
 
 ## Deployment from release ZIP (offline)
 
@@ -54,7 +65,7 @@ Configure Continue (VS Code or CLI):
 4) `python3.11 -m venv venv && source venv/bin/activate`  
 5) `pip install --no-index --find-links dependencies -r requirements.txt`  
 6) Put docs in `DATA_DIR`, then `python ingest.py`. Models are already in `models/` for offline use.  
-7) Copy/update the sample Continue config from `continue-config/` and start the server with `python mcp_server.py`.
+7) Copy/update the sample configs from `config/continue-config/`, `config/roo-config/`, or `config/cline-config/` and start the server with `python mcp_server.py`.
 
 ## Response fields
 
@@ -79,7 +90,7 @@ Use conventional commits without a scope (e.g., `feat: add progress bar`).
 ```
 ├── ingest.py          # Index build + model download
 ├── mcp_server.py      # MCP server
-├── continue-config/   # Continue config examples
+├── config/            # Config examples for Continue, Roo Code, Cline
 ├── env.template       # .env template
 ├── models/            # Optional cached models
 ├── data/              # Your documents
