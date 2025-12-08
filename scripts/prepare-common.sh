@@ -33,7 +33,7 @@ cp ingest.py "$COMMON_ROOT/"
 cp requirements.txt "$COMMON_ROOT/"
 cp README.md "$COMMON_ROOT/"
 cp env.template "$COMMON_ROOT/"
-cp -r config "$COMMON_ROOT/"
+cp universal_config.json "$COMMON_ROOT/"
 
 echo "$VERSION" > "$COMMON_ROOT/VERSION"
 

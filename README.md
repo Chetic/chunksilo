@@ -1,103 +1,68 @@
 # On-Prem Docs MCP Server
 
-Fully local semantic search for your PDFs, DOCX, Markdown, and TXT files. The MCP server only retrieves chunks; Continue’s LLM does the answering. No data leaves your machine.
+Fully local semantic search for your PDF, DOCX, Markdown, and TXT files. The MCP server only retrieves chunks; your LLM (via Continue, Cline, or Roo Code) does the answering. No data leaves your machine.
 
 ## Features
 
-- CPU-only retrieval stack (FastEmbed + lightweight reranker)
-- Sentence-aware chunking with configurable size/overlap
-- Persistent local index; offline-friendly model cache
-- MCP `retrieve_docs` tool with citations metadata
+- **Privacy First**: Fully local retrieval (FastEmbed + lightweight reranker).
+- **Universal Installer**: Single self-contained script for installation and configuration.
+- **Multi-Tool Support**: Auto-configuration for Cline, Roo Code, and Continue.
+- **Smart Indexing**: Persistent local index with incremental updates.
+- **Citation Support**: MCP `retrieve_docs` tool returns citation metadata for verifiable answers.
 
-## Quickstart (from source)
+## Quick Installation (Recommended)
+
+The easiest way to install is using the self-contained installer script from the [Releases page](https://github.com/Chetic/opd-mcp/releases).
+
+1. **Download** the `opd-mcp-vX.Y.Z-installer.sh` file.
+2. **Run** the installer:
 
 ```bash
-git clone git@github.com:Chetic/opd-mcp.git
-cd opd-mcp
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-cp env.template .env
+chmod +x opd-mcp-installer.sh
+./opd-mcp-installer.sh
 ```
 
-Key `.env` / environment settings (defaults in parentheses):
-- `DATA_DIR` (`./data`): where your docs live.
-- `STORAGE_DIR` (`./storage`): index location (also holds `ingestion_state.db`).
-- `RETRIEVAL_MODEL_CACHE_DIR` (`./models`): cache for embedding + reranker; bundle for offline.
-- `RETRIEVAL_EMBED_MODEL_NAME` (`BAAI/bge-small-en-v1.5`): embedding model.
-- `RETRIEVAL_RERANK_MODEL_NAME` (`ms-marco-MiniLM-L-12-v2`): reranker; `cross-encoder/ms-marco-MiniLM-L-6-v2` maps to L-12.
-- `CHUNK_SIZE` (`512`): token chunk size.
-- `CHUNK_OVERLAP` (`100`): token overlap.
-- `OFFLINE` (`1`): set Hugging Face caches to offline-friendly values.
+All parameters are optional. The installer will ask you for any required information if it is not provided via flags.
 
-Prepare data and models (CLI flags supported):
-```bash
-mkdir -p data
-python ingest.py --download-models   # optional; just cache models then exit
-python ingest.py                     # builds index from DATA_DIR into STORAGE_DIR
-python ingest.py --offline           # force offline use of cached models
-```
+### Installer Options
 
-Run the server:
-```bash
-python mcp_server.py
-```
+| Option | Description |
+| :--- | :--- |
+| `--tool <name>` | Target tool to configure: `cline`, `roo`, `continue`. |
+| `--project [path]` | Configure for a specific project. Defaults to global if omitted. |
+| `--editor <name>` | For global install: `code`, `cursor`, `windsurf`, etc. (Prompts if omitted). |
+| `--location <path>` | Install destination (defaults to `/data/opd-mcp`, `/localhome/opd-mcp`, or `~/opd-mcp`). |
+| `--overwrite` | Force overwrite of existing files and configs. |
 
-Configure Continue (VS Code or CLI):
-- Copy `config/continue-config/mcpServers/opd-mcp.yaml` to `~/.continue/mcpServers/opd-mcp.yaml` (update paths).
-- Copy the rule file in `config/continue-config/rules/` if you want the citation rule applied.
-- Continue handles the LLM; no LLM config needed here.
+## Manual / Developer Installation
 
-Configure Roo Code:
-- Copy `config/roo-config/mcp.json` to either the global Roo config (`~/.roo/mcp_settings.json`) or workspace config (`.roo/mcp.json`) and update paths.
-- Copy `config/roo-config/rules/` into `~/.roo/rules/` or `.roo/rules/` to apply the citation rule in the system prompt.
-- Roo Code reads environment variables from the MCP entry; update `DATA_DIR`, `STORAGE_DIR`, and `RETRIEVAL_MODEL_CACHE_DIR` to match your paths.
+If you prefer to run from source:
 
-Configure Cline:
-- Copy `config/cline-config/cline_mcp_settings.json` into your `cline_mcp_settings.json` (opened via Cline → MCP Servers → Configure) and update paths.
-- Copy `config/cline-config/.clinerules` alongside that file or into a workspace root to enforce the citation rule in the system prompt.
-- The MCP entry sets `DATA_DIR`, `STORAGE_DIR`, and `RETRIEVAL_MODEL_CACHE_DIR`; adjust for your environment.
+1. Clone the repository.
+2. Run `setup.sh` (which the installer wraps):
+   ```bash
+   ./setup.sh --tool <tool>
+   ```
 
-## Deployment from release ZIP (offline)
+## Configuration
 
-1) Download `opd-mcp-<version>-manylinux_2_28_x86_64.zip` (RHEL 8/older) or `...-manylinux_2_34_x86_64.zip` (RHEL 9/newer) from Releases.  
-2) Extract and enter the directory.  
-3) `cp env.template .env` and adjust paths.  
-4) `python3.11 -m venv venv && source venv/bin/activate`  
-5) `pip install --no-index --find-links dependencies -r requirements.txt`  
-6) Put docs in `DATA_DIR`, then `python ingest.py`. Models are already in `models/` for offline use.  
-7) Copy/update the sample configs from `config/continue-config/`, `config/roo-config/`, or `config/cline-config/` and start the server with `python mcp_server.py`.
+The installer generates tool-specific configurations from a single source of truth: `universal_config.json`.
 
-## Response fields
+- **Settings**: Adjust `DATA_DIR` (documents), `STORAGE_DIR` (index), and `RETRIEVAL_MODEL_CACHE_DIR` directly in the generated config if needed, or modify `universal_config.json` before running the installer.
+- **Documents**: Place your documents in the `DATA_DIR` (default: `data/` inside the install location).
+- **Indexing**: The server runs `ingest.py` automatically, or you can run it manually:
+  ```bash
+  cd <install_dir>
+  source venv/bin/activate
+  python ingest.py
+  ```
 
-`retrieve_docs` returns chunks with `text`, `score`, `metadata`, `citation`, and structured `location` (file, page, heading). A top-level `citations` array lists unique sources for easy display.
+## Troubleshooting
 
-## Troubleshooting (quick)
-
-- Index missing: run `python ingest.py`.
-- Retrieval errors: confirm `STORAGE_DIR` exists and models are cached in `RETRIEVAL_MODEL_CACHE_DIR`.
-- Offline runs: ensure `OFFLINE=1` or `--offline` and cached model directories exist under `./models`.
-
-## Testing
-
-See `test/TESTING.md` for running the Python test scripts.
-
-## Commit messages
-
-Use conventional commits without a scope (e.g., `feat: add progress bar`).
-
-## Project structure
-
-```
-├── ingest.py          # Index build + model download
-├── mcp_server.py      # MCP server
-├── config/            # Config examples for Continue, Roo Code, Cline
-├── env.template       # .env template
-├── models/            # Optional cached models
-├── data/              # Your documents
-└── storage/           # Built index
-```
+- **Index missing**: Run `python ingest.py` in the install directory.
+- **Retrieval errors**: Check paths in your tool's MCP config file.
+- **Offline mode**: The installer includes models. Ensure `OFFLINE=1` is set in the environment or `.env` file (automatically handled by the installer).
 
 ## License
 
 MIT
-

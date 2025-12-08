@@ -128,20 +128,12 @@ jobs:
           path: ${{ steps.notes.outputs.file }}
           retention-days: 1
 
-  package_manylinux_2_34:
+  package_installer:
     needs: prepare
     runs-on: ubuntu-latest
-    container:
-      image: registry.access.redhat.com/ubi9/ubi:9.6
-    outputs:
-      asset_path: ${{ steps.package.outputs.asset_path }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          dnf install -y python3.11 python3.11-pip zip git which
 
       - name: Download common files artifact
         uses: actions/download-artifact@v4
@@ -149,53 +141,29 @@ jobs:
           name: release-common-${{ needs.prepare.outputs.version }}
           path: release_common
 
-      - name: Prepare manylinux_2_34 release package
-        id: package
+      - name: Restore cached models
         run: |
-          ./scripts/package-manylinux-2_34.sh "${{ needs.prepare.outputs.version }}"
+          mkdir -p models
+          cp -r release_common/models/* models/
+          # Ensure universal_config is also consistent if modified in prepare (though it's just a copy)
+          cp release_common/universal_config.json .
 
-      - name: Upload package artifact
+      - name: Build Installer
+        run: |
+          chmod +x scripts/build_installer.sh
+          ./scripts/build_installer.sh
+          # Rename to include version
+          mv build-output/opd-mcp-installer.sh build-output/opd-mcp-${{ needs.prepare.outputs.version }}-installer.sh
+
+      - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: package-manylinux-2_34-${{ needs.prepare.outputs.version }}
-          path: opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_34_x86_64.zip
-          retention-days: 1
-
-  package_manylinux_2_28:
-    needs: prepare
-    runs-on: ubuntu-latest
-    container:
-      image: registry.access.redhat.com/ubi8/ubi:8.10
-    outputs:
-      asset_path: ${{ steps.package.outputs.asset_path }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          dnf install -y python3.11 python3.11-pip zip git which
-
-      - name: Download common files artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: release-common-${{ needs.prepare.outputs.version }}
-          path: release_common
-
-      - name: Prepare manylinux_2_28 release package
-        id: package
-        run: |
-          ./scripts/package-manylinux-2_28.sh "${{ needs.prepare.outputs.version }}"
-
-      - name: Upload package artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: package-manylinux-2_28-${{ needs.prepare.outputs.version }}
-          path: opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_28_x86_64.zip
+          name: installer-${{ needs.prepare.outputs.version }}
+          path: build-output/opd-mcp-${{ needs.prepare.outputs.version }}-installer.sh
           retention-days: 1
 
   release:
-    needs: [prepare, package_manylinux_2_34, package_manylinux_2_28]
+    needs: [prepare, package_installer]
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -204,11 +172,10 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Download package artifacts
+      - name: Download installer artifact
         uses: actions/download-artifact@v4
         with:
-          pattern: package-*
-          merge-multiple: false
+          name: installer-${{ needs.prepare.outputs.version }}
           path: packages
 
       - name: Download release notes
@@ -217,19 +184,15 @@ jobs:
           name: release-notes-${{ needs.prepare.outputs.version }}
           path: .
 
-      - name: Find package artifacts
+      - name: Find artifacts
         id: find_artifacts
         run: |
-          set -eo pipefail
-          MANYLINUX_2_34=$(find packages -name "*manylinux_2_34*.zip" -type f | head -1)
-          MANYLINUX_2_28=$(find packages -name "*manylinux_2_28*.zip" -type f | head -1)
-          if [ -z "$MANYLINUX_2_34" ] || [ -z "$MANYLINUX_2_28" ]; then
-            echo "Error: Could not find package artifacts"
-            find packages -type f || true
+          INSTALLER=$(find packages -name "*-installer.sh" -type f | head -1)
+          if [ -z "$INSTALLER" ]; then
+            echo "Error: Could not find installer artifact"
             exit 1
           fi
-          echo "manylinux_2_34=$MANYLINUX_2_34" >> "$GITHUB_OUTPUT"
-          echo "manylinux_2_28=$MANYLINUX_2_28" >> "$GITHUB_OUTPUT"
+          echo "installer=$INSTALLER" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag
         env:
@@ -248,7 +211,6 @@ jobs:
           name: Release v${{ needs.prepare.outputs.version }}
           body_path: release-notes.md
           files: |
-            ${{ steps.find_artifacts.outputs.manylinux_2_34 }}
-            ${{ steps.find_artifacts.outputs.manylinux_2_28 }}
+            ${{ steps.find_artifacts.outputs.installer }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
