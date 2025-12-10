@@ -8,7 +8,10 @@
         "env": {
             "DATA_DIR": "data",
             "STORAGE_DIR": "storage",
-            "RETRIEVAL_MODEL_CACHE_DIR": "models"
+            "RETRIEVAL_MODEL_CACHE_DIR": "models",
+            "CONFLUENCE_URL": "",
+            "CONFLUENCE_USERNAME": "",
+            "CONFLUENCE_API_TOKEN": ""
         }
     },
     "rules": {

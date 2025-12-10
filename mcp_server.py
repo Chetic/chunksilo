@@ -11,7 +11,18 @@ from dotenv import load_dotenv
 
 from mcp.server.fastmcp import FastMCP
 from llama_index.core import StorageContext, load_index_from_storage, Settings
+from llama_index.core.schema import TextNode, NodeWithScore
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
+try:
+    from llama_index.readers.confluence import ConfluenceReader
+except ImportError:
+    ConfluenceReader = None
+
+import asyncio
+import logging
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -33,8 +44,11 @@ RETRIEVAL_RERANK_MODEL_NAME = os.getenv(
     "RETRIEVAL_RERANK_MODEL_NAME", "ms-marco-MiniLM-L-12-v2"
 )
 
-# Shared cache directory for embedding and reranker models
+# Shared cache directory for embedding and reranking models
 RETRIEVAL_MODEL_CACHE_DIR = Path(os.getenv("RETRIEVAL_MODEL_CACHE_DIR", "./models"))
+
+# Confluence Configuration
+CONFLUENCE_TIMEOUT = float(os.getenv("CONFLUENCE_TIMEOUT", "10.0"))
 
 # Configure offline mode for HuggingFace libraries to prevent network requests
 # The MCP server is intended to run in offline environments where models are already cached.
@@ -274,6 +288,53 @@ def _preprocess_query(query: str) -> str:
     return processed if processed else original_query
 
 
+def _search_confluence(query: str) -> list[NodeWithScore]:
+    """
+    Search Confluence for documents matching the query using CQL.
+    Returns a list of NodeWithScore objects compatible with the reranker.
+    """
+    base_url = os.getenv("CONFLUENCE_URL")
+    # If CONFLUENCE_URL is unset or empty, disable search completely
+    if not base_url:
+        return []
+
+    if ConfluenceReader is None:
+        logger.warning("llama-index-readers-confluence not installed, skipping Confluence search")
+        return []
+
+    username = os.getenv("CONFLUENCE_USERNAME")
+    api_token = os.getenv("CONFLUENCE_API_TOKEN")
+
+    if not (base_url and username and api_token):
+        return []
+
+    try:
+        reader = ConfluenceReader(base_url=base_url, user_name=username, password_token=api_token)
+        # Simple CQL query to find pages containing the query text
+        # Only searching current version of pages
+        cql = f'text ~ "{query}" AND type = "page"'
+        documents = reader.load_data(cql=cql)
+
+        nodes: list[NodeWithScore] = []
+        for doc in documents:
+            # Create a TextNode from the Confluence document
+            # We map standard Confluence metadata to something our citation builder understands
+            metadata = doc.metadata.copy()
+            metadata["source"] = "Confluence"
+            if "title" in metadata:
+                 metadata["file_name"] = metadata["title"] # Use title as filename for citation
+
+            node = TextNode(text=doc.text, metadata=metadata)
+            # Assign a default score of 0.0 (will be updated by reranker)
+            nodes.append(NodeWithScore(node=node, score=0.0))
+        
+        return nodes
+
+    except Exception as e:
+        logger.warning(f"Failed to search Confluence: {e}")
+        return []
+
+
 def load_llamaindex_index():
     """Load the LlamaIndex from storage."""
     global _index_cache
@@ -348,6 +409,27 @@ Following these steps is **mandatory** for a complete, trustworthy response.
 
         # Retrieve relevant chunks (embedding stage) using enhanced query
         nodes = retriever.retrieve(enhanced_query)
+
+        # Search Confluence in parallel (with timeout)
+        # Optimization: Check if CONFLUENCE_URL is set before even attempting it
+        confluence_nodes = []
+        if os.getenv("CONFLUENCE_URL"):
+            try:
+                 # Run blocking generic search in executor
+                 loop = asyncio.get_running_loop()
+                 result = await asyncio.wait_for(
+                     loop.run_in_executor(None, _search_confluence, query),
+                     timeout=CONFLUENCE_TIMEOUT
+                 )
+                 if result:
+                     confluence_nodes = result
+            except asyncio.TimeoutError:
+                 logger.warning(f"Confluence search timed out after {CONFLUENCE_TIMEOUT}s")
+            except Exception as e:
+                 logger.error(f"Error during Confluence search: {e}")
+
+        if confluence_nodes:
+             nodes.extend(confluence_nodes)
 
         # Rerank the retrieved nodes with FlashRank (CPU-only, ONNX-based) and trim to the
         # configured final Top K for the tool response.

@@ -62,6 +62,7 @@ The installer generates tool-specific configurations from a single source of tru
 - **Index missing**: Run `python ingest.py` in the install directory.
 - **Retrieval errors**: Check paths in your tool's MCP config file.
 - **Offline mode**: The installer includes models. Ensure `OFFLINE=1` is set in the environment or `.env` file (automatically handled by the installer).
+- **Confluence Integration**: To enable Confluence search, set `CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, and `CONFLUENCE_API_TOKEN` environment variables in your MCP client configuration (e.g., `cline_mcp_settings.json`, `config.json` for Continue, etc.).
 
 ## License
 
