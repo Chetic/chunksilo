@@ -293,11 +293,15 @@ def _search_confluence(query: str) -> list[NodeWithScore]:
     Search Confluence for documents matching the query using CQL.
     Returns a list of NodeWithScore objects compatible with the reranker.
     """
+    base_url = os.getenv("CONFLUENCE_URL")
+    # If CONFLUENCE_URL is unset or empty, disable search completely
+    if not base_url:
+        return []
+
     if ConfluenceReader is None:
         logger.warning("llama-index-readers-confluence not installed, skipping Confluence search")
         return []
 
-    base_url = os.getenv("CONFLUENCE_URL")
     username = os.getenv("CONFLUENCE_USERNAME")
     api_token = os.getenv("CONFLUENCE_API_TOKEN")
 
@@ -407,19 +411,25 @@ Following these steps is **mandatory** for a complete, trustworthy response.
         nodes = retriever.retrieve(enhanced_query)
 
         # Search Confluence in parallel (with timeout)
-        try:
-             # Run blocking generic search in executor
-             loop = asyncio.get_running_loop()
-             confluence_nodes = await asyncio.wait_for(
-                 loop.run_in_executor(None, _search_confluence, query),
-                 timeout=CONFLUENCE_TIMEOUT
-             )
-             if confluence_nodes:
-                 nodes.extend(confluence_nodes)
-        except asyncio.TimeoutError:
-             logger.warning(f"Confluence search timed out after {CONFLUENCE_TIMEOUT}s")
-        except Exception as e:
-             logger.error(f"Error during Confluence search: {e}")
+        # Optimization: Check if CONFLUENCE_URL is set before even attempting it
+        confluence_nodes = []
+        if os.getenv("CONFLUENCE_URL"):
+            try:
+                 # Run blocking generic search in executor
+                 loop = asyncio.get_running_loop()
+                 result = await asyncio.wait_for(
+                     loop.run_in_executor(None, _search_confluence, query),
+                     timeout=CONFLUENCE_TIMEOUT
+                 )
+                 if result:
+                     confluence_nodes = result
+            except asyncio.TimeoutError:
+                 logger.warning(f"Confluence search timed out after {CONFLUENCE_TIMEOUT}s")
+            except Exception as e:
+                 logger.error(f"Error during Confluence search: {e}")
+
+        if confluence_nodes:
+             nodes.extend(confluence_nodes)
 
         # Rerank the retrieved nodes with FlashRank (CPU-only, ONNX-based) and trim to the
         # configured final Top K for the tool response.
