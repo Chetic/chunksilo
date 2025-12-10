@@ -36,6 +36,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Force online mode for tests (to download models)
+os.environ["OFFLINE"] = "0"
+
 # Import after logging is set up
 from ingest import DATA_DIR, STORAGE_DIR, build_index
 from mcp_server import retrieve_docs
@@ -202,7 +205,10 @@ def download_file(url: str, output_path: Path, timeout: int = 30, expected_type:
     """Download a file from URL to output path and validate it."""
     try:
         logger.info(f"Downloading {url} to {output_path}")
-        response = requests.get(url, timeout=timeout, stream=True)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        response = requests.get(url, timeout=timeout, stream=True, headers=headers)
         response.raise_for_status()
         
         # Check content type from response
