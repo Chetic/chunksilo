@@ -162,8 +162,62 @@ jobs:
           path: build-output/opd-mcp-${{ needs.prepare.outputs.version }}-installer.sh
           retention-days: 1
 
+  package_manylinux_2_28:
+    needs: prepare
+    runs-on: ubuntu-latest
+    container: registry.access.redhat.com/ubi8/ubi:8.10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download common files artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-common-${{ needs.prepare.outputs.version }}
+          path: release_common
+
+      - name: Build manylinux package
+        id: build_package
+        run: |
+          chmod +x scripts/package-manylinux-2_28.sh
+          scripts/package-manylinux-2_28.sh "${{ needs.prepare.outputs.version }}"
+
+      - name: Upload manylinux package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-manylinux-2_28-${{ needs.prepare.outputs.version }}
+          path: ${{ steps.build_package.outputs.asset_path }}
+          retention-days: 1
+
+  package_manylinux_2_34:
+    needs: prepare
+    runs-on: ubuntu-latest
+    container: registry.access.redhat.com/ubi9/ubi:9.7
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download common files artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-common-${{ needs.prepare.outputs.version }}
+          path: release_common
+
+      - name: Build manylinux package
+        id: build_package
+        run: |
+          chmod +x scripts/package-manylinux-2_34.sh
+          scripts/package-manylinux-2_34.sh "${{ needs.prepare.outputs.version }}"
+
+      - name: Upload manylinux package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-manylinux-2_34-${{ needs.prepare.outputs.version }}
+          path: ${{ steps.build_package.outputs.asset_path }}
+          retention-days: 1
+
   release:
-    needs: [prepare, package_installer]
+    needs: [prepare, package_installer, package_manylinux_2_28, package_manylinux_2_34]
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -178,6 +232,18 @@ jobs:
           name: installer-${{ needs.prepare.outputs.version }}
           path: packages
 
+      - name: Download manylinux_2_28 package
+        uses: actions/download-artifact@v4
+        with:
+          name: package-manylinux-2_28-${{ needs.prepare.outputs.version }}
+          path: packages
+
+      - name: Download manylinux_2_34 package
+        uses: actions/download-artifact@v4
+        with:
+          name: package-manylinux-2_34-${{ needs.prepare.outputs.version }}
+          path: packages
+
       - name: Download release notes
         uses: actions/download-artifact@v4
         with:
@@ -187,12 +253,25 @@ jobs:
       - name: Find artifacts
         id: find_artifacts
         run: |
+          set -eo pipefail
           INSTALLER=$(find packages -name "*-installer.sh" -type f | head -1)
           if [ -z "$INSTALLER" ]; then
             echo "Error: Could not find installer artifact"
             exit 1
           fi
-          echo "installer=$INSTALLER" >> "$GITHUB_OUTPUT"
+
+          PKG_228=$(find packages -name "opd-mcp-*-manylinux_2_28*.zip" -type f | head -1)
+          PKG_234=$(find packages -name "opd-mcp-*-manylinux_2_34*.zip" -type f | head -1)
+          if [ -z "$PKG_228" ] || [ -z "$PKG_234" ]; then
+            echo "Error: Missing manylinux package artifacts"
+            exit 1
+          fi
+
+          {
+            echo "installer=$INSTALLER"
+            echo "package_228=$PKG_228"
+            echo "package_234=$PKG_234"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag
         env:
@@ -212,5 +291,7 @@ jobs:
           body_path: release-notes.md
           files: |
             ${{ steps.find_artifacts.outputs.installer }}
+            ${{ steps.find_artifacts.outputs.package_228 }}
+            ${{ steps.find_artifacts.outputs.package_234 }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

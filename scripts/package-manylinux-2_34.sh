@@ -5,7 +5,7 @@
 set -eo pipefail
 
 VERSION="${1:-dev}"
-CONTAINER_IMAGE="registry.access.redhat.com/ubi9/ubi:9.6"
+CONTAINER_IMAGE="registry.access.redhat.com/ubi9/ubi:9.7"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -59,18 +59,18 @@ shopt -s dotglob
 cp -r release_common/* "$PACKAGE_ROOT/"
 shopt -u dotglob
 
-# Download dependencies for RHEL 9.6 compatibility
-# We're running in UBI 9.6 container which uses glibc 2.34+, compatible with manylinux_2_34
+# Download dependencies for RHEL 9.7 compatibility
+# We're running in UBI 9.7 container which uses glibc 2.34+, compatible with manylinux_2_34
 # Strategy: Let pip automatically select compatible wheels for the current system
 # This avoids dependency resolution issues from strict platform constraints
 python3.11 -m pip install --upgrade pip
 
-echo "Downloading dependencies for RHEL 9.6 (manylinux_2_34 compatible)..."
+echo "Downloading dependencies for RHEL 9.7 (manylinux_2_34 compatible)..."
 
 # Create dependencies directory
 mkdir -p "$PACKAGE_ROOT/dependencies"
 
-# Strategy: Download compatible wheels for the current system (RHEL 9.6)
+# Strategy: Download compatible wheels for the current system (RHEL 9.7)
 # pip will automatically select wheels compatible with the current platform and Python version
 # This is simpler and more reliable than specifying platform constraints
 # We allow source distributions as fallback for packages without wheels
