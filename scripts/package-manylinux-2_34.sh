@@ -59,6 +59,19 @@ shopt -s dotglob
 cp -r release_common/* "$PACKAGE_ROOT/"
 shopt -u dotglob
 
+# Copy RHEL 9.7 constraints file when available to ensure pillow <11 and
+# llama-index compatibility. Fall back to minimal-constraints if missing.
+WORK_DIR="/workspace"
+[ ! -d "$WORK_DIR" ] && WORK_DIR="$PROJECT_ROOT"
+RHEL97_CONSTRAINTS="$WORK_DIR/scripts/rhel9.7-constraints.txt"
+if [ -f "$RHEL97_CONSTRAINTS" ]; then
+  cp "$RHEL97_CONSTRAINTS" "$PACKAGE_ROOT/rhel9.7-constraints.txt"
+  echo "Using RHEL 9.7 tested constraints file"
+else
+  echo "Warning: RHEL 9.7 constraints file not found at $RHEL97_CONSTRAINTS" >&2
+  echo "Falling back to minimal-constraints.txt" >&2
+fi
+
 # Download dependencies for RHEL 9.7 compatibility
 # We're running in UBI 9.7 container which uses glibc 2.34+, compatible with manylinux_2_34
 # Strategy: Let pip automatically select compatible wheels for the current system
@@ -75,29 +88,49 @@ mkdir -p "$PACKAGE_ROOT/dependencies"
 # This is simpler and more reliable than specifying platform constraints
 # We allow source distributions as fallback for packages without wheels
 
-# Try 1: Download with constraints (preferred for version consistency)
-echo "Attempting to download dependencies with constraints..."
+# Try 1: Download with RHEL 9.7 constraints (preferred for consistency)
+echo "Attempting to download dependencies with RHEL 9.7 constraints..."
 if python3.11 -m pip download \
   -r "$PACKAGE_ROOT/requirements.txt" \
-  -c "$PACKAGE_ROOT/minimal-constraints.txt" \
+  -c "$PACKAGE_ROOT/rhel9.7-constraints.txt" \
   -d "$PACKAGE_ROOT/dependencies" \
   --no-cache-dir \
   --disable-pip-version-check 2>&1; then
-  echo "✓ Successfully downloaded dependencies with constraints"
+  echo "✓ Successfully downloaded dependencies with RHEL 9.7 constraints"
 else
-  echo "✗ Failed with constraints, trying without constraints..."
-  
-  # Try 2: Download without constraints (allows pip to resolve dependencies more freely)
+  echo "✗ Failed with RHEL 9.7 constraints, trying minimal constraints..."
+
+  # Try 2: Download with minimal-constraints as a fallback
   if python3.11 -m pip download \
     -r "$PACKAGE_ROOT/requirements.txt" \
+    -c "$PACKAGE_ROOT/minimal-constraints.txt" \
     -d "$PACKAGE_ROOT/dependencies" \
     --no-cache-dir \
     --disable-pip-version-check 2>&1; then
-    echo "✓ Successfully downloaded dependencies without constraints"
+    echo "✓ Successfully downloaded dependencies with minimal constraints"
   else
-    echo "Error: Failed to download dependencies" >&2
-    exit 1
+    echo "✗ Failed with minimal constraints, trying without constraints..."
+
+    # Try 3: Download without constraints (allows pip to resolve freely)
+    if python3.11 -m pip download \
+      -r "$PACKAGE_ROOT/requirements.txt" \
+      -d "$PACKAGE_ROOT/dependencies" \
+      --no-cache-dir \
+      --disable-pip-version-check 2>&1; then
+      echo "✓ Successfully downloaded dependencies without constraints"
+    else
+      echo "Error: Failed to download dependencies" >&2
+      exit 1
+    fi
   fi
+fi
+
+# Show dependency inventory and fail fast if empty
+DEP_COUNT=$(find "$PACKAGE_ROOT/dependencies" -type f | wc -l)
+echo "Downloaded dependency files: $DEP_COUNT"
+if [ "$DEP_COUNT" -eq 0 ]; then
+  echo "Error: Dependencies directory is empty after download attempt" >&2
+  exit 1
 fi
 
 # Verify dependencies were downloaded

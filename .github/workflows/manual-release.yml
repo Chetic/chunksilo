@@ -12,6 +12,16 @@ on:
           - major
           - minor
           - patch
+      include_manylinux_2_28:
+        description: "Include manylinux_2_28 build"
+        required: true
+        default: true
+        type: boolean
+      include_manylinux_2_34:
+        description: "Include manylinux_2_34 build"
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -129,7 +139,7 @@ jobs:
           retention-days: 1
 
   package_installer:
-    needs: prepare
+    needs: [prepare, package_manylinux_2_28, package_manylinux_2_34]
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -148,10 +158,78 @@ jobs:
           # Ensure universal_config is also consistent if modified in prepare (though it's just a copy)
           cp release_common/universal_config.json .
 
+      - name: Download manylinux_2_28 package
+        if: ${{ inputs.include_manylinux_2_28 }}
+        uses: actions/download-artifact@v4
+        with:
+          name: package-manylinux-2_28-${{ needs.prepare.outputs.version }}
+          path: packages
+
+      - name: Download manylinux_2_34 package
+        if: ${{ inputs.include_manylinux_2_34 }}
+        uses: actions/download-artifact@v4
+        with:
+          name: package-manylinux-2_34-${{ needs.prepare.outputs.version }}
+          path: packages
+
+      - name: Select payload root
+        run: |
+          set -eo pipefail
+          PAYLOAD_ROOT=""
+
+          if [ "${{ inputs.include_manylinux_2_34 }}" = "true" ]; then
+            PKG_234=$(find packages -name "opd-mcp-*-manylinux_2_34*.zip" -type f | head -1)
+            if [ -n "$PKG_234" ]; then
+              echo "Using manylinux_2_34 package: $PKG_234"
+              unzip -q "$PKG_234" -d .
+              # package zip is built inside release_package_manylinux_2_34, so it may extract to either
+              # ./opd-mcp or ./release_package_manylinux_2_34/opd-mcp depending on zip root.
+              for CANDIDATE in "$(pwd)/release_package_manylinux_2_34/opd-mcp" "$(pwd)/opd-mcp"; do
+                if [ -d "$CANDIDATE" ]; then
+                  PAYLOAD_ROOT="$CANDIDATE"
+                  break
+                fi
+              done
+              DEP_COUNT=$(find "$PAYLOAD_ROOT/dependencies" -type f | wc -l)
+              echo "manylinux_2_34 dependencies: $DEP_COUNT files"
+              if [ "$DEP_COUNT" -eq 0 ]; then
+                echo "Error: manylinux_2_34 payload has no dependencies at $PAYLOAD_ROOT/dependencies" >&2
+                exit 1
+              fi
+            fi
+          fi
+
+          if [ -z "$PAYLOAD_ROOT" ] && [ "${{ inputs.include_manylinux_2_28 }}" = "true" ]; then
+            PKG_228=$(find packages -name "opd-mcp-*-manylinux_2_28*.zip" -type f | head -1)
+            if [ -n "$PKG_228" ]; then
+              echo "Using manylinux_2_28 package: $PKG_228"
+              unzip -q "$PKG_228" -d .
+              for CANDIDATE in "$(pwd)/release_package_manylinux_2_28/opd-mcp" "$(pwd)/opd-mcp"; do
+                if [ -d "$CANDIDATE" ]; then
+                  PAYLOAD_ROOT="$CANDIDATE"
+                  break
+                fi
+              done
+              DEP_COUNT=$(find "$PAYLOAD_ROOT/dependencies" -type f | wc -l)
+              echo "manylinux_2_28 dependencies: $DEP_COUNT files"
+              if [ "$DEP_COUNT" -eq 0 ]; then
+                echo "Error: manylinux_2_28 payload has no dependencies at $PAYLOAD_ROOT/dependencies" >&2
+                exit 1
+              fi
+            fi
+          fi
+
+          if [ -z "$PAYLOAD_ROOT" ]; then
+            echo "Error: No manylinux payload available for installer build" >&2
+            exit 1
+          fi
+
+          echo "PAYLOAD_ROOT=$PAYLOAD_ROOT" >> "$GITHUB_ENV"
+
       - name: Build Installer
         run: |
           chmod +x scripts/build_installer.sh
-          ./scripts/build_installer.sh
+          ./scripts/build_installer.sh "$PAYLOAD_ROOT"
           # Rename to include version
           mv build-output/opd-mcp-installer.sh build-output/opd-mcp-${{ needs.prepare.outputs.version }}-installer.sh
 
@@ -167,10 +245,15 @@ jobs:
     runs-on: ubuntu-latest
     container: registry.access.redhat.com/ubi8/ubi:8.10
     steps:
+      - name: include_manylinux_2_28 flag
+        run: echo "include_manylinux_2_28=${{ inputs.include_manylinux_2_28 }}"
+
       - name: Check out repository
+        if: ${{ inputs.include_manylinux_2_28 }}
         uses: actions/checkout@v4
 
       - name: Download common files artifact
+        if: ${{ inputs.include_manylinux_2_28 }}
         uses: actions/download-artifact@v4
         with:
           name: release-common-${{ needs.prepare.outputs.version }}
@@ -178,11 +261,13 @@ jobs:
 
       - name: Build manylinux package
         id: build_package
+        if: ${{ inputs.include_manylinux_2_28 }}
         run: |
           chmod +x scripts/package-manylinux-2_28.sh
           scripts/package-manylinux-2_28.sh "${{ needs.prepare.outputs.version }}"
 
       - name: Upload manylinux package artifact
+        if: ${{ inputs.include_manylinux_2_28 }}
         uses: actions/upload-artifact@v4
         with:
           name: package-manylinux-2_28-${{ needs.prepare.outputs.version }}
@@ -194,10 +279,15 @@ jobs:
     runs-on: ubuntu-latest
     container: registry.access.redhat.com/ubi9/ubi:9.7
     steps:
+      - name: include_manylinux_2_34 flag
+        run: echo "include_manylinux_2_34=${{ inputs.include_manylinux_2_34 }}"
+
       - name: Check out repository
+        if: ${{ inputs.include_manylinux_2_34 }}
         uses: actions/checkout@v4
 
       - name: Download common files artifact
+        if: ${{ inputs.include_manylinux_2_34 }}
         uses: actions/download-artifact@v4
         with:
           name: release-common-${{ needs.prepare.outputs.version }}
@@ -205,11 +295,13 @@ jobs:
 
       - name: Build manylinux package
         id: build_package
+        if: ${{ inputs.include_manylinux_2_34 }}
         run: |
           chmod +x scripts/package-manylinux-2_34.sh
           scripts/package-manylinux-2_34.sh "${{ needs.prepare.outputs.version }}"
 
       - name: Upload manylinux package artifact
+        if: ${{ inputs.include_manylinux_2_34 }}
         uses: actions/upload-artifact@v4
         with:
           name: package-manylinux-2_34-${{ needs.prepare.outputs.version }}
@@ -234,12 +326,14 @@ jobs:
 
       - name: Download manylinux_2_28 package
         uses: actions/download-artifact@v4
+        if: ${{ inputs.include_manylinux_2_28 }}
         with:
           name: package-manylinux-2_28-${{ needs.prepare.outputs.version }}
           path: packages
 
       - name: Download manylinux_2_34 package
         uses: actions/download-artifact@v4
+        if: ${{ inputs.include_manylinux_2_34 }}
         with:
           name: package-manylinux-2_34-${{ needs.prepare.outputs.version }}
           path: packages
@@ -260,18 +354,35 @@ jobs:
             exit 1
           fi
 
-          PKG_228=$(find packages -name "opd-mcp-*-manylinux_2_28*.zip" -type f | head -1)
-          PKG_234=$(find packages -name "opd-mcp-*-manylinux_2_34*.zip" -type f | head -1)
-          if [ -z "$PKG_228" ] || [ -z "$PKG_234" ]; then
-            echo "Error: Missing manylinux package artifacts"
+          FILES="$INSTALLER"
+
+          if [[ "${{ inputs.include_manylinux_2_28 }}" == "true" ]]; then
+            PKG_228=$(find packages -name "opd-mcp-*-manylinux_2_28*.zip" -type f | head -1)
+            if [ -z "$PKG_228" ]; then
+              echo "Error: Missing manylinux_2_28 package artifact"
+              exit 1
+            fi
+            FILES+=$'\n'"$PKG_228"
+            echo "package_228=$PKG_228" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [[ "${{ inputs.include_manylinux_2_34 }}" == "true" ]]; then
+            PKG_234=$(find packages -name "opd-mcp-*-manylinux_2_34*.zip" -type f | head -1)
+            if [ -z "$PKG_234" ]; then
+              echo "Error: Missing manylinux_2_34 package artifact"
+              exit 1
+            fi
+            FILES+=$'\n'"$PKG_234"
+            echo "package_234=$PKG_234" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [[ -z "$FILES" ]] || [[ "$FILES" == "$INSTALLER" && "${{ inputs.include_manylinux_2_28 }}" != "true" && "${{ inputs.include_manylinux_2_34 }}" != "true" ]]; then
+            echo "Error: No manylinux builds were selected"
             exit 1
           fi
 
-          {
-            echo "installer=$INSTALLER"
-            echo "package_228=$PKG_228"
-            echo "package_234=$PKG_234"
-          } >> "$GITHUB_OUTPUT"
+          echo "installer=$INSTALLER" >> "$GITHUB_OUTPUT"
+          printf 'files<<EOF\n%s\nEOF\n' "$FILES" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag
         env:
@@ -289,9 +400,6 @@ jobs:
           tag_name: v${{ needs.prepare.outputs.version }}
           name: Release v${{ needs.prepare.outputs.version }}
           body_path: release-notes.md
-          files: |
-            ${{ steps.find_artifacts.outputs.installer }}
-            ${{ steps.find_artifacts.outputs.package_228 }}
-            ${{ steps.find_artifacts.outputs.package_234 }}
+          files: ${{ steps.find_artifacts.outputs.files }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

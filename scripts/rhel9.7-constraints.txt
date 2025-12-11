@@ -1,6 +1,6 @@
-# RHEL 8.10 compatible package versions
-# These versions have been tested and work on RHEL 8.10 (manylinux_2_28)
-# Generated from working pip freeze output on RHEL 8.10
+# RHEL 9.7 compatible package versions (manylinux_2_34)
+# These versions were validated on glibc 2.34+ and keep pillow <11 to
+# satisfy llama-index and confluence reader compatibility.
 aiohappyeyeballs==2.6.1
 aiohttp==3.13.2
 aiosignal==1.4.0
