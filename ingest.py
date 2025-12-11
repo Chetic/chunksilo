@@ -23,7 +23,6 @@ if "--offline" in sys.argv:
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     os.environ["HF_DATASETS_OFFLINE"] = "1"
 
-from dotenv import load_dotenv
 from docx import Document
 
 from llama_index.core import (
@@ -38,7 +37,6 @@ from llama_index.core.node_parser import SentenceSplitter
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
 # Load environment variables
-load_dotenv()
 
 # Configuration
 DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))

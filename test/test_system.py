@@ -2,8 +2,8 @@
 """Pytest-based test script for the RAG system."""
 import sys
 from pathlib import Path
-from dotenv import load_dotenv
 import pytest
+import asyncio
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -11,7 +11,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from ingest import DATA_DIR, build_index
 from mcp_server import STORAGE_DIR, load_llamaindex_index
 
-load_dotenv()
 
 
 def test_ingestion():
@@ -66,5 +65,5 @@ def test_query():
             if "retrieval_time" in result:
                 print(f"Retrieval time: {result['retrieval_time']}")
 
-    _run_queries()
+    asyncio.run(_run_queries())
 

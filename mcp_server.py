@@ -4,10 +4,11 @@ MCP server for querying documentation using RAG.
 Returns raw document chunks for the calling LLM to synthesize.
 """
 import os
+import sys
 import time
+import sqlite3
 from pathlib import Path
 from typing import Any
-from dotenv import load_dotenv
 
 from mcp.server.fastmcp import FastMCP
 from llama_index.core import StorageContext, load_index_from_storage, Settings
@@ -22,10 +23,15 @@ import asyncio
 import logging
 
 # Set up logging
+# Set up logging to stderr
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stderr
+)
 logger = logging.getLogger(__name__)
 
 # Load environment variables
-load_dotenv()
 
 # Configuration
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "./storage"))
@@ -72,6 +78,57 @@ mcp = FastMCP("llamaindex-docs-rag")
 _index_cache = None
 _embed_model_initialized = False
 _reranker_model = None
+
+
+
+def log_server_config():
+    """Log server configuration for debugging (masking secrets)."""
+    logger.info("Starting MCP Server...")
+    logger.info(f"Storage Directory: {STORAGE_DIR.resolve()} (Exists: {STORAGE_DIR.exists()})")
+    logger.info(f"Embedding Model: {RETRIEVAL_EMBED_MODEL_NAME}")
+    logger.info(f"Rerank Model: {RETRIEVAL_RERANK_MODEL_NAME}")
+    logger.info(f"Offline Mode: {_offline_mode}")
+    
+    # Log indexed document stats
+    db_path = STORAGE_DIR / "ingestion_state.db"
+    if db_path.exists():
+        try:
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.execute("SELECT path, doc_ids FROM files")
+                files = cursor.fetchall()
+                file_count = len(files)
+                total_chunks = sum(len(row[1].split(",")) if row[1] else 0 for row in files)
+                logger.info(f"Indexed Documents: {file_count} files ({total_chunks} chunks)")
+        except Exception as e:
+            logger.warning(f"Failed to read ingestion state: {e}")
+    else:
+        logger.info("Indexed Documents: 0 (No ingestion state found)")
+
+    # Log Confluence status
+    confluence_url = os.getenv("CONFLUENCE_URL")
+    if confluence_url:
+        logger.info(f"Confluence Integration: ENABLED (URL: {confluence_url})")
+        if ConfluenceReader:
+            try:
+                username = os.getenv("CONFLUENCE_USERNAME")
+                api_token = os.getenv("CONFLUENCE_API_TOKEN")
+                if username and api_token:
+                    # Attempt a lightweight connection check
+                    # We'll try to instantiate the reader. Some versions might validate on init.
+                    # If not, we might need a real call, but that could be slow.
+                    # For now, let's trust that if creds are there, we just log that we HAVE them.
+                    # The user asked to "log if there are problems with the confluence connection".
+                    # Let's try a very simple query if possible, or just catch init errors.
+                    reader = ConfluenceReader(base_url=confluence_url, user_name=username, password_token=api_token)
+                    logger.info("Confluence Connection: Credentials provided, reader initialized.")
+                else:
+                    logger.warning("Confluence Configuration: Missing USERNAME or API_TOKEN")
+            except Exception as e:
+                logger.error(f"Confluence Connection Failed: {e}")
+        else:
+            logger.warning("Confluence Integration: Skipped (Library not installed)")
+    else:
+        logger.info("Confluence Integration: DISABLED (CONFLUENCE_URL not set)")
 
 
 def _build_heading_path(headings: list[dict], char_start: int | None) -> tuple[str | None, list[str]]:
@@ -194,6 +251,7 @@ def _ensure_embed_model():
         RETRIEVAL_MODEL_CACHE_DIR, RETRIEVAL_EMBED_MODEL_NAME
     )
     if cached_model_path and _offline_mode:
+        logger.info(f"Loading embedding model from cache: {cached_model_path}")
         # Use specific_model_path to bypass fastembed's download_model API call
         embed_model = FastEmbedEmbedding(
             model_name=RETRIEVAL_EMBED_MODEL_NAME,
@@ -206,6 +264,7 @@ def _ensure_embed_model():
             model_name=RETRIEVAL_EMBED_MODEL_NAME,
             cache_dir=str(RETRIEVAL_MODEL_CACHE_DIR),
         )
+    logger.info("Embedding model initialized successfully")
     Settings.embed_model = embed_model
     _embed_model_initialized = True
 
@@ -258,6 +317,7 @@ def _ensure_reranker():
             ) from exc
         raise
     
+    logger.info(f"Rerank model '{model_name}' loaded successfully")
     return _reranker_model
 
 
@@ -331,7 +391,7 @@ def _search_confluence(query: str) -> list[NodeWithScore]:
         return nodes
 
     except Exception as e:
-        logger.warning(f"Failed to search Confluence: {e}")
+        logger.error(f"Failed to search Confluence: {e}", exc_info=True)
         return []
 
 
@@ -347,6 +407,8 @@ def load_llamaindex_index():
             f"Storage directory {STORAGE_DIR} does not exist. "
             "Please run ingest.py first."
         )
+    
+    logger.info("Loading LlamaIndex from storage...")
 
     # Make sure the embedding model is configured before using the index so that
     # query embeddings use the same model as ingestion (FastEmbed, not OpenAI).
@@ -398,6 +460,8 @@ Following these steps is **mandatory** for a complete, trustworthy response.
     start_time = time.time()
     
     try:
+        logger.info(f"Processing retrieve_docs query: {query}")
+        
         # Preprocess query to improve retrieval quality
         enhanced_query = _preprocess_query(query)
         
@@ -613,6 +677,7 @@ Following these steps is **mandatory** for a complete, trustworthy response.
         }
         
     except Exception as e:
+        logger.error(f"Error in retrieve_docs: {e}", exc_info=True)
         return {
             "chunks": [],
             "error": str(e),
@@ -621,5 +686,6 @@ Following these steps is **mandatory** for a complete, trustworthy response.
 
 
 if __name__ == "__main__":
+    log_server_config()
     mcp.run()
 
