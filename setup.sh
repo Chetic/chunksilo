@@ -268,7 +268,7 @@ if [ "$TOOL" != "none" ]; then
              if [ "$TOOL" == "cline" ]; then
                  EXT_ID="saoudrizwan.claude-dev"
              elif [ "$TOOL" == "roo" ]; then
-                 EXT_ID="rooveterinary.roo-cline"
+                 EXT_ID="rooveterinaryinc.roo-cline"
              fi
              
              if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -327,6 +327,9 @@ DEP_DIR="$INSTALL_DIR/dependencies"
 if [ ! -d "$DEP_DIR" ] || [ -z "$(ls -A "$DEP_DIR" 2>/dev/null)" ]; then
     die "Packaged dependencies not found. Please use the packaged installer build that includes wheels."
 fi
+
+# Install wheel first to handle legacy setup.py builds
+./venv/bin/pip install --no-index --find-links "$DEP_DIR" --no-cache-dir wheel
 
 ./venv/bin/pip install --no-index --find-links "$DEP_DIR" --no-cache-dir -r requirements.txt
 

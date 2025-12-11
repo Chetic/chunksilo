@@ -10,3 +10,4 @@ python-dotenv>=1.0.0
 huggingface-hub>=0.22.0
 flashrank>=0.1.0
 fastembed
+wheel
