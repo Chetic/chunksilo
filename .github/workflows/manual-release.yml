@@ -25,6 +25,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   prepare:
@@ -290,15 +291,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Delete previous releases
+      - name: Delete previous releases and artifacts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CURRENT_TAG: v${{ needs.prepare.outputs.version }}
         run: |
           set -eo pipefail
+          
+          echo "Deleting previous releases (keeping tags)..."
           gh release list --limit 100 --json tagName --jq '.[] | .tagName' | while read -r TAG; do
             if [ "$TAG" != "$CURRENT_TAG" ]; then
               echo "Deleting release $TAG"
               gh release delete "$TAG" --yes
             fi
+          done
+
+          echo "Deleting Actions Artifacts..."
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts" --paginate -q '.artifacts[].id' | while read -r ARTIFACT_ID; do
+            echo "Deleting artifact $ARTIFACT_ID"
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID" -X DELETE
           done
