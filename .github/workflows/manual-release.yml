@@ -172,72 +172,86 @@ jobs:
           name: package-manylinux-2_34-${{ needs.prepare.outputs.version }}
           path: packages
 
-      - name: Select payload root
+      - name: Build installers
         run: |
           set -eo pipefail
-          PAYLOAD_ROOT=""
+          
+          build_installer_from_zip() {
+            local zipfile="$1"
+            local suffix="$2"
+            local temp_dir=$(mktemp -d)
+
+            # Extract to temporary directory to avoid conflicts
+            unzip -q "$zipfile" -d "$temp_dir"
+            local payload_root=""
+            for CANDIDATE in "$temp_dir/release_package_manylinux_${suffix}/opd-mcp" "$temp_dir/opd-mcp"; do
+              if [ -d "$CANDIDATE" ]; then
+                payload_root="$CANDIDATE"
+                break
+              fi
+            done
+            if [ -z "$payload_root" ]; then
+              echo "Error: unable to locate payload root for manylinux_${suffix}" >&2
+              rm -rf "$temp_dir"
+              exit 1
+            fi
+
+            local dep_count
+            dep_count=$(find "$payload_root/dependencies" -type f | wc -l)
+            echo "manylinux_${suffix} dependencies: $dep_count files"
+            if [ "$dep_count" -eq 0 ]; then
+              echo "Error: manylinux_${suffix} payload has no dependencies at $payload_root/dependencies" >&2
+              rm -rf "$temp_dir"
+              exit 1
+            fi
+
+            chmod +x scripts/build_installer.sh
+            ./scripts/build_installer.sh "$payload_root"
+            mv build-output/opd-mcp-installer.sh "build-output/opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_${suffix}-installer.sh"
+            
+            # Clean up temporary directory
+            rm -rf "$temp_dir"
+          }
+
+          BUILT=false
 
           if [ "${{ inputs.include_manylinux_2_34 }}" = "true" ]; then
             PKG_234=$(find packages -name "opd-mcp-*-manylinux_2_34*.zip" -type f | head -1)
             if [ -n "$PKG_234" ]; then
-              echo "Using manylinux_2_34 package: $PKG_234"
-              unzip -q "$PKG_234" -d .
-              # package zip is built inside release_package_manylinux_2_34, so it may extract to either
-              # ./opd-mcp or ./release_package_manylinux_2_34/opd-mcp depending on zip root.
-              for CANDIDATE in "$(pwd)/release_package_manylinux_2_34/opd-mcp" "$(pwd)/opd-mcp"; do
-                if [ -d "$CANDIDATE" ]; then
-                  PAYLOAD_ROOT="$CANDIDATE"
-                  break
-                fi
-              done
-              DEP_COUNT=$(find "$PAYLOAD_ROOT/dependencies" -type f | wc -l)
-              echo "manylinux_2_34 dependencies: $DEP_COUNT files"
-              if [ "$DEP_COUNT" -eq 0 ]; then
-                echo "Error: manylinux_2_34 payload has no dependencies at $PAYLOAD_ROOT/dependencies" >&2
-                exit 1
-              fi
+              echo "Building installer from manylinux_2_34 package: $PKG_234"
+              build_installer_from_zip "$PKG_234" "2_34"
+              BUILT=true
             fi
           fi
 
-          if [ -z "$PAYLOAD_ROOT" ] && [ "${{ inputs.include_manylinux_2_28 }}" = "true" ]; then
+          if [ "${{ inputs.include_manylinux_2_28 }}" = "true" ]; then
             PKG_228=$(find packages -name "opd-mcp-*-manylinux_2_28*.zip" -type f | head -1)
             if [ -n "$PKG_228" ]; then
-              echo "Using manylinux_2_28 package: $PKG_228"
-              unzip -q "$PKG_228" -d .
-              for CANDIDATE in "$(pwd)/release_package_manylinux_2_28/opd-mcp" "$(pwd)/opd-mcp"; do
-                if [ -d "$CANDIDATE" ]; then
-                  PAYLOAD_ROOT="$CANDIDATE"
-                  break
-                fi
-              done
-              DEP_COUNT=$(find "$PAYLOAD_ROOT/dependencies" -type f | wc -l)
-              echo "manylinux_2_28 dependencies: $DEP_COUNT files"
-              if [ "$DEP_COUNT" -eq 0 ]; then
-                echo "Error: manylinux_2_28 payload has no dependencies at $PAYLOAD_ROOT/dependencies" >&2
-                exit 1
-              fi
+              echo "Building installer from manylinux_2_28 package: $PKG_228"
+              build_installer_from_zip "$PKG_228" "2_28"
+              BUILT=true
             fi
           fi
 
-          if [ -z "$PAYLOAD_ROOT" ]; then
+          if [ "$BUILT" = false ]; then
             echo "Error: No manylinux payload available for installer build" >&2
             exit 1
           fi
 
-          echo "PAYLOAD_ROOT=$PAYLOAD_ROOT" >> "$GITHUB_ENV"
-
-      - name: Build Installer
-        run: |
-          chmod +x scripts/build_installer.sh
-          ./scripts/build_installer.sh "$PAYLOAD_ROOT"
-          # Rename to include version
-          mv build-output/opd-mcp-installer.sh build-output/opd-mcp-${{ needs.prepare.outputs.version }}-installer.sh
-
-      - name: Upload installer artifact
+      - name: Upload manylinux_2_34 installer artifact
+        if: ${{ inputs.include_manylinux_2_34 }}
         uses: actions/upload-artifact@v4
         with:
-          name: installer-${{ needs.prepare.outputs.version }}
-          path: build-output/opd-mcp-${{ needs.prepare.outputs.version }}-installer.sh
+          name: installer-manylinux_2_34-${{ needs.prepare.outputs.version }}
+          path: build-output/opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_34-installer.sh
+          retention-days: 1
+
+      - name: Upload manylinux_2_28 installer artifact
+        if: ${{ inputs.include_manylinux_2_28 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-manylinux_2_28-${{ needs.prepare.outputs.version }}
+          path: build-output/opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_28-installer.sh
           retention-days: 1
 
   package_manylinux_2_28:
@@ -318,10 +332,18 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Download installer artifact
+      - name: Download manylinux_2_34 installer artifact
+        if: ${{ inputs.include_manylinux_2_34 }}
         uses: actions/download-artifact@v4
         with:
-          name: installer-${{ needs.prepare.outputs.version }}
+          name: installer-manylinux_2_34-${{ needs.prepare.outputs.version }}
+          path: packages
+
+      - name: Download manylinux_2_28 installer artifact
+        if: ${{ inputs.include_manylinux_2_28 }}
+        uses: actions/download-artifact@v4
+        with:
+          name: installer-manylinux_2_28-${{ needs.prepare.outputs.version }}
           path: packages
 
       - name: Download manylinux_2_28 package
@@ -348,40 +370,38 @@ jobs:
         id: find_artifacts
         run: |
           set -eo pipefail
-          INSTALLER=$(find packages -name "*-installer.sh" -type f | head -1)
-          if [ -z "$INSTALLER" ]; then
-            echo "Error: Could not find installer artifact"
-            exit 1
-          fi
-
-          FILES="$INSTALLER"
-
-          if [[ "${{ inputs.include_manylinux_2_28 }}" == "true" ]]; then
-            PKG_228=$(find packages -name "opd-mcp-*-manylinux_2_28*.zip" -type f | head -1)
-            if [ -z "$PKG_228" ]; then
-              echo "Error: Missing manylinux_2_28 package artifact"
-              exit 1
-            fi
-            FILES+=$'\n'"$PKG_228"
-            echo "package_228=$PKG_228" >> "$GITHUB_OUTPUT"
-          fi
+          FILES=""
 
           if [[ "${{ inputs.include_manylinux_2_34 }}" == "true" ]]; then
+            INST_234=$(find packages -name "opd-mcp-*-manylinux_2_34-installer.sh" -type f | head -1)
             PKG_234=$(find packages -name "opd-mcp-*-manylinux_2_34*.zip" -type f | head -1)
-            if [ -z "$PKG_234" ]; then
-              echo "Error: Missing manylinux_2_34 package artifact"
+            if [ -z "$INST_234" ] || [ -z "$PKG_234" ]; then
+              echo "Error: Missing manylinux_2_34 artifacts" >&2
               exit 1
             fi
-            FILES+=$'\n'"$PKG_234"
+            FILES+="$INST_234"$'\n'"$PKG_234"
+            echo "installer_234=$INST_234" >> "$GITHUB_OUTPUT"
             echo "package_234=$PKG_234" >> "$GITHUB_OUTPUT"
           fi
 
-          if [[ -z "$FILES" ]] || [[ "$FILES" == "$INSTALLER" && "${{ inputs.include_manylinux_2_28 }}" != "true" && "${{ inputs.include_manylinux_2_34 }}" != "true" ]]; then
-            echo "Error: No manylinux builds were selected"
+          if [[ "${{ inputs.include_manylinux_2_28 }}" == "true" ]]; then
+            INST_228=$(find packages -name "opd-mcp-*-manylinux_2_28-installer.sh" -type f | head -1)
+            PKG_228=$(find packages -name "opd-mcp-*-manylinux_2_28*.zip" -type f | head -1)
+            if [ -z "$INST_228" ] || [ -z "$PKG_228" ]; then
+              echo "Error: Missing manylinux_2_28 artifacts" >&2
+              exit 1
+            fi
+            if [ -n "$FILES" ]; then FILES+=$'\n'; fi
+            FILES+="$INST_228"$'\n'"$PKG_228"
+            echo "installer_228=$INST_228" >> "$GITHUB_OUTPUT"
+            echo "package_228=$PKG_228" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [[ -z "$FILES" ]]; then
+            echo "Error: No artifacts to release" >&2
             exit 1
           fi
 
-          echo "installer=$INSTALLER" >> "$GITHUB_OUTPUT"
           printf 'files<<EOF\n%s\nEOF\n' "$FILES" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag
