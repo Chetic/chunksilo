@@ -295,7 +295,7 @@ echo "Copying files..."
 # Since we are creating a single-file installer, this script will be extracted along with the data.
 # Files to copy are in PWD (the extracted dir).
 
-FILES=("mcp_server.py" "ingest.py" "requirements.txt" "universal_config.json" "scripts" "data" "storage" "models" "release_common")
+FILES=("mcp_server.py" "ingest.py" "requirements.txt" "universal_config.json" "scripts" "dependencies" "data" "storage" "models" "release_common")
 
 for item in "${FILES[@]}"; do
     if [ -e "./$item" ]; then
@@ -305,6 +305,9 @@ for item in "${FILES[@]}"; do
         if [[ "$item" == "data" || "$item" == "storage" || "$item" == "models" ]]; then
              mkdir -p "$INSTALL_DIR/$item"
              cp -rn "./$item/"* "$INSTALL_DIR/$item/" 2>/dev/null || true
+        elif [ "$item" == "dependencies" ]; then
+             rm -rf "$INSTALL_DIR/$item"
+             cp -r "./$item" "$INSTALL_DIR/"
         else
              cp -r "./$item" "$INSTALL_DIR/"
         fi
@@ -319,7 +322,13 @@ if [ ! -d "venv" ]; then
 fi
 
 echo "Installing dependencies..."
-./venv/bin/pip install -r requirements.txt
+DEP_DIR="$INSTALL_DIR/dependencies"
+
+if [ ! -d "$DEP_DIR" ] || [ -z "$(ls -A "$DEP_DIR" 2>/dev/null)" ]; then
+    die "Packaged dependencies not found. Please use the packaged installer build that includes wheels."
+fi
+
+./venv/bin/pip install --no-index --find-links "$DEP_DIR" --no-cache-dir -r requirements.txt
 
 echo "Installation complete!"
 echo "MCP Server installed at: $INSTALL_DIR"

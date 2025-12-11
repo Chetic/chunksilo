@@ -6,15 +6,36 @@ set -e
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(dirname "$SCRIPT_DIR")
 BUILD_DIR="$REPO_ROOT/build-output"
+PAYLOAD_ROOT="${1:-}"
 ARTIFACT_NAME="opd-mcp-installer.sh"
 
 mkdir -p "$BUILD_DIR"
 
 echo "Building installer..."
 
-# Create a zip of the repo contents, excluding git and other non-essentials
-# We cd to repo root to keep paths clean
-cd "$REPO_ROOT"
+# Pick a payload root that already contains pre-downloaded wheels so the
+# installer remains fully offline.
+if [ -z "$PAYLOAD_ROOT" ]; then
+    if [ -d "$REPO_ROOT/release_package_manylinux_2_34/opd-mcp" ]; then
+        PAYLOAD_ROOT="$REPO_ROOT/release_package_manylinux_2_34/opd-mcp"
+    elif [ -d "$REPO_ROOT/release_package_manylinux_2_28/opd-mcp" ]; then
+        PAYLOAD_ROOT="$REPO_ROOT/release_package_manylinux_2_28/opd-mcp"
+    else
+        PAYLOAD_ROOT="$REPO_ROOT"
+    fi
+fi
+
+if [ ! -d "$PAYLOAD_ROOT/dependencies" ] || [ -z "$(ls -A "$PAYLOAD_ROOT/dependencies" 2>/dev/null)" ]; then
+    echo "Error: no packaged dependencies found at $PAYLOAD_ROOT/dependencies."
+    echo "Run the manylinux packaging scripts first (build-all.sh/package-manylinux-2_34.sh or 2_28.sh) so wheels are included."
+    exit 1
+fi
+
+echo "Using payload root: $PAYLOAD_ROOT"
+
+# Create a zip of the payload contents, excluding git and other non-essentials
+# We cd to payload root to keep paths clean
+cd "$PAYLOAD_ROOT"
 
 # Ensure zip is not included in itself if we rerun
 rm -f "$BUILD_DIR/payload.zip"

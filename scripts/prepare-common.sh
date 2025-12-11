@@ -34,6 +34,11 @@ cp requirements.txt "$COMMON_ROOT/"
 cp README.md "$COMMON_ROOT/"
 cp env.template "$COMMON_ROOT/"
 cp universal_config.json "$COMMON_ROOT/"
+# The installer runs setup.sh and needs generate_configs.py; include them so the
+# packaged artifacts remain fully offline and self-contained.
+cp setup.sh "$COMMON_ROOT/"
+mkdir -p "$COMMON_ROOT/scripts"
+cp scripts/generate_configs.py "$COMMON_ROOT/scripts/"
 
 echo "$VERSION" > "$COMMON_ROOT/VERSION"
 
