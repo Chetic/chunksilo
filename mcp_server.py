@@ -10,7 +10,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Context
 from llama_index.core import StorageContext, load_index_from_storage, Settings
 from llama_index.core.schema import TextNode, NodeWithScore
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
@@ -23,12 +23,7 @@ import asyncio
 import logging
 
 # Set up logging
-# Set up logging to stderr
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    stream=sys.stderr
-)
+# We primarily use MCP logging context, but keep a stderr logger for unhandled/startup issues
 logger = logging.getLogger(__name__)
 
 # Load environment variables
@@ -80,14 +75,20 @@ _embed_model_initialized = False
 _reranker_model = None
 
 
+# Startup log buffer - populated at module load, flushed on first list_tools call
+_startup_log_buffer: list[str] = []
+_startup_logs_flushed = False
 
-def log_server_config():
-    """Log server configuration for debugging (masking secrets)."""
-    logger.info("Starting MCP Server...")
-    logger.info(f"Storage Directory: {STORAGE_DIR.resolve()} (Exists: {STORAGE_DIR.exists()})")
-    logger.info(f"Embedding Model: {RETRIEVAL_EMBED_MODEL_NAME}")
-    logger.info(f"Rerank Model: {RETRIEVAL_RERANK_MODEL_NAME}")
-    logger.info(f"Offline Mode: {_offline_mode}")
+
+def _collect_startup_info():
+    """Collect startup configuration info into the buffer."""
+    global _startup_log_buffer
+    _startup_log_buffer.append("MCP Server Startup")
+    _startup_log_buffer.append("==================")
+    _startup_log_buffer.append(f"Storage Directory: {STORAGE_DIR.resolve()} (Exists: {STORAGE_DIR.exists()})")
+    _startup_log_buffer.append(f"Embedding Model: {RETRIEVAL_EMBED_MODEL_NAME}")
+    _startup_log_buffer.append(f"Rerank Model: {RETRIEVAL_RERANK_MODEL_NAME}")
+    _startup_log_buffer.append(f"Offline Mode: {_offline_mode}")
     
     # Log indexed document stats
     db_path = STORAGE_DIR / "ingestion_state.db"
@@ -98,37 +99,64 @@ def log_server_config():
                 files = cursor.fetchall()
                 file_count = len(files)
                 total_chunks = sum(len(row[1].split(",")) if row[1] else 0 for row in files)
-                logger.info(f"Indexed Documents: {file_count} files ({total_chunks} chunks)")
+                _startup_log_buffer.append(f"Indexed Documents: {file_count} files ({total_chunks} chunks)")
         except Exception as e:
-            logger.warning(f"Failed to read ingestion state: {e}")
+            _startup_log_buffer.append(f"Failed to read ingestion state: {e}")
     else:
-        logger.info("Indexed Documents: 0 (No ingestion state found)")
+        _startup_log_buffer.append("Indexed Documents: 0 (No ingestion state found)")
 
     # Log Confluence status
     confluence_url = os.getenv("CONFLUENCE_URL")
     if confluence_url:
-        logger.info(f"Confluence Integration: ENABLED (URL: {confluence_url})")
+        _startup_log_buffer.append(f"Confluence Integration: ENABLED (URL: {confluence_url})")
         if ConfluenceReader:
             try:
                 username = os.getenv("CONFLUENCE_USERNAME")
                 api_token = os.getenv("CONFLUENCE_API_TOKEN")
                 if username and api_token:
-                    # Attempt a lightweight connection check
-                    # We'll try to instantiate the reader. Some versions might validate on init.
-                    # If not, we might need a real call, but that could be slow.
-                    # For now, let's trust that if creds are there, we just log that we HAVE them.
-                    # The user asked to "log if there are problems with the confluence connection".
-                    # Let's try a very simple query if possible, or just catch init errors.
                     reader = ConfluenceReader(base_url=confluence_url, user_name=username, password_token=api_token)
-                    logger.info("Confluence Connection: Credentials provided, reader initialized.")
+                    _startup_log_buffer.append("Confluence Connection: Credentials provided, reader initialized.")
                 else:
-                    logger.warning("Confluence Configuration: Missing USERNAME or API_TOKEN")
+                    _startup_log_buffer.append("Confluence Configuration: Missing USERNAME or API_TOKEN")
             except Exception as e:
-                logger.error(f"Confluence Connection Failed: {e}")
+                _startup_log_buffer.append(f"Confluence Connection Failed: {e}")
         else:
-            logger.warning("Confluence Integration: Skipped (Library not installed)")
+            _startup_log_buffer.append("Confluence Integration: Skipped (Library not installed)")
     else:
-        logger.info("Confluence Integration: DISABLED (CONFLUENCE_URL not set)")
+        _startup_log_buffer.append("Confluence Integration: DISABLED (CONFLUENCE_URL not set)")
+
+
+# Collect startup info at module load
+_collect_startup_info()
+
+
+# Wrap list_tools to flush startup logs on first client connection
+_original_list_tools = mcp.list_tools
+
+
+async def _wrapped_list_tools():
+    """Wrapper that flushes startup logs on first list_tools call."""
+    global _startup_logs_flushed
+    
+    # Flush buffered startup logs on first call
+    if not _startup_logs_flushed and _startup_log_buffer:
+        _startup_logs_flushed = True
+        try:
+            ctx = mcp.get_context()
+            for msg in _startup_log_buffer:
+                await ctx.info(msg)
+        except Exception as e:
+            # Fallback to stderr if context not available
+            logger.warning(f"Could not flush startup logs via MCP: {e}")
+            for msg in _startup_log_buffer:
+                logger.info(msg)
+    
+    # Call original list_tools
+    return await _original_list_tools()
+
+
+# Replace the list_tools handler
+mcp._mcp_server.list_tools()(_wrapped_list_tools)
 
 
 def _build_heading_path(headings: list[dict], char_start: int | None) -> tuple[str | None, list[str]]:
@@ -460,7 +488,11 @@ Following these steps is **mandatory** for a complete, trustworthy response.
     start_time = time.time()
     
     try:
-        logger.info(f"Processing retrieve_docs query: {query}")
+        try:
+            ctx = mcp.get_context()
+            await ctx.info(f"Processing retrieve_docs query: {query}")
+        except Exception:
+            logger.info(f"Processing retrieve_docs query: {query}")
         
         # Preprocess query to improve retrieval quality
         enhanced_query = _preprocess_query(query)
@@ -488,9 +520,19 @@ Following these steps is **mandatory** for a complete, trustworthy response.
                  if result:
                      confluence_nodes = result
             except asyncio.TimeoutError:
-                 logger.warning(f"Confluence search timed out after {CONFLUENCE_TIMEOUT}s")
+                 msg = f"Confluence search timed out after {CONFLUENCE_TIMEOUT}s"
+                 try:
+                     ctx = mcp.get_context()
+                     await ctx.warning(msg)
+                 except Exception:
+                     logger.warning(msg)
             except Exception as e:
-                 logger.error(f"Error during Confluence search: {e}")
+                 msg = f"Error during Confluence search: {e}"
+                 try:
+                     ctx = mcp.get_context()
+                     await ctx.error(msg)
+                 except Exception:
+                     logger.error(msg)
 
         if confluence_nodes:
              nodes.extend(confluence_nodes)
@@ -686,6 +728,5 @@ Following these steps is **mandatory** for a complete, trustworthy response.
 
 
 if __name__ == "__main__":
-    log_server_config()
     mcp.run()
 

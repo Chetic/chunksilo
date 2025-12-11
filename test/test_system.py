@@ -65,5 +65,23 @@ def test_query():
             if "retrieval_time" in result:
                 print(f"Retrieval time: {result['retrieval_time']}")
 
+
     asyncio.run(_run_queries())
 
+
+def test_startup_log_buffer():
+    """Test the startup log buffer is populated."""
+    print("\n" + "=" * 60)
+    print("Testing Startup Log Buffer")
+    print("=" * 60)
+    
+    from mcp_server import _startup_log_buffer
+    
+    assert len(_startup_log_buffer) > 0, "Startup log buffer should be populated"
+    assert any("Storage Directory" in msg for msg in _startup_log_buffer), "Should contain storage info"
+    assert any("Embedding Model" in msg for msg in _startup_log_buffer), "Should contain model info"
+    
+    print("Buffered startup logs:")
+    for msg in _startup_log_buffer:
+        print(f"  {msg}")
+    print("✓ Startup log buffer is properly populated")
