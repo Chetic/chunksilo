@@ -135,7 +135,7 @@ def generate_cline_config(config, output_dir, cwd, force=False):
     print(f"Generated Cline config in {output_dir}")
 
 def generate_roo_config(config, output_dir, cwd, force=False):
-    # mcp.json
+    # mcp_settings.json
     mcp_settings = {
         "mcpServers": {
             config["mcp_server"]["name"]: {
@@ -149,7 +149,7 @@ def generate_roo_config(config, output_dir, cwd, force=False):
 
     os.makedirs(output_dir, exist_ok=True)
     
-    safe_write_json(os.path.join(output_dir, "mcp.json"), mcp_settings, force)
+    safe_write_json(os.path.join(output_dir, "mcp_settings.json"), mcp_settings, force)
         
     # Rules
     # Roo Code definitely supports `rules/` directory in its global storage.
