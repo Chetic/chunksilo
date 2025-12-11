@@ -3,8 +3,11 @@ set -e
 
 # Self-extracting installer stub
 
-# Create a temporary directory for extraction
-TEMP_DIR=$(mktemp -d)
+# Create a temporary directory for extraction.
+# Avoid /tmp to support systems where it is not writable.
+BASE_TEMP_DIR=${TMPDIR:-"$HOME/.cache/opd-mcp"}
+mkdir -p "$BASE_TEMP_DIR"
+TEMP_DIR=$(mktemp -d "$BASE_TEMP_DIR/opd-mcp-installer.XXXXXXXX")
 LAUNCH_DIR=$(pwd)
 
 # Function to cleanup temp dir
