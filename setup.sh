@@ -134,6 +134,26 @@ resolve_editor_dir() {
     esac
 }
 
+# Detect available VS Code forks by checking if their Application Support directories exist
+detect_available_editors() {
+    local available=()
+    local editors=("Code" "Cursor" "Windsurf" "Antigravity" "VSCodium")
+    
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        BASE_PATH="$HOME/Library/Application Support"
+    else
+        BASE_PATH="$HOME/.config"
+    fi
+    
+    for editor in "${editors[@]}"; do
+        if [ -d "$BASE_PATH/$editor" ]; then
+            available+=("$editor")
+        fi
+    done
+    
+    echo "${available[@]}"
+}
+
 # Editor Selection Logic
 if [ "$TOOL" != "none" ]; then
     # If using arguments, default to global if project path not set
@@ -174,23 +194,36 @@ if [ "$TOOL" != "none" ]; then
         
         if [ "$TOOL" != "continue" ]; then
              if [ -z "$EDITOR_NAME" ] && [ "$TOOL_PROVIDED_BY_ARG" = false ]; then
-                # Interactive Editor Selection
-                echo "Which editor are you using?"
-                options=("VS Code" "Cursor" "Windsurf" "Antigravity" "VSCodium" "Other")
-                select opt in "${options[@]}"; do
-                    case $opt in
-                        "VS Code") EDITOR_NAME="Code"; break ;;
-                        "Cursor") EDITOR_NAME="Cursor"; break ;;
-                        "Windsurf") EDITOR_NAME="Windsurf"; break ;;
-                        "Antigravity") EDITOR_NAME="Antigravity"; break ;;
-                        "VSCodium") EDITOR_NAME="VSCodium"; break ;;
-                        "Other") 
-                            read -p "Enter the configuration directory name (e.g. Code - OSS): " EDITOR_NAME
-                            break 
-                            ;;
-                        *) echo "Invalid option";;
-                    esac
-                done
+                # Auto-detect available editors
+                AVAILABLE_EDITORS=($(detect_available_editors))
+                
+                # If only VS Code is detected, use it automatically
+                if [ ${#AVAILABLE_EDITORS[@]} -eq 1 ] && [ "${AVAILABLE_EDITORS[0]}" == "Code" ]; then
+                    EDITOR_NAME="Code"
+                    echo "Detected VS Code as the only available editor. Using VS Code."
+                elif [ ${#AVAILABLE_EDITORS[@]} -gt 0 ]; then
+                    # Multiple editors detected, prompt user
+                    echo "Which editor are you using?"
+                    options=("VS Code" "Cursor" "Windsurf" "Antigravity" "VSCodium" "Other")
+                    select opt in "${options[@]}"; do
+                        case $opt in
+                            "VS Code") EDITOR_NAME="Code"; break ;;
+                            "Cursor") EDITOR_NAME="Cursor"; break ;;
+                            "Windsurf") EDITOR_NAME="Windsurf"; break ;;
+                            "Antigravity") EDITOR_NAME="Antigravity"; break ;;
+                            "VSCodium") EDITOR_NAME="VSCodium"; break ;;
+                            "Other") 
+                                read -p "Enter the configuration directory name (e.g. Code - OSS): " EDITOR_NAME
+                                break 
+                                ;;
+                            *) echo "Invalid option";;
+                        esac
+                    done
+                else
+                    # No editors detected, default to VS Code
+                    EDITOR_NAME="Code"
+                    echo "No editors detected. Defaulting to VS Code."
+                fi
              elif [ -z "$EDITOR_NAME" ]; then
                  # Default
                  EDITOR_NAME="Code"

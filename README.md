@@ -30,7 +30,7 @@ All parameters are optional. The installer will ask you for any required informa
 | :--- | :--- |
 | `--tool <name>` | Target tool to configure: `cline`, `roo`, `continue`. |
 | `--project [path]` | Configure for a specific project. Defaults to global if omitted. |
-| `--editor <name>` | For global install: `code`, `cursor`, `windsurf`, etc. (Prompts if omitted). |
+| `--editor <name>` | For global install: `code`, `cursor`, `windsurf`, `antigravity`, `vscodium`, etc. Auto-detects VS Code if it's the only available editor. |
 | `--location <path>` | Install destination (defaults to `/data/opd-mcp`, `/localhome/opd-mcp`, or `~/opd-mcp`). |
 | `--overwrite` | Force overwrite of existing files and configs. |
 
