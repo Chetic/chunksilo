@@ -138,122 +138,6 @@ jobs:
           path: ${{ steps.notes.outputs.file }}
           retention-days: 1
 
-  package_installer:
-    needs: [prepare, package_manylinux_2_28, package_manylinux_2_34]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Download common files artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: release-common-${{ needs.prepare.outputs.version }}
-          path: release_common
-
-      - name: Restore cached models
-        run: |
-          mkdir -p models
-          cp -r release_common/models/* models/
-          # Ensure universal_config is also consistent if modified in prepare (though it's just a copy)
-          cp release_common/universal_config.json .
-
-      - name: Download manylinux_2_28 package
-        if: ${{ inputs.include_manylinux_2_28 }}
-        uses: actions/download-artifact@v4
-        with:
-          name: package-manylinux-2_28-${{ needs.prepare.outputs.version }}
-          path: packages
-
-      - name: Download manylinux_2_34 package
-        if: ${{ inputs.include_manylinux_2_34 }}
-        uses: actions/download-artifact@v4
-        with:
-          name: package-manylinux-2_34-${{ needs.prepare.outputs.version }}
-          path: packages
-
-      - name: Build installers
-        run: |
-          set -eo pipefail
-          
-          build_installer_from_zip() {
-            local zipfile="$1"
-            local suffix="$2"
-            local temp_dir=$(mktemp -d)
-
-            # Extract to temporary directory to avoid conflicts
-            unzip -q "$zipfile" -d "$temp_dir"
-            local payload_root=""
-            for CANDIDATE in "$temp_dir/release_package_manylinux_${suffix}/opd-mcp" "$temp_dir/opd-mcp"; do
-              if [ -d "$CANDIDATE" ]; then
-                payload_root="$CANDIDATE"
-                break
-              fi
-            done
-            if [ -z "$payload_root" ]; then
-              echo "Error: unable to locate payload root for manylinux_${suffix}" >&2
-              rm -rf "$temp_dir"
-              exit 1
-            fi
-
-            local dep_count
-            dep_count=$(find "$payload_root/dependencies" -type f | wc -l)
-            echo "manylinux_${suffix} dependencies: $dep_count files"
-            if [ "$dep_count" -eq 0 ]; then
-              echo "Error: manylinux_${suffix} payload has no dependencies at $payload_root/dependencies" >&2
-              rm -rf "$temp_dir"
-              exit 1
-            fi
-
-            chmod +x scripts/build_installer.sh
-            ./scripts/build_installer.sh "$payload_root"
-            mv build-output/opd-mcp-installer.sh "build-output/opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_${suffix}-installer.sh"
-            
-            # Clean up temporary directory
-            rm -rf "$temp_dir"
-          }
-
-          BUILT=false
-
-          if [ "${{ inputs.include_manylinux_2_34 }}" = "true" ]; then
-            PKG_234=$(find packages -name "opd-mcp-*-manylinux_2_34*.zip" -type f | head -1)
-            if [ -n "$PKG_234" ]; then
-              echo "Building installer from manylinux_2_34 package: $PKG_234"
-              build_installer_from_zip "$PKG_234" "2_34"
-              BUILT=true
-            fi
-          fi
-
-          if [ "${{ inputs.include_manylinux_2_28 }}" = "true" ]; then
-            PKG_228=$(find packages -name "opd-mcp-*-manylinux_2_28*.zip" -type f | head -1)
-            if [ -n "$PKG_228" ]; then
-              echo "Building installer from manylinux_2_28 package: $PKG_228"
-              build_installer_from_zip "$PKG_228" "2_28"
-              BUILT=true
-            fi
-          fi
-
-          if [ "$BUILT" = false ]; then
-            echo "Error: No manylinux payload available for installer build" >&2
-            exit 1
-          fi
-
-      - name: Upload manylinux_2_34 installer artifact
-        if: ${{ inputs.include_manylinux_2_34 }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: installer-manylinux_2_34-${{ needs.prepare.outputs.version }}
-          path: build-output/opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_34-installer.sh
-          retention-days: 1
-
-      - name: Upload manylinux_2_28 installer artifact
-        if: ${{ inputs.include_manylinux_2_28 }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: installer-manylinux_2_28-${{ needs.prepare.outputs.version }}
-          path: build-output/opd-mcp-${{ needs.prepare.outputs.version }}-manylinux_2_28-installer.sh
-          retention-days: 1
-
   package_manylinux_2_28:
     needs: prepare
     runs-on: ubuntu-latest
@@ -323,7 +207,7 @@ jobs:
           retention-days: 1
 
   release:
-    needs: [prepare, package_installer, package_manylinux_2_28, package_manylinux_2_34]
+    needs: [prepare, package_manylinux_2_28, package_manylinux_2_34]
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -331,20 +215,6 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
-
-      - name: Download manylinux_2_34 installer artifact
-        if: ${{ inputs.include_manylinux_2_34 }}
-        uses: actions/download-artifact@v4
-        with:
-          name: installer-manylinux_2_34-${{ needs.prepare.outputs.version }}
-          path: packages
-
-      - name: Download manylinux_2_28 installer artifact
-        if: ${{ inputs.include_manylinux_2_28 }}
-        uses: actions/download-artifact@v4
-        with:
-          name: installer-manylinux_2_28-${{ needs.prepare.outputs.version }}
-          path: packages
 
       - name: Download manylinux_2_28 package
         uses: actions/download-artifact@v4
@@ -373,27 +243,23 @@ jobs:
           FILES=""
 
           if [[ "${{ inputs.include_manylinux_2_34 }}" == "true" ]]; then
-            INST_234=$(find packages -name "opd-mcp-*-manylinux_2_34-installer.sh" -type f | head -1)
             PKG_234=$(find packages -name "opd-mcp-*-manylinux_2_34*.zip" -type f | head -1)
-            if [ -z "$INST_234" ] || [ -z "$PKG_234" ]; then
-              echo "Error: Missing manylinux_2_34 artifacts" >&2
+            if [ -z "$PKG_234" ]; then
+              echo "Error: Missing manylinux_2_34 package" >&2
               exit 1
             fi
-            FILES+="$INST_234"$'\n'"$PKG_234"
-            echo "installer_234=$INST_234" >> "$GITHUB_OUTPUT"
+            FILES+="$PKG_234"
             echo "package_234=$PKG_234" >> "$GITHUB_OUTPUT"
           fi
 
           if [[ "${{ inputs.include_manylinux_2_28 }}" == "true" ]]; then
-            INST_228=$(find packages -name "opd-mcp-*-manylinux_2_28-installer.sh" -type f | head -1)
             PKG_228=$(find packages -name "opd-mcp-*-manylinux_2_28*.zip" -type f | head -1)
-            if [ -z "$INST_228" ] || [ -z "$PKG_228" ]; then
-              echo "Error: Missing manylinux_2_28 artifacts" >&2
+            if [ -z "$PKG_228" ]; then
+              echo "Error: Missing manylinux_2_28 package" >&2
               exit 1
             fi
             if [ -n "$FILES" ]; then FILES+=$'\n'; fi
-            FILES+="$INST_228"$'\n'"$PKG_228"
-            echo "installer_228=$INST_228" >> "$GITHUB_OUTPUT"
+            FILES+="$PKG_228"
             echo "package_228=$PKG_228" >> "$GITHUB_OUTPUT"
           fi
 
@@ -423,3 +289,16 @@ jobs:
           files: ${{ steps.find_artifacts.outputs.files }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete previous releases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT_TAG: v${{ needs.prepare.outputs.version }}
+        run: |
+          set -eo pipefail
+          gh release list --limit 100 --json tagName --jq '.[] | .tagName' | while read -r TAG; do
+            if [ "$TAG" != "$CURRENT_TAG" ]; then
+              echo "Deleting release $TAG"
+              gh release delete "$TAG" --yes
+            fi
+          done
