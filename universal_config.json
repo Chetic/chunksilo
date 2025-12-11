@@ -11,7 +11,8 @@
             "RETRIEVAL_MODEL_CACHE_DIR": "models",
             "CONFLUENCE_URL": "",
             "CONFLUENCE_USERNAME": "",
-            "CONFLUENCE_API_TOKEN": ""
+            "CONFLUENCE_API_TOKEN": "",
+            "CA_BUNDLE_PATH": ""
         }
     },
     "rules": {

@@ -25,6 +25,14 @@ import logging
 # Set up logging
 # We primarily use MCP logging context, but keep a stderr logger for unhandled/startup issues
 logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("app.log", encoding="utf-8"),  # file
+        logging.StreamHandler(sys.stderr),                 # stderr
+    ],
+)
 
 # Load environment variables
 
@@ -50,6 +58,20 @@ RETRIEVAL_MODEL_CACHE_DIR = Path(os.getenv("RETRIEVAL_MODEL_CACHE_DIR", "./model
 
 # Confluence Configuration
 CONFLUENCE_TIMEOUT = float(os.getenv("CONFLUENCE_TIMEOUT", "10.0"))
+
+# SSL/TLS Configuration
+# CA bundle path for HTTPS connections (e.g., Confluence, future HTTP clients)
+# If set, this will be used by requests, urllib3, and other HTTP libraries
+CA_BUNDLE_PATH = os.getenv("CA_BUNDLE_PATH")
+if CA_BUNDLE_PATH:
+    ca_bundle_path = Path(CA_BUNDLE_PATH)
+    if ca_bundle_path.exists():
+        # Set environment variables that requests, urllib3, and other libraries respect
+        os.environ["REQUESTS_CA_BUNDLE"] = str(ca_bundle_path.resolve())
+        os.environ["SSL_CERT_FILE"] = str(ca_bundle_path.resolve())
+        logger.info(f"CA bundle configured: {ca_bundle_path.resolve()}")
+    else:
+        logger.warning(f"CA bundle path does not exist: {ca_bundle_path.resolve()}")
 
 # Configure offline mode for HuggingFace libraries to prevent network requests
 # The MCP server is intended to run in offline environments where models are already cached.
@@ -90,6 +112,16 @@ def _collect_startup_info():
     _startup_log_buffer.append(f"Rerank Model: {RETRIEVAL_RERANK_MODEL_NAME}")
     _startup_log_buffer.append(f"Offline Mode: {_offline_mode}")
     
+    # Log CA bundle configuration
+    if CA_BUNDLE_PATH:
+        ca_bundle_path = Path(CA_BUNDLE_PATH)
+        if ca_bundle_path.exists():
+            _startup_log_buffer.append(f"CA Bundle: {ca_bundle_path.resolve()}")
+        else:
+            _startup_log_buffer.append(f"CA Bundle: {ca_bundle_path.resolve()} (NOT FOUND)")
+    else:
+        _startup_log_buffer.append("CA Bundle: Not configured (using system defaults)")
+    
     # Log indexed document stats
     db_path = STORAGE_DIR / "ingestion_state.db"
     if db_path.exists():
@@ -114,7 +146,7 @@ def _collect_startup_info():
                 username = os.getenv("CONFLUENCE_USERNAME")
                 api_token = os.getenv("CONFLUENCE_API_TOKEN")
                 if username and api_token:
-                    reader = ConfluenceReader(base_url=confluence_url, user_name=username, password_token=api_token)
+                    reader = ConfluenceReader(base_url=confluence_url, user_name=username, api_token=api_token)
                     _startup_log_buffer.append("Confluence Connection: Credentials provided, reader initialized.")
                 else:
                     _startup_log_buffer.append("Confluence Configuration: Missing USERNAME or API_TOKEN")
@@ -397,7 +429,7 @@ def _search_confluence(query: str) -> list[NodeWithScore]:
         return []
 
     try:
-        reader = ConfluenceReader(base_url=base_url, user_name=username, password_token=api_token)
+        reader = ConfluenceReader(base_url=base_url, user_name=username, api_token=api_token)
         # Simple CQL query to find pages containing the query text
         # Only searching current version of pages
         cql = f'text ~ "{query}" AND type = "page"'

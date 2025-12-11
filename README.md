@@ -63,6 +63,7 @@ The installer generates tool-specific configurations from a single source of tru
 - **Retrieval errors**: Check paths in your tool's MCP config file.
 - **Offline mode**: The installer includes models. Ensure `OFFLINE=1` is set in the environment or `.env` file (automatically handled by the installer).
 - **Confluence Integration**: To enable Confluence search, set `CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, and `CONFLUENCE_API_TOKEN` environment variables in your MCP client configuration (e.g., `cline_mcp_settings.json`, `config.json` for Continue, etc.).
+- **Custom CA Bundle**: If your Confluence instance or other HTTPS endpoints use custom certificates (e.g., self-signed or internal CA), set the `CA_BUNDLE_PATH` environment variable to point to a CA bundle file containing the certificate chain. This is required for HTTPS connections to work with custom certificates. Example: `CA_BUNDLE_PATH=/path/to/ca-bundle.crt`
 
 ## License
 
