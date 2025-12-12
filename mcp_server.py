@@ -7,6 +7,7 @@ import os
 import sys
 import time
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,28 @@ except ImportError:
 import asyncio
 import logging
 
+# Log file configuration
+LOG_FILE = "mcp.log"
+LOG_MAX_SIZE_MB = 10
+LOG_MAX_SIZE_BYTES = LOG_MAX_SIZE_MB * 1024 * 1024  # 10MB in bytes
+
+
+def _rotate_log_if_needed():
+    """Rotate log file if it exists and is over the size limit."""
+    log_path = Path(LOG_FILE)
+    if log_path.exists() and log_path.stat().st_size > LOG_MAX_SIZE_BYTES:
+        # Generate timestamp suffix
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        rotated_name = f"mcp_{timestamp}.log"
+        rotated_path = log_path.parent / rotated_name
+        log_path.rename(rotated_path)
+        # Create new empty log file
+        log_path.touch()
+
+
+# Rotate log file if needed before setting up logging
+_rotate_log_if_needed()
+
 # Set up logging
 # We primarily use MCP logging context, but keep a stderr logger for unhandled/startup issues
 logger = logging.getLogger(__name__)
@@ -29,7 +52,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler("app.log", encoding="utf-8"),  # file
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),  # file
         logging.StreamHandler(sys.stderr),                 # stderr
     ],
 )
