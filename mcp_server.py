@@ -169,7 +169,7 @@ def _collect_startup_info():
                 username = os.getenv("CONFLUENCE_USERNAME")
                 api_token = os.getenv("CONFLUENCE_API_TOKEN")
                 if username and api_token:
-                    reader = ConfluenceReader(base_url=confluence_url, user_name=username, api_token=api_token)
+                    reader = ConfluenceReader(base_url=confluence_url, user_name=username, password=api_token)
                     _startup_log_buffer.append("Confluence Connection: Credentials provided, reader initialized.")
                 else:
                     _startup_log_buffer.append("Confluence Configuration: Missing USERNAME or API_TOKEN")
@@ -435,10 +435,15 @@ def _search_confluence(query: str) -> list[NodeWithScore]:
     """
     Search Confluence for documents matching the query using CQL.
     Returns a list of NodeWithScore objects compatible with the reranker.
+    
+    For multi-word queries, uses AND logic to find pages containing all words.
+    For single-word queries or exact phrases, uses phrase matching.
     """
     base_url = os.getenv("CONFLUENCE_URL")
     # If CONFLUENCE_URL is unset or empty, disable search completely
     if not base_url:
+        # Keep this as a warning because it can explain "0 entries" quickly.
+        logger.warning("Confluence search skipped: CONFLUENCE_URL not set")
         return []
 
     if ConfluenceReader is None:
@@ -449,13 +454,34 @@ def _search_confluence(query: str) -> list[NodeWithScore]:
     api_token = os.getenv("CONFLUENCE_API_TOKEN")
 
     if not (base_url and username and api_token):
+        missing = []
+        if not username:
+            missing.append("CONFLUENCE_USERNAME")
+        if not api_token:
+            missing.append("CONFLUENCE_API_TOKEN")
+        logger.warning(f"Confluence search skipped: missing {', '.join(missing)}")
         return []
 
     try:
-        reader = ConfluenceReader(base_url=base_url, user_name=username, api_token=api_token)
-        # Simple CQL query to find pages containing the query text
-        # Only searching current version of pages
-        cql = f'text ~ "{query}" AND type = "page"'
+        reader = ConfluenceReader(base_url=base_url, user_name=username, password=api_token)
+        
+        # Build CQL query
+        # For multi-word queries, use AND logic to find pages containing all words
+        # This ensures pages with both "foo" and "bar" are found
+        query_words = query.strip().split()
+        
+        if len(query_words) == 1:
+            # Single word: simple contains search
+            # Escape double quotes in the query word
+            escaped_query = query_words[0].replace('"', '\\"')
+            cql = f'text ~ "{escaped_query}" AND type = "page"'
+        else:
+            # Multiple words: use AND logic to find pages containing all words
+            # For "foo bar", this becomes: text ~ "foo" AND text ~ "bar"
+            escaped_words = [word.replace('"', '\\"') for word in query_words]
+            text_conditions = ' AND '.join([f'text ~ "{word}"' for word in escaped_words])
+            cql = f'{text_conditions} AND type = "page"'
+        
         documents = reader.load_data(cql=cql)
 
         nodes: list[NodeWithScore] = []
@@ -543,11 +569,7 @@ Following these steps is **mandatory** for a complete, trustworthy response.
     start_time = time.time()
     
     try:
-        try:
-            ctx = mcp.get_context()
-            await ctx.info(f"Processing retrieve_docs query: {query}")
-        except Exception:
-            logger.info(f"Processing retrieve_docs query: {query}")
+        # Never log user queries (may contain secrets).
         
         # Preprocess query to improve retrieval quality
         enhanced_query = _preprocess_query(query)
@@ -567,13 +589,18 @@ Following these steps is **mandatory** for a complete, trustworthy response.
         if os.getenv("CONFLUENCE_URL"):
             try:
                  # Run blocking generic search in executor
+                 # Use enhanced_query (preprocessed) instead of original query for consistency
                  loop = asyncio.get_running_loop()
                  result = await asyncio.wait_for(
-                     loop.run_in_executor(None, _search_confluence, query),
+                     loop.run_in_executor(None, _search_confluence, enhanced_query),
                      timeout=CONFLUENCE_TIMEOUT
                  )
-                 if result:
-                     confluence_nodes = result
+                 # Always assign result, even if empty list
+                 # (Previously: "if result:" would skip assignment for empty lists, which was redundant
+                 #  since confluence_nodes is already initialized as []. This ensures Confluence
+                 #  is always called when CONFLUENCE_URL is set, regardless of result.)
+                 confluence_nodes = result
+                 logger.info(f"Confluence search returned {len(confluence_nodes)} entries")
             except asyncio.TimeoutError:
                  msg = f"Confluence search timed out after {CONFLUENCE_TIMEOUT}s"
                  try:
@@ -599,11 +626,15 @@ Following these steps is **mandatory** for a complete, trustworthy response.
             rerank_limit = max(1, min(RETRIEVAL_RERANK_TOP_K, len(nodes)))
             try:
                 reranker = _ensure_reranker()
-                # Prepare documents for reranking
-                documents = [node.node.get_content() or "" for node in nodes]
+                # Prepare documents for reranking - FlashRank expects list of dicts with 'text' key
+                passages = [{"text": node.node.get_content() or ""} for node in nodes]
+                
+                # FlashRank requires a RerankRequest object
+                from flashrank import RerankRequest
+                rerank_request = RerankRequest(query=enhanced_query, passages=passages)
+                
                 # FlashRank returns reranked documents (list of dicts with 'text' and 'score')
-                # Use enhanced query for better reranking
-                reranked_results = reranker.rerank(enhanced_query, documents)
+                reranked_results = reranker.rerank(rerank_request)
                 
                 # Create a mapping from document text to (index, node) for reliable matching
                 # Use index as primary key to handle duplicate text correctly
@@ -618,14 +649,9 @@ Following these steps is **mandatory** for a complete, trustworthy response.
                 reranked_nodes = []
                 seen_indices = set()
                 for result in reranked_results:
-                    # Handle both dict format {'text': ..., 'score': ...} and string format
-                    if isinstance(result, dict):
-                        doc_text = result.get("text", "")
-                        score = result.get("score", 0.0)
-                    else:
-                        # If result is just a string, use it as text
-                        doc_text = str(result)
-                        score = 0.0
+                    # FlashRank returns dicts with 'text' and 'score' keys
+                    doc_text = result.get("text", "")
+                    score = result.get("score", 0.0)
                     
                     if doc_text in text_to_indices:
                         # Get the first unused (index, node) pair for this text
@@ -642,8 +668,9 @@ Following these steps is **mandatory** for a complete, trustworthy response.
                         reranked_nodes.append(node)
                 
                 nodes = reranked_nodes[:rerank_limit]
-            except Exception:
+            except Exception as e:
                 # Fall back to vector search ordering if reranking fails
+                logger.error(f"Reranking failed, falling back to vector search order: {e}")
                 nodes = nodes[:rerank_limit]
 
         # Format chunks with full content and metadata
