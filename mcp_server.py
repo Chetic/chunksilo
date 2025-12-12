@@ -7,6 +7,7 @@ import os
 import sys
 import time
 import sqlite3
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -240,45 +241,6 @@ def _build_heading_path(headings: list[dict], char_start: int | None) -> tuple[s
     return current_heading_text, path
 
 
-def _build_citation(
-    metadata: dict[str, Any],
-    *,
-    heading_text: str | None,
-) -> str:
-    """
-    Return a human-friendly citation string from node metadata.
-    Includes page numbers, chapter/heading information, and character ranges when available.
-    """
-
-    file_path = (
-        metadata.get("file_path")
-        or metadata.get("file_name")
-        or metadata.get("source")
-        or "Unknown source"
-    )
-
-    page = metadata.get("page_label") or metadata.get("page_number") or metadata.get("page")
-
-    parts: list[str] = []
-    
-    # Prefer an explicit heading passed in, but fall back to metadata["heading"]
-    heading_for_citation = heading_text or metadata.get("heading")
-
-    # Add section/heading information (most important for DOCX/Markdown files)
-    if heading_for_citation:
-        parts.append(f'section \"{heading_for_citation}\"')
-    
-    # Add page number if available
-    if page:
-        parts.append(f"page {page}")
-    
-    if parts:
-        joined = ", ".join(parts)
-        return f"{file_path} ({joined})"
-
-    return str(file_path)
-
-
 def _get_cached_model_path(cache_dir: Path, model_name: str) -> Path | None:
     """
     Get the cached model directory path using huggingface_hub's snapshot_download.
@@ -487,11 +449,11 @@ def _search_confluence(query: str) -> list[NodeWithScore]:
         nodes: list[NodeWithScore] = []
         for doc in documents:
             # Create a TextNode from the Confluence document
-            # We map standard Confluence metadata to something our citation builder understands
+            # Map standard Confluence metadata to our format
             metadata = doc.metadata.copy()
             metadata["source"] = "Confluence"
             if "title" in metadata:
-                 metadata["file_name"] = metadata["title"] # Use title as filename for citation
+                 metadata["file_name"] = metadata["title"]  # Use title as filename
 
             node = TextNode(text=doc.text, metadata=metadata)
             # Assign a default score of 0.0 (will be updated by reranker)
@@ -532,39 +494,20 @@ def load_llamaindex_index():
 @mcp.tool()
 async def retrieve_docs(query: str) -> dict[str, Any]:
     """
-Search the local PDF / DOCX / Markdown / TXT documentation corpus and return the most relevant chunks.
+Search the local documentation corpus and return the most relevant chunks.
 
-Your primary responsibility when using this tool is not just to find information, but to **show clearly where it came from.** That means:
+The tool returns a structured response with:
+- `chunks`: Array of retrieved document chunks
+- `query`: The search query used
+- `num_chunks`: Number of chunks returned
+- `retrieval_time`: Time taken for retrieval
+- `sources`: Array of unique source documents with URI, name, and MIME type (displayed as clickable links in MCP clients)
 
-1. **Every time you use information from a retrieved chunk in your answer, you must add a source citation.**
-2. **Always place each citation on its own separate line, immediately after the sentence or paragraph it supports.**
-3. **An answer without citations is considered incomplete and may be treated as incorrect, even if the content is otherwise good.**
-
-When this tool returns results, each chunk includes:
-
-- `text`: Full chunk text content (may start with `SOURCE_*` helper lines).
-- `citation`: A human-readable citation string. **This is what you should paste or adapt directly into your answer when you reference that chunk, on its own line.**
-- `location`: Structured location details (file, page, heading, heading_path).
-- `metadata`: Original document metadata.
-
-At the top level, the tool response also includes a `citations` array listing all unique citation strings.
-
-To write a high-quality answer:
-
-- As you draft your reasoning or explanation, **immediately attach the appropriate `citation` string whenever you use a fact, definition, procedure, or example from a chunk.**
-- **Put that citation on a new line by itself**, directly after the relevant text. For example:
-
-  - Your explanatory text here…
-  - `Citation: <paste citation string here>`
-
-- Prefer citing **exactly the chunks you actually used**, not the whole list of returned results.
-
-Before you consider your answer finished, do a quick check:
-
-- “Have I added at least one citation for every distinct document I used?”
-- “Are all my citations on their own separate lines, immediately after the text they support?”
-
-Following these steps is **mandatory** for a complete, trustworthy response.
+Each chunk includes:
+- `text`: Full chunk text content
+- `location`: Structured location details (file, page, heading, heading_path)
+- `metadata`: Original document metadata
+- `score`: Relevance score
     """
     start_time = time.time()
     
@@ -675,7 +618,7 @@ Following these steps is **mandatory** for a complete, trustworthy response.
 
         # Format chunks with full content and metadata
         chunks = []
-        citation_list = []
+        unique_sources: dict[str, dict[str, Any]] = {}  # uri -> source info
         for node in nodes:
             metadata = dict(node.node.metadata or {})
             raw_text = node.node.get_content()
@@ -702,7 +645,7 @@ Following these steps is **mandatory** for a complete, trustworthy response.
                 if heading_text is None and char_start is not None:
                     heading_text, heading_path = _build_heading_path(headings, char_start)
 
-            # Normalize a short document title for display/citation
+            # Normalize a short document title for display
             doc_title = None
             if file_path:
                 try:
@@ -710,66 +653,34 @@ Following these steps is **mandatory** for a complete, trustworthy response.
                 except Exception:
                     doc_title = str(file_path)
 
-            # Build a human-readable citation string
-            citation = _build_citation(
-                metadata,
-                heading_text=heading_text,
-            )
-
-            # Enrich metadata with heading/file information for the client
+            # Clean up metadata to remove redundant path fields (sources array has full URIs)
+            # Store original file_path for source URI building before cleaning
+            original_file_path = metadata.get("file_path")
+            original_source = metadata.get("source")
+            
+            # Remove redundant path fields from metadata
+            if "file_path" in metadata:
+                del metadata["file_path"]
+            # Remove source if it's just a duplicate file path (keep "Confluence" as it's useful context)
+            if metadata.get("source") and metadata.get("source") != "Confluence":
+                # If source matches the file_path we just removed, it's redundant
+                if original_source == original_file_path:
+                    del metadata["source"]
+            
+            # Set minimal file info in metadata (just filename)
             if doc_title:
-                metadata.setdefault("file_name", doc_title)
+                metadata["file_name"] = doc_title
             if heading_text:
                 metadata["heading"] = heading_text
             if heading_path:
                 metadata["heading_path"] = heading_path
 
-            # Annotate headings *inside* the chunk text so the model can see them clearly.
-            if raw_text and heading_titles:
-                annotated_lines: list[str] = []
-                for line in raw_text.splitlines():
-                    stripped = line.strip()
-                    # Match heading titles case-insensitively after stripping
-                    if stripped and stripped.lower() in {t.lower() for t in heading_titles}:
-                        annotated_lines.append(f"=== HEADING: {stripped} ===")
-                    else:
-                        annotated_lines.append(line)
-                chunk_text = "\n".join(annotated_lines)
-            else:
-                chunk_text = raw_text
+            # Use raw text directly (no header prefix needed with resource links)
+            chunk_text = raw_text
 
-            # Build a header block that is prepended to the chunk text so the LLM
-            # can *see* and easily copy the exact source information (file + heading).
-            header_lines: list[str] = []
-            if doc_title:
-                header_lines.append(f"SOURCE_FILE: {doc_title}")
-            if heading_path:
-                header_lines.append(f"SOURCE_HEADING_PATH: {' > '.join(heading_path)}")
-            elif heading_text:
-                header_lines.append(f"SOURCE_HEADING: {heading_text}")
-
-            # Also surface the fully formatted citation string prominently so that
-            # calling LLMs are more likely to copy it into their final answers.
-            if citation:
-                header_lines.append(f"SOURCE_CITATION: {citation}")
-            # Fallback: if we have document-level headings but no position info,
-            # still expose them so the model can see the section names.
-            elif headings:
-                normalized_headings = [h.get("text", "").strip() for h in headings if h.get("text")]
-                if normalized_headings:
-                    header_lines.append(f"ALL_DOCUMENT_HEADINGS: {' | '.join(normalized_headings)}")
-
-            if header_lines:
-                header_lines.append("")  # blank line
-                header_lines.append("Content:")
-                header_lines.append("")  # blank line
-                header = "\n".join(header_lines)
-                display_text = f"{header}{chunk_text.lstrip() if chunk_text else ''}"
-            else:
-                display_text = chunk_text
-
+            # Use just filename in location (full URI is in sources array)
             location = {
-                "file": file_path or "Unknown source",
+                "file": doc_title or "Unknown source",
                 "page": metadata.get("page_label")
                 or metadata.get("page_number")
                 or metadata.get("page"),
@@ -778,35 +689,101 @@ Following these steps is **mandatory** for a complete, trustworthy response.
             }
             score_value = rerank_scores.get(id(node), getattr(node, "score", None))
             chunk_data = {
-                "text": display_text,  # Full content, not truncated, with header prefix
+                "text": chunk_text,
                 "score": round(float(score_value), 3) if score_value is not None else 0.0,
                 "metadata": metadata,
-                "citation": citation,
                 "location": location,
             }
-            citation_list.append(citation)
             chunks.append(chunk_data)
+            
+            # Collect unique source files for resource links (used by Roo Code for clickable links)
+            # Use original_file_path if available, otherwise fall back to file_path
+            source_path = original_file_path or file_path
+            if source_path:
+                source_uri = None
+                source_name = doc_title or str(source_path)
+                mime_type = "application/octet-stream"  # default
+                
+                # Handle Confluence sources
+                if original_source == "Confluence":
+                    confluence_url = os.getenv("CONFLUENCE_URL", "")
+                    page_id = metadata.get("page_id")
+                    if confluence_url and page_id:
+                        # Build Confluence page URL
+                        source_uri = f"{confluence_url.rstrip('/')}/pages/viewpage.action?pageId={page_id}"
+                    elif confluence_url:
+                        # Fallback: use title-based URL if page_id not available
+                        title = metadata.get("title", metadata.get("file_name", ""))
+                        if title:
+                            # URL-encode the title for the URL
+                            from urllib.parse import quote
+                            encoded_title = quote(title.replace(" ", "+"))
+                            source_uri = f"{confluence_url.rstrip('/')}/spaces/~{encoded_title}"
+                    if source_uri:
+                        mime_type = "text/html"
+                else:
+                    # Create a file:// URI for local files
+                    try:
+                        file_path_obj = Path(str(source_path))
+                        if file_path_obj.is_absolute():
+                            # Use file:/// format (three slashes) for absolute paths
+                            source_uri = f"file://{file_path_obj.resolve()}"
+                        else:
+                            # If relative, try to resolve it relative to DATA_DIR
+                            data_dir = Path(os.getenv("DATA_DIR", "./data"))
+                            resolved_path = (data_dir / file_path_obj).resolve()
+                            source_uri = f"file://{resolved_path}"
+                        
+                        # Determine MIME type based on file extension
+                        file_path_str = str(file_path)
+                        if file_path_str.endswith(".pdf"):
+                            mime_type = "application/pdf"
+                        elif file_path_str.endswith((".docx", ".doc")):
+                            mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        elif file_path_str.endswith((".md", ".markdown")):
+                            mime_type = "text/markdown"
+                        elif file_path_str.endswith(".txt"):
+                            mime_type = "text/plain"
+                    except Exception:
+                        # If we can't create a proper URI, skip this source
+                        source_uri = None
+                
+                if source_uri and source_uri not in unique_sources:
+                    unique_sources[source_uri] = {
+                        "uri": source_uri,
+                        "name": source_name,
+                        "mime_type": mime_type,
+                    }
 
         elapsed = time.time() - start_time
 
-        # Deduplicate citations while preserving order
-        unique_citations = list(dict.fromkeys(citation_list))
-
-        return {
+        # Build sources list for structured response (Roo Code uses this for clickable links)
+        sources_list = []
+        for source_info in unique_sources.values():
+            sources_list.append({
+                "uri": source_info["uri"],
+                "name": source_info["name"],
+                "mimeType": source_info.get("mime_type", "application/octet-stream"),
+            })
+        
+        structured_response = {
             "chunks": chunks,
             "query": query,
             "num_chunks": len(chunks),
-            "citations": unique_citations,
             "retrieval_time": f"{elapsed:.2f}s",
+            "sources": sources_list,  # Roo Code displays these as clickable links
         }
+        
+        return structured_response
         
     except Exception as e:
         logger.error(f"Error in retrieve_docs: {e}", exc_info=True)
-        return {
+        error_response = {
             "chunks": [],
             "error": str(e),
             "query": query,
         }
+        return error_response
 
 
 if __name__ == "__main__":

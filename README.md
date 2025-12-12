@@ -8,7 +8,7 @@ Fully local semantic search for your PDF, DOCX, Markdown, and TXT files. The MCP
 - **Universal Installer**: Single self-contained script for installation and configuration.
 - **Multi-Tool Support**: Auto-configuration for Cline, Roo Code, and Continue.
 - **Smart Indexing**: Persistent local index with incremental updates.
-- **Citation Support**: MCP `retrieve_docs` tool returns citation metadata for verifiable answers.
+- **Source Links**: MCP `retrieve_docs` tool returns resource links for each source document, displayed as clickable links in supported MCP clients like Roo Code.
 
 ## Quick Installation (Recommended)
 
