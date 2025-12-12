@@ -34,9 +34,11 @@ def _rotate_log_if_needed():
     """Rotate log file if it exists and is over the size limit."""
     log_path = Path(LOG_FILE)
     if log_path.exists() and log_path.stat().st_size > LOG_MAX_SIZE_BYTES:
-        # Generate timestamp suffix
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        rotated_name = f"mcp_{timestamp}.log"
+        # Generate timestamp suffix with microsecond precision and process ID
+        # to prevent collisions when multiple processes rotate simultaneously
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        process_id = os.getpid()
+        rotated_name = f"mcp_{timestamp}_{process_id}.log"
         rotated_path = log_path.parent / rotated_name
         log_path.rename(rotated_path)
         # Create new empty log file
