@@ -8,6 +8,7 @@ import sys
 import time
 import sqlite3
 import json
+import shlex
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -429,24 +430,28 @@ def _search_confluence(query: str) -> list[NodeWithScore]:
     try:
         reader = ConfluenceReader(base_url=base_url, user_name=username, password=api_token)
         
-        # Build CQL query
-        # For multi-word queries, use AND logic to find pages containing all words
-        # This ensures pages with both "foo" and "bar" are found
-        query_words = query.strip().split()
+        try:
+            # Parse query using shlex to respect quotes
+            # e.g. 'find "secret word"' -> ['find', 'secret word']
+            query_words = shlex.split(query.strip())
+        except ValueError:
+            # Fallback if quotes are unbalanced
+            query_words = query.strip().split()
         
         if len(query_words) == 1:
             # Single word: simple contains search
-            # Escape double quotes in the query word
             escaped_query = query_words[0].replace('"', '\\"')
             cql = f'text ~ "{escaped_query}" AND type = "page"'
         else:
-            # Multiple words: use AND logic to find pages containing all words
-            # For "foo bar", this becomes: text ~ "foo" AND text ~ "bar"
+            # Multiple words: use OR logic to find pages containing ANY words (higher recall)
+            # Use Confluence relevance sorting and local reranking to filter noise.
+            # text ~ "foo" OR text ~ "bar"
             escaped_words = [word.replace('"', '\\"') for word in query_words]
-            text_conditions = ' AND '.join([f'text ~ "{word}"' for word in escaped_words])
-            cql = f'{text_conditions} AND type = "page"'
+            text_conditions = ' OR '.join([f'text ~ "{word}"' for word in escaped_words])
+            cql = f'({text_conditions}) AND type = "page"'
         
-        documents = reader.load_data(cql=cql)
+        # Increase limit to 50 to get a good candidate pool for reranking
+        documents = reader.load_data(cql=cql, max_num_results=50)
 
         nodes: list[NodeWithScore] = []
         for doc in documents:
@@ -493,29 +498,231 @@ def load_llamaindex_index():
     return index
 
 
-@mcp.tool()
-async def retrieve_docs(query: str) -> dict[str, Any]:
+def _process_and_format_results(nodes: list[NodeWithScore], query: str, start_time: float) -> dict[str, Any]:
     """
-Search the local documentation corpus and return the most relevant chunks.
+    Process retrieved nodes (reranking) and format the final response.
+    """
+    # Rerank the retrieved nodes with FlashRank (CPU-only, ONNX-based) and trim to the
+    # configured final Top K for the tool response.
+    rerank_scores: dict[int, float] = {}
+    if nodes:
+        rerank_limit = max(1, min(RETRIEVAL_RERANK_TOP_K, len(nodes)))
+        try:
+            reranker = _ensure_reranker()
+            # Prepare documents for reranking - FlashRank expects list of dicts with 'text' key
+            passages = [{"text": node.node.get_content() or ""} for node in nodes]
+            
+            # FlashRank requires a RerankRequest object
+            from flashrank import RerankRequest
+            rerank_request = RerankRequest(query=query, passages=passages)
+            
+            # FlashRank returns reranked documents (list of dicts with 'text' and 'score')
+            reranked_results = reranker.rerank(rerank_request)
+            
+            # Create a mapping from document text to (index, node) for reliable matching
+            # Use index as primary key to handle duplicate text correctly
+            text_to_indices = {}
+            for idx, node in enumerate(nodes):
+                node_text = node.node.get_content() or ""
+                if node_text not in text_to_indices:
+                    text_to_indices[node_text] = []
+                text_to_indices[node_text].append((idx, node))
+            
+            # Reorder nodes based on reranking results
+            reranked_nodes = []
+            seen_indices = set()
+            for result in reranked_results:
+                # FlashRank returns dicts with 'text' and 'score' keys
+                doc_text = result.get("text", "")
+                score = result.get("score", 0.0)
+                
+                if doc_text in text_to_indices:
+                    # Get the first unused (index, node) pair for this text
+                    for idx, node in text_to_indices[doc_text]:
+                        if idx not in seen_indices:
+                            reranked_nodes.append(node)
+                            rerank_scores[id(node)] = float(score)
+                            seen_indices.add(idx)
+                            break
+            
+            # Add any nodes that weren't in reranked results (shouldn't happen, but safety)
+            for idx, node in enumerate(nodes):
+                if idx not in seen_indices:
+                    reranked_nodes.append(node)
+            
+            nodes = reranked_nodes[:rerank_limit]
+        except Exception as e:
+            # Fall back to vector search ordering if reranking fails
+            logger.error(f"Reranking failed, falling back to vector search order: {e}")
+            nodes = nodes[:rerank_limit]
 
-The tool returns a structured response with:
-- `chunks`: Array of retrieved document chunks
-- `query`: The search query used
-- `num_chunks`: Number of chunks returned
-- `retrieval_time`: Time taken for retrieval
-- `sources`: Array of unique source documents with URI, name, and MIME type (displayed as clickable links in MCP clients)
+    # Format chunks with full content and metadata
+    chunks = []
+    unique_sources: dict[str, dict[str, Any]] = {}  # uri -> source info
+    for node in nodes:
+        metadata = dict(node.node.metadata or {})
+        raw_text = node.node.get_content()
 
-Each chunk includes:
-- `text`: Full chunk text content
-- `location`: Structured location details (file, page, heading, heading_path)
-- `metadata`: Original document metadata
-- `score`: Relevance score
+        # Get headings for this chunk/document if available directly from metadata
+        file_path = (
+            metadata.get("file_path")
+            or metadata.get("file_name")
+            or metadata.get("source")
+        )
+        headings = metadata.get("document_headings") or metadata.get("headings") or []
+
+        # Build heading context (current heading + full path) if we have
+        # document-level heading structure and character offsets.
+        char_start = metadata.get("start_char_idx")
+        heading_text = metadata.get("heading")  # may be set directly for per-heading chunks
+        heading_path: list[str] = []
+        heading_titles: list[str] = []
+        if isinstance(headings, list) and headings:
+            # Collect all heading titles for this document (normalized)
+            heading_titles = [h.get("text", "").strip() for h in headings if isinstance(h, dict) and h.get("text")]
+            # Only try to infer heading from document_headings if we don't
+            # already have an explicit "heading" on the chunk.
+            if heading_text is None and char_start is not None:
+                heading_text, heading_path = _build_heading_path(headings, char_start)
+
+        # Normalize a short document title for display
+        doc_title = None
+        if file_path:
+            try:
+                doc_title = Path(str(file_path)).name
+            except Exception:
+                doc_title = str(file_path)
+
+        # Clean up metadata to remove redundant path fields (sources array has full URIs)
+        # Store original file_path for source URI building before cleaning
+        original_file_path = metadata.get("file_path")
+        original_source = metadata.get("source")
+        
+        # Remove redundant path fields from metadata
+        if "file_path" in metadata:
+            del metadata["file_path"]
+        # Remove source if it's just a duplicate file path (keep "Confluence" as it's useful context)
+        if metadata.get("source") and metadata.get("source") != "Confluence":
+            # If source matches the file_path we just removed, it's redundant
+            if original_source == original_file_path:
+                del metadata["source"]
+        
+        # Set minimal file info in metadata (just filename)
+        if doc_title:
+            metadata["file_name"] = doc_title
+        if heading_text:
+            metadata["heading"] = heading_text
+        if heading_path:
+            metadata["heading_path"] = heading_path
+
+        # Use raw text directly (no header prefix needed with resource links)
+        chunk_text = raw_text
+
+        # Use just filename in location (full URI is in sources array)
+        location = {
+            "file": doc_title or "Unknown source",
+            "page": metadata.get("page_label")
+            or metadata.get("page_number")
+            or metadata.get("page"),
+            "heading": heading_text,
+            "heading_path": heading_path or None,
+        }
+        score_value = rerank_scores.get(id(node), getattr(node, "score", None))
+        chunk_data = {
+            "text": chunk_text,
+            "score": round(float(score_value), 3) if score_value is not None else 0.0,
+            "metadata": metadata,
+            "location": location,
+        }
+        chunks.append(chunk_data)
+        
+        # Collect unique source files for resource links (used by Roo Code for clickable links)
+        # Use original_file_path if available, otherwise fall back to file_path
+        source_path = original_file_path or file_path
+        if source_path:
+            source_uri = None
+            source_name = doc_title or str(source_path)
+            mime_type = "application/octet-stream"  # default
+            
+            # Handle Confluence sources
+            if original_source == "Confluence":
+                confluence_url = os.getenv("CONFLUENCE_URL", "")
+                page_id = metadata.get("page_id")
+                if confluence_url and page_id:
+                    # Build Confluence page URL
+                    source_uri = f"{confluence_url.rstrip('/')}/pages/viewpage.action?pageId={page_id}"
+                elif confluence_url:
+                    # Fallback: use title-based URL if page_id not available
+                    title = metadata.get("title", metadata.get("file_name", ""))
+                    if title:
+                        # URL-encode the title for the URL
+                        from urllib.parse import quote
+                        encoded_title = quote(title.replace(" ", "+"))
+                        source_uri = f"{confluence_url.rstrip('/')}/spaces/~{encoded_title}"
+                if source_uri:
+                    mime_type = "text/html"
+            else:
+                # Create a file:// URI for local files
+                try:
+                    file_path_obj = Path(str(source_path))
+                    if file_path_obj.is_absolute():
+                        # Use file:/// format (three slashes) for absolute paths
+                        source_uri = f"file://{file_path_obj.resolve()}"
+                    else:
+                        # If relative, try to resolve it relative to DATA_DIR
+                        data_dir = Path(os.getenv("DATA_DIR", "./data"))
+                        resolved_path = (data_dir / file_path_obj).resolve()
+                        source_uri = f"file://{resolved_path}"
+                    
+                    # Determine MIME type based on file extension
+                    file_path_str = str(file_path)
+                    if file_path_str.endswith(".pdf"):
+                        mime_type = "application/pdf"
+                    elif file_path_str.endswith((".docx", ".doc")):
+                        mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    elif file_path_str.endswith((".md", ".markdown")):
+                        mime_type = "text/markdown"
+                    elif file_path_str.endswith(".txt"):
+                        mime_type = "text/plain"
+                except Exception:
+                    # If we can't create a proper URI, skip this source
+                    source_uri = None
+            
+            if source_uri and source_uri not in unique_sources:
+                unique_sources[source_uri] = {
+                    "uri": source_uri,
+                    "name": source_name,
+                    "mime_type": mime_type,
+                }
+
+    elapsed = time.time() - start_time
+
+    # Build sources list for structured response (Roo Code uses this for clickable links)
+    sources_list = []
+    for source_info in unique_sources.values():
+        sources_list.append({
+            "uri": source_info["uri"],
+            "name": source_info["name"],
+            "mimeType": source_info.get("mime_type", "application/octet-stream"),
+        })
+    
+    return {
+        "chunks": chunks,
+        "query": query,
+        "num_chunks": len(chunks),
+        "retrieval_time": f"{elapsed:.2f}s",
+        "sources": sources_list,  # Roo Code displays these as clickable links
+    }
+
+
+@mcp.tool()
+async def search_local(query: str) -> dict[str, Any]:
+    """
+    Search the local documentation corpus and return the most relevant chunks.
+    Use this tool when the user asks a question that might be answered by the local documentation.
     """
     start_time = time.time()
-    
     try:
-        # Never log user queries (may contain secrets).
-        
         # Preprocess query to improve retrieval quality
         enhanced_query = _preprocess_query(query)
         
@@ -528,22 +735,40 @@ Each chunk includes:
         # Retrieve relevant chunks (embedding stage) using enhanced query
         nodes = retriever.retrieve(enhanced_query)
 
-        # Search Confluence in parallel (with timeout)
-        # Optimization: Check if CONFLUENCE_URL is set before even attempting it
+        return _process_and_format_results(nodes, enhanced_query, start_time)
+
+    except Exception as e:
+        logger.error(f"Error in search_local: {e}", exc_info=True)
+        return {
+            "chunks": [],
+            "error": str(e),
+            "query": query,
+            "num_chunks": 0,
+            "retrieval_time": "0.00s",
+            "sources": []
+        }
+
+
+@mcp.tool()
+async def search_confluence(query: str) -> dict[str, Any]:
+    """
+    Search Confluence for documents matching the query.
+    Use this tool when local documentation is insufficient or the user asks about Confluence specific content.
+    """
+    start_time = time.time()
+    try:
+        # Preprocess query
+        enhanced_query = _preprocess_query(query)
+        
         confluence_nodes = []
         if os.getenv("CONFLUENCE_URL"):
             try:
                  # Run blocking generic search in executor
-                 # Use enhanced_query (preprocessed) instead of original query for consistency
                  loop = asyncio.get_running_loop()
                  result = await asyncio.wait_for(
                      loop.run_in_executor(None, _search_confluence, enhanced_query),
                      timeout=CONFLUENCE_TIMEOUT
                  )
-                 # Always assign result, even if empty list
-                 # (Previously: "if result:" would skip assignment for empty lists, which was redundant
-                 #  since confluence_nodes is already initialized as []. This ensures Confluence
-                 #  is always called when CONFLUENCE_URL is set, regardless of result.)
                  confluence_nodes = result
                  logger.info(f"Confluence search returned {len(confluence_nodes)} entries")
             except asyncio.TimeoutError:
@@ -560,232 +785,21 @@ Each chunk includes:
                      await ctx.error(msg)
                  except Exception:
                      logger.error(msg)
+        else:
+             logger.warning("Confluence search skipped: CONFLUENCE_URL not set")
 
-        if confluence_nodes:
-             nodes.extend(confluence_nodes)
+        return _process_and_format_results(confluence_nodes, enhanced_query, start_time)
 
-        # Rerank the retrieved nodes with FlashRank (CPU-only, ONNX-based) and trim to the
-        # configured final Top K for the tool response.
-        rerank_scores: dict[int, float] = {}
-        if nodes:
-            rerank_limit = max(1, min(RETRIEVAL_RERANK_TOP_K, len(nodes)))
-            try:
-                reranker = _ensure_reranker()
-                # Prepare documents for reranking - FlashRank expects list of dicts with 'text' key
-                passages = [{"text": node.node.get_content() or ""} for node in nodes]
-                
-                # FlashRank requires a RerankRequest object
-                from flashrank import RerankRequest
-                rerank_request = RerankRequest(query=enhanced_query, passages=passages)
-                
-                # FlashRank returns reranked documents (list of dicts with 'text' and 'score')
-                reranked_results = reranker.rerank(rerank_request)
-                
-                # Create a mapping from document text to (index, node) for reliable matching
-                # Use index as primary key to handle duplicate text correctly
-                text_to_indices = {}
-                for idx, node in enumerate(nodes):
-                    node_text = node.node.get_content() or ""
-                    if node_text not in text_to_indices:
-                        text_to_indices[node_text] = []
-                    text_to_indices[node_text].append((idx, node))
-                
-                # Reorder nodes based on reranking results
-                reranked_nodes = []
-                seen_indices = set()
-                for result in reranked_results:
-                    # FlashRank returns dicts with 'text' and 'score' keys
-                    doc_text = result.get("text", "")
-                    score = result.get("score", 0.0)
-                    
-                    if doc_text in text_to_indices:
-                        # Get the first unused (index, node) pair for this text
-                        for idx, node in text_to_indices[doc_text]:
-                            if idx not in seen_indices:
-                                reranked_nodes.append(node)
-                                rerank_scores[id(node)] = float(score)
-                                seen_indices.add(idx)
-                                break
-                
-                # Add any nodes that weren't in reranked results (shouldn't happen, but safety)
-                for idx, node in enumerate(nodes):
-                    if idx not in seen_indices:
-                        reranked_nodes.append(node)
-                
-                nodes = reranked_nodes[:rerank_limit]
-            except Exception as e:
-                # Fall back to vector search ordering if reranking fails
-                logger.error(f"Reranking failed, falling back to vector search order: {e}")
-                nodes = nodes[:rerank_limit]
-
-        # Format chunks with full content and metadata
-        chunks = []
-        unique_sources: dict[str, dict[str, Any]] = {}  # uri -> source info
-        for node in nodes:
-            metadata = dict(node.node.metadata or {})
-            raw_text = node.node.get_content()
-
-            # Get headings for this chunk/document if available directly from metadata
-            file_path = (
-                metadata.get("file_path")
-                or metadata.get("file_name")
-                or metadata.get("source")
-            )
-            headings = metadata.get("document_headings") or metadata.get("headings") or []
-
-            # Build heading context (current heading + full path) if we have
-            # document-level heading structure and character offsets.
-            char_start = metadata.get("start_char_idx")
-            heading_text = metadata.get("heading")  # may be set directly for per-heading chunks
-            heading_path: list[str] = []
-            heading_titles: list[str] = []
-            if isinstance(headings, list) and headings:
-                # Collect all heading titles for this document (normalized)
-                heading_titles = [h.get("text", "").strip() for h in headings if isinstance(h, dict) and h.get("text")]
-                # Only try to infer heading from document_headings if we don't
-                # already have an explicit "heading" on the chunk.
-                if heading_text is None and char_start is not None:
-                    heading_text, heading_path = _build_heading_path(headings, char_start)
-
-            # Normalize a short document title for display
-            doc_title = None
-            if file_path:
-                try:
-                    doc_title = Path(str(file_path)).name
-                except Exception:
-                    doc_title = str(file_path)
-
-            # Clean up metadata to remove redundant path fields (sources array has full URIs)
-            # Store original file_path for source URI building before cleaning
-            original_file_path = metadata.get("file_path")
-            original_source = metadata.get("source")
-            
-            # Remove redundant path fields from metadata
-            if "file_path" in metadata:
-                del metadata["file_path"]
-            # Remove source if it's just a duplicate file path (keep "Confluence" as it's useful context)
-            if metadata.get("source") and metadata.get("source") != "Confluence":
-                # If source matches the file_path we just removed, it's redundant
-                if original_source == original_file_path:
-                    del metadata["source"]
-            
-            # Set minimal file info in metadata (just filename)
-            if doc_title:
-                metadata["file_name"] = doc_title
-            if heading_text:
-                metadata["heading"] = heading_text
-            if heading_path:
-                metadata["heading_path"] = heading_path
-
-            # Use raw text directly (no header prefix needed with resource links)
-            chunk_text = raw_text
-
-            # Use just filename in location (full URI is in sources array)
-            location = {
-                "file": doc_title or "Unknown source",
-                "page": metadata.get("page_label")
-                or metadata.get("page_number")
-                or metadata.get("page"),
-                "heading": heading_text,
-                "heading_path": heading_path or None,
-            }
-            score_value = rerank_scores.get(id(node), getattr(node, "score", None))
-            chunk_data = {
-                "text": chunk_text,
-                "score": round(float(score_value), 3) if score_value is not None else 0.0,
-                "metadata": metadata,
-                "location": location,
-            }
-            chunks.append(chunk_data)
-            
-            # Collect unique source files for resource links (used by Roo Code for clickable links)
-            # Use original_file_path if available, otherwise fall back to file_path
-            source_path = original_file_path or file_path
-            if source_path:
-                source_uri = None
-                source_name = doc_title or str(source_path)
-                mime_type = "application/octet-stream"  # default
-                
-                # Handle Confluence sources
-                if original_source == "Confluence":
-                    confluence_url = os.getenv("CONFLUENCE_URL", "")
-                    page_id = metadata.get("page_id")
-                    if confluence_url and page_id:
-                        # Build Confluence page URL
-                        source_uri = f"{confluence_url.rstrip('/')}/pages/viewpage.action?pageId={page_id}"
-                    elif confluence_url:
-                        # Fallback: use title-based URL if page_id not available
-                        title = metadata.get("title", metadata.get("file_name", ""))
-                        if title:
-                            # URL-encode the title for the URL
-                            from urllib.parse import quote
-                            encoded_title = quote(title.replace(" ", "+"))
-                            source_uri = f"{confluence_url.rstrip('/')}/spaces/~{encoded_title}"
-                    if source_uri:
-                        mime_type = "text/html"
-                else:
-                    # Create a file:// URI for local files
-                    try:
-                        file_path_obj = Path(str(source_path))
-                        if file_path_obj.is_absolute():
-                            # Use file:/// format (three slashes) for absolute paths
-                            source_uri = f"file://{file_path_obj.resolve()}"
-                        else:
-                            # If relative, try to resolve it relative to DATA_DIR
-                            data_dir = Path(os.getenv("DATA_DIR", "./data"))
-                            resolved_path = (data_dir / file_path_obj).resolve()
-                            source_uri = f"file://{resolved_path}"
-                        
-                        # Determine MIME type based on file extension
-                        file_path_str = str(file_path)
-                        if file_path_str.endswith(".pdf"):
-                            mime_type = "application/pdf"
-                        elif file_path_str.endswith((".docx", ".doc")):
-                            mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                        elif file_path_str.endswith((".md", ".markdown")):
-                            mime_type = "text/markdown"
-                        elif file_path_str.endswith(".txt"):
-                            mime_type = "text/plain"
-                    except Exception:
-                        # If we can't create a proper URI, skip this source
-                        source_uri = None
-                
-                if source_uri and source_uri not in unique_sources:
-                    unique_sources[source_uri] = {
-                        "uri": source_uri,
-                        "name": source_name,
-                        "mime_type": mime_type,
-                    }
-
-        elapsed = time.time() - start_time
-
-        # Build sources list for structured response (Roo Code uses this for clickable links)
-        sources_list = []
-        for source_info in unique_sources.values():
-            sources_list.append({
-                "uri": source_info["uri"],
-                "name": source_info["name"],
-                "mimeType": source_info.get("mime_type", "application/octet-stream"),
-            })
-        
-        structured_response = {
-            "chunks": chunks,
-            "query": query,
-            "num_chunks": len(chunks),
-            "retrieval_time": f"{elapsed:.2f}s",
-            "sources": sources_list,  # Roo Code displays these as clickable links
-        }
-        
-        return structured_response
-        
     except Exception as e:
-        logger.error(f"Error in retrieve_docs: {e}", exc_info=True)
-        error_response = {
+        logger.error(f"Error in search_confluence: {e}", exc_info=True)
+        return {
             "chunks": [],
             "error": str(e),
             "query": query,
+            "num_chunks": 0,
+            "retrieval_time": "0.00s",
+            "sources": []
         }
-        return error_response
 
 
 if __name__ == "__main__":

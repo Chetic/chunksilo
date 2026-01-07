@@ -1,0 +1,313 @@
+2025-12-12 09:53:35,027 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 09:53:35,029 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 09:53:35,030 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 09:53:37,808 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 09:53:37,811 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 09:53:37,811 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 09:53:39,803 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 09:53:39,807 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 09:53:39,807 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 09:53:50,123 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2025-12-12 09:53:50,128 - __main__ - INFO - Loading LlamaIndex from storage...
+2025-12-12 09:53:50,295 - __main__ - INFO - Loading embedding model from cache: /Users/chetic/git/opd-mcp/models/models--qdrant--bge-small-en-v1.5-onnx-q/snapshots/52398278842ec682c6f32300af41344b1c0b0bb2
+2025-12-12 09:53:50,444 - __main__ - INFO - Embedding model initialized successfully
+2025-12-12 09:53:50,501 - llama_index.core.indices.loading - INFO - Loading all indices.
+2025-12-12 09:53:50,595 - __main__ - INFO - Calling Confluence search
+2025-12-12 09:53:50,596 - __main__ - INFO - Confluence search returned 0 entries
+2025-12-12 09:53:50,662 - __main__ - INFO - Rerank model 'ms-marco-MiniLM-L-12-v2' loaded successfully
+2025-12-12 09:56:35,733 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 09:56:35,735 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 09:56:35,736 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 09:56:38,138 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 09:56:38,141 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 09:56:38,142 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 09:56:44,910 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2025-12-12 09:56:44,911 - __main__ - INFO - Loading LlamaIndex from storage...
+2025-12-12 09:56:45,002 - __main__ - INFO - Loading embedding model from cache: /Users/chetic/git/opd-mcp/models/models--qdrant--bge-small-en-v1.5-onnx-q/snapshots/52398278842ec682c6f32300af41344b1c0b0bb2
+2025-12-12 09:56:45,157 - __main__ - INFO - Embedding model initialized successfully
+2025-12-12 09:56:45,211 - llama_index.core.indices.loading - INFO - Loading all indices.
+2025-12-12 09:56:45,299 - __main__ - INFO - Calling Confluence search
+2025-12-12 09:56:45,299 - __main__ - WARNING - Confluence search skipped: missing CONFLUENCE_USERNAME (or CONFLUENCE_EMAIL/CONFLUENCE_USER)
+2025-12-12 09:56:45,300 - __main__ - INFO - Confluence search returned 0 entries
+2025-12-12 09:56:45,368 - __main__ - INFO - Rerank model 'ms-marco-MiniLM-L-12-v2' loaded successfully
+2025-12-12 09:57:27,739 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 09:57:27,742 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 09:57:27,742 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 09:57:43,512 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2025-12-12 09:57:43,513 - __main__ - INFO - Loading LlamaIndex from storage...
+2025-12-12 09:57:43,605 - __main__ - INFO - Loading embedding model from cache: /Users/chetic/git/opd-mcp/models/models--qdrant--bge-small-en-v1.5-onnx-q/snapshots/52398278842ec682c6f32300af41344b1c0b0bb2
+2025-12-12 09:57:43,704 - __main__ - INFO - Embedding model initialized successfully
+2025-12-12 09:57:43,758 - llama_index.core.indices.loading - INFO - Loading all indices.
+2025-12-12 09:57:43,845 - __main__ - INFO - Calling Confluence search
+2025-12-12 09:57:43,845 - __main__ - INFO - Searching Confluence
+2025-12-12 09:57:43,846 - __main__ - INFO - Confluence GET rest/api/content/search?cql=text%20~%20%22secret%20word%22%20AND%20type%20%3D%20%22page%22&limit=10&expand=body.export_view.value
+2025-12-12 09:57:44,604 - __main__ - INFO - Confluence content search returned 1 results
+2025-12-12 09:57:44,605 - __main__ - INFO - Confluence search converted 1 documents to nodes
+2025-12-12 09:57:44,606 - __main__ - INFO - Confluence search returned 1 entries
+2025-12-12 09:57:44,722 - __main__ - INFO - Rerank model 'ms-marco-MiniLM-L-12-v2' loaded successfully
+2025-12-12 10:01:21,917 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2025-12-12 10:01:21,953 - __main__ - INFO - Calling Confluence search
+2025-12-12 10:01:21,954 - __main__ - INFO - Searching Confluence
+2025-12-12 10:01:21,955 - __main__ - INFO - Confluence GET rest/api/content/search?cql=text%20~%20%22secret%20word%22%20AND%20type%20%3D%20%22page%22&limit=10&expand=body.export_view.value
+2025-12-12 10:01:22,682 - __main__ - INFO - Confluence content search returned 1 results
+2025-12-12 10:01:22,683 - __main__ - INFO - Confluence search converted 1 documents to nodes
+2025-12-12 10:01:22,684 - __main__ - INFO - Confluence search returned 1 entries
+2025-12-12 10:03:18,599 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 10:03:18,602 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 10:03:18,602 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 10:03:20,119 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 10:03:20,122 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 10:03:20,123 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 10:03:56,611 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2025-12-12 10:03:56,612 - __main__ - INFO - Loading LlamaIndex from storage...
+2025-12-12 10:03:56,740 - __main__ - INFO - Loading embedding model from cache: /Users/chetic/git/opd-mcp/models/models--qdrant--bge-small-en-v1.5-onnx-q/snapshots/52398278842ec682c6f32300af41344b1c0b0bb2
+2025-12-12 10:03:56,919 - __main__ - INFO - Embedding model initialized successfully
+2025-12-12 10:03:56,972 - llama_index.core.indices.loading - INFO - Loading all indices.
+2025-12-12 10:03:57,063 - __main__ - INFO - Calling Confluence search
+2025-12-12 10:03:57,063 - __main__ - INFO - Searching Confluence
+2025-12-12 10:03:57,064 - __main__ - INFO - Confluence CQL query: text ~ "secret" AND text ~ "word" AND type = "page"
+2025-12-12 10:03:57,469 - llama_index.readers.confluence.base - INFO - Processing https://chetech.atlassian.net/wiki/spaces/~701212ad32f9f477e4157a5ea1c10ef926cc1/pages/294914/2025-12-12+Meeting+notes
+2025-12-12 10:03:57,473 - __main__ - INFO - Confluence search returned 1 documents for query: secret word
+2025-12-12 10:03:57,473 - __main__ - INFO - Confluence search converted 1 documents to nodes
+2025-12-12 10:03:57,474 - __main__ - INFO - Confluence search returned 1 entries
+2025-12-12 10:03:57,552 - __main__ - INFO - Rerank model 'ms-marco-MiniLM-L-12-v2' loaded successfully
+2025-12-12 10:09:16,237 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 10:09:16,240 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 10:09:16,241 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 10:09:18,815 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 10:09:18,818 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 10:09:18,819 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 10:09:56,010 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2025-12-12 10:09:56,010 - __main__ - INFO - Loading LlamaIndex from storage...
+2025-12-12 10:09:56,126 - __main__ - INFO - Loading embedding model from cache: /Users/chetic/git/opd-mcp/models/models--qdrant--bge-small-en-v1.5-onnx-q/snapshots/52398278842ec682c6f32300af41344b1c0b0bb2
+2025-12-12 10:09:56,295 - __main__ - INFO - Embedding model initialized successfully
+2025-12-12 10:09:56,350 - llama_index.core.indices.loading - INFO - Loading all indices.
+2025-12-12 10:09:57,230 - llama_index.readers.confluence.base - INFO - Processing https://chetech.atlassian.net/wiki/spaces/~701212ad32f9f477e4157a5ea1c10ef926cc1/pages/294914/2025-12-12+Meeting+notes
+2025-12-12 10:09:57,237 - __main__ - INFO - Confluence search returned 1 entries
+2025-12-12 10:09:57,313 - __main__ - INFO - Rerank model 'ms-marco-MiniLM-L-12-v2' loaded successfully
+2025-12-12 10:17:30,997 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 10:17:31,000 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 10:17:31,000 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 10:17:32,956 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 10:17:32,960 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 10:17:32,960 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 10:17:40,927 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2025-12-12 10:17:40,927 - __main__ - INFO - Loading LlamaIndex from storage...
+2025-12-12 10:17:41,039 - __main__ - INFO - Loading embedding model from cache: /Users/chetic/git/opd-mcp/models/models--qdrant--bge-small-en-v1.5-onnx-q/snapshots/52398278842ec682c6f32300af41344b1c0b0bb2
+2025-12-12 10:17:41,203 - __main__ - INFO - Embedding model initialized successfully
+2025-12-12 10:17:41,256 - llama_index.core.indices.loading - INFO - Loading all indices.
+2025-12-12 10:17:41,897 - llama_index.readers.confluence.base - INFO - Processing https://chetech.atlassian.net/wiki/spaces/~701212ad32f9f477e4157a5ea1c10ef926cc1/pages/294914/2025-12-12+Meeting+notes
+2025-12-12 10:17:41,902 - __main__ - INFO - Confluence search returned 1 entries
+2025-12-12 10:17:41,987 - __main__ - INFO - Rerank model 'ms-marco-MiniLM-L-12-v2' loaded successfully
+2025-12-12 10:40:54,522 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 10:40:54,525 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 10:40:54,525 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 10:40:56,474 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 10:40:56,477 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 10:40:56,478 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 10:41:03,474 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2025-12-12 10:41:03,475 - __main__ - INFO - Loading LlamaIndex from storage...
+2025-12-12 10:41:03,569 - __main__ - INFO - Loading embedding model from cache: /Users/chetic/git/opd-mcp/models/models--qdrant--bge-small-en-v1.5-onnx-q/snapshots/52398278842ec682c6f32300af41344b1c0b0bb2
+2025-12-12 10:41:03,712 - __main__ - INFO - Embedding model initialized successfully
+2025-12-12 10:41:03,766 - llama_index.core.indices.loading - INFO - Loading all indices.
+2025-12-12 10:41:04,468 - llama_index.readers.confluence.base - INFO - Processing https://chetech.atlassian.net/wiki/spaces/~701212ad32f9f477e4157a5ea1c10ef926cc1/pages/294914/2025-12-12+Meeting+notes
+2025-12-12 10:41:04,471 - __main__ - INFO - Confluence search returned 1 entries
+2025-12-12 10:41:04,553 - __main__ - INFO - Rerank model 'ms-marco-MiniLM-L-12-v2' loaded successfully
+2025-12-12 10:43:30,922 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 10:43:30,925 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 10:43:30,925 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 10:43:33,289 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 10:43:33,295 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 10:43:33,296 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 10:43:42,097 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2025-12-12 10:43:42,098 - __main__ - INFO - Loading LlamaIndex from storage...
+2025-12-12 10:43:42,190 - __main__ - INFO - Loading embedding model from cache: /Users/chetic/git/opd-mcp/models/models--qdrant--bge-small-en-v1.5-onnx-q/snapshots/52398278842ec682c6f32300af41344b1c0b0bb2
+2025-12-12 10:43:42,317 - __main__ - INFO - Embedding model initialized successfully
+2025-12-12 10:43:42,371 - llama_index.core.indices.loading - INFO - Loading all indices.
+2025-12-12 10:43:42,927 - llama_index.readers.confluence.base - INFO - Processing https://chetech.atlassian.net/wiki/spaces/~701212ad32f9f477e4157a5ea1c10ef926cc1/pages/294914/2025-12-12+Meeting+notes
+2025-12-12 10:43:42,931 - __main__ - INFO - Confluence search returned 1 entries
+2025-12-12 10:43:43,016 - __main__ - INFO - Rerank model 'ms-marco-MiniLM-L-12-v2' loaded successfully
+2025-12-12 10:45:24,789 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 10:45:24,793 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 10:45:24,793 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 10:45:27,335 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 10:45:27,338 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 10:45:27,339 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 11:17:09,180 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 11:17:09,183 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 11:17:09,184 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 11:17:30,409 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 11:17:30,412 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 11:17:30,412 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 11:17:32,525 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 11:17:32,530 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 11:17:32,531 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 11:17:49,737 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2025-12-12 11:17:49,737 - __main__ - INFO - Loading LlamaIndex from storage...
+2025-12-12 11:17:49,837 - __main__ - INFO - Loading embedding model from cache: /Users/chetic/git/opd-mcp/models/models--qdrant--bge-small-en-v1.5-onnx-q/snapshots/52398278842ec682c6f32300af41344b1c0b0bb2
+2025-12-12 11:17:49,966 - __main__ - INFO - Embedding model initialized successfully
+2025-12-12 11:17:50,018 - llama_index.core.indices.loading - INFO - Loading all indices.
+2025-12-12 11:17:50,797 - llama_index.readers.confluence.base - INFO - Processing https://chetech.atlassian.net/wiki/spaces/~701212ad32f9f477e4157a5ea1c10ef926cc1/pages/294914/2025-12-12+Meeting+notes
+2025-12-12 11:17:50,800 - __main__ - INFO - Confluence search returned 1 entries
+2025-12-12 11:17:50,868 - __main__ - INFO - Rerank model 'ms-marco-MiniLM-L-12-v2' loaded successfully
+2025-12-12 11:18:21,064 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2025-12-12 11:18:21,446 - __main__ - INFO - Confluence search returned 0 entries
+2025-12-12 11:23:08,386 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 11:23:08,389 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 11:23:08,389 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 11:23:09,852 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 11:23:09,855 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 11:23:09,856 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 11:23:17,421 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2025-12-12 11:23:17,422 - __main__ - INFO - Loading LlamaIndex from storage...
+2025-12-12 11:23:17,520 - __main__ - INFO - Loading embedding model from cache: /Users/chetic/git/opd-mcp/models/models--qdrant--bge-small-en-v1.5-onnx-q/snapshots/52398278842ec682c6f32300af41344b1c0b0bb2
+2025-12-12 11:23:17,672 - __main__ - INFO - Embedding model initialized successfully
+2025-12-12 11:23:17,726 - llama_index.core.indices.loading - INFO - Loading all indices.
+2025-12-12 11:23:18,766 - llama_index.readers.confluence.base - INFO - Processing https://chetech.atlassian.net/wiki/spaces/~701212ad32f9f477e4157a5ea1c10ef926cc1/pages/294914/2025-12-12+Meeting+notes
+2025-12-12 11:23:18,771 - __main__ - INFO - Confluence search returned 1 entries
+2025-12-12 11:23:18,854 - __main__ - INFO - Rerank model 'ms-marco-MiniLM-L-12-v2' loaded successfully
+2025-12-12 11:23:38,941 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2025-12-12 11:23:39,737 - __main__ - INFO - Confluence search returned 0 entries
+2025-12-12 11:24:37,904 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2025-12-12 11:24:38,302 - __main__ - INFO - Confluence search returned 0 entries
+2025-12-12 11:25:13,609 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2025-12-12 11:25:13,993 - llama_index.readers.confluence.base - INFO - Processing https://chetech.atlassian.net/wiki/spaces/~701212ad32f9f477e4157a5ea1c10ef926cc1/pages/294914/2025-12-12+Meeting+notes
+2025-12-12 11:25:14,000 - __main__ - INFO - Confluence search returned 1 entries
+2025-12-12 11:30:51,391 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 11:30:51,394 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 11:30:51,395 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 11:30:53,095 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 11:30:53,099 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 11:30:53,099 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 11:31:01,650 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2025-12-12 11:31:01,651 - __main__ - INFO - Loading LlamaIndex from storage...
+2025-12-12 11:31:01,747 - __main__ - INFO - Loading embedding model from cache: /Users/chetic/git/opd-mcp/models/models--qdrant--bge-small-en-v1.5-onnx-q/snapshots/52398278842ec682c6f32300af41344b1c0b0bb2
+2025-12-12 11:31:01,880 - __main__ - INFO - Embedding model initialized successfully
+2025-12-12 11:31:01,934 - llama_index.core.indices.loading - INFO - Loading all indices.
+2025-12-12 11:31:02,430 - __main__ - INFO - Confluence search returned 0 entries
+2025-12-12 11:31:02,515 - __main__ - INFO - Rerank model 'ms-marco-MiniLM-L-12-v2' loaded successfully
+2025-12-12 11:31:31,046 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2025-12-12 11:31:31,451 - llama_index.readers.confluence.base - INFO - Processing https://chetech.atlassian.net/wiki/spaces/~701212ad32f9f477e4157a5ea1c10ef926cc1/pages/294914/2025-12-12+Meeting+notes
+2025-12-12 11:31:31,461 - __main__ - INFO - Confluence search returned 1 entries
+2025-12-12 12:56:36,685 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 12:56:36,688 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 12:56:36,688 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-12 12:56:38,968 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-12 12:56:38,971 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-12 12:56:38,972 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-17 20:52:28,654 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-17 20:52:28,713 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-17 20:52:28,722 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-18 18:21:17,158 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-18 18:21:17,161 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-18 18:21:17,161 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-18 18:21:21,518 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-18 18:21:21,521 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-18 18:21:21,522 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-18 18:51:45,757 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-18 18:51:45,764 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-18 18:51:45,766 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-18 18:51:50,860 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-18 18:51:50,872 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-18 18:51:50,874 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 07:15:56,828 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 07:15:56,870 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 07:15:56,872 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 07:16:00,510 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 07:16:00,516 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 07:16:00,517 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 15:45:35,686 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 15:45:35,693 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 15:45:35,699 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 15:45:39,348 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 15:45:39,351 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 15:45:39,358 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 15:45:39,986 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 15:45:39,989 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 15:45:39,989 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 15:45:44,304 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 15:45:44,307 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 15:45:44,308 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 15:46:06,453 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 15:46:06,851 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 15:46:06,855 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 15:46:12,224 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 15:46:12,231 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 15:46:12,232 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 16:00:49,590 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 16:00:50,030 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 16:00:50,043 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 16:00:55,494 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 16:00:55,497 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 16:00:55,498 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 16:01:25,275 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 16:01:25,282 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 16:01:25,283 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 16:01:29,403 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 16:01:29,406 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 16:01:29,407 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 16:06:19,139 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 16:06:19,147 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 16:06:19,148 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 16:06:22,430 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 16:06:22,437 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 16:06:22,439 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 16:11:41,101 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 16:11:41,104 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 16:11:41,105 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 16:11:44,290 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 16:11:44,297 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 16:11:44,298 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 16:16:31,169 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 16:16:31,172 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 16:16:31,172 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 16:16:34,898 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 16:16:34,901 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 16:16:34,902 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 16:29:20,355 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 16:29:20,356 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-19 16:29:20,359 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 16:29:20,360 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-19 16:29:20,360 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-19 16:29:20,361 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-20 09:44:44,055 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-20 09:44:44,055 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-20 09:44:44,063 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-20 09:44:44,063 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-20 09:44:44,065 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-20 09:44:44,066 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-21 07:56:47,760 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-21 07:56:47,761 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-21 07:56:47,785 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-21 07:56:47,788 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-21 07:56:47,789 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-21 07:56:47,797 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-21 08:02:20,764 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-21 08:02:20,775 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-21 08:02:20,821 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-21 08:02:20,826 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-21 08:02:20,838 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-21 08:02:20,843 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-30 07:27:51,957 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-30 07:27:51,957 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-30 07:27:51,965 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-30 07:27:51,966 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-30 07:27:51,967 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-30 07:27:51,967 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-30 14:53:43,761 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-30 14:53:43,761 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-30 14:53:43,764 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-30 14:53:43,764 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-30 14:53:43,765 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-30 14:53:43,765 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-30 14:55:15,764 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-30 14:55:15,766 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-30 14:55:15,786 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-30 14:55:15,789 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-30 14:55:15,792 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-30 14:55:15,793 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2025-12-31 09:51:34,211 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2025-12-31 09:51:34,214 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourcesRequest
+2025-12-31 09:51:34,214 - mcp.server.lowlevel.server - INFO - Processing request of type ListResourceTemplatesRequest
+2026-01-07 11:25:18,065 - mcp_server - INFO - Confluence search returned 1 entries
+2026-01-07 11:25:18,067 - mcp_server - WARNING - Confluence search skipped: CONFLUENCE_URL not set
