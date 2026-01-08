@@ -84,6 +84,28 @@ RETRIEVAL_MODEL_CACHE_DIR = Path(os.getenv("RETRIEVAL_MODEL_CACHE_DIR", "./model
 
 # Confluence Configuration
 CONFLUENCE_TIMEOUT = float(os.getenv("CONFLUENCE_TIMEOUT", "10.0"))
+CONFLUENCE_MAX_RESULTS = int(os.getenv("CONFLUENCE_MAX_RESULTS", "30"))
+
+# Common English stopwords to filter from Confluence CQL queries
+# These words add no search value and can cause overly broad/narrow results
+CONFLUENCE_STOPWORDS = frozenset({
+    # Articles
+    "a", "an", "the",
+    # Prepositions
+    "in", "on", "at", "to", "for", "of", "with", "by", "from", "as",
+    # Conjunctions
+    "and", "or", "but", "if", "then", "so",
+    # Pronouns
+    "i", "me", "my", "we", "us", "our", "you", "your", "he", "she", "it", "they", "them",
+    # Common verbs
+    "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did",
+    "can", "could", "will", "would", "should", "may", "might", "must",
+    # Question words
+    "what", "when", "where", "which", "who", "whom", "whose", "why", "how",
+    # Other common words
+    "this", "that", "these", "those", "here", "there", "all", "any", "each", "some", "no", "not",
+    "about", "into", "over", "after", "before", "between", "under", "again", "just", "only", "also",
+})
 
 # SSL/TLS Configuration
 # CA bundle path for HTTPS connections (e.g., Confluence, future HTTP clients)
@@ -395,13 +417,35 @@ def _preprocess_query(query: str) -> str:
     return processed if processed else original_query
 
 
+def _prepare_confluence_query_terms(query: str) -> list[str]:
+    """
+    Prepare query terms for Confluence CQL search.
+
+    Processing steps:
+    1. Split query into words and lowercase
+    2. Filter out stopwords
+    3. Filter out very short words (< 2 chars)
+    4. Escape special characters
+
+    Args:
+        query: The raw search query string
+
+    Returns:
+        List of prepared search terms (may be empty if all words are stopwords)
+    """
+    words = query.strip().lower().split()
+    meaningful = [w for w in words if w not in CONFLUENCE_STOPWORDS and len(w) >= 2]
+    return [w.replace('"', '\\"') for w in meaningful]
+
+
 def _search_confluence(query: str) -> list[NodeWithScore]:
     """
     Search Confluence for documents matching the query using CQL.
     Returns a list of NodeWithScore objects compatible with the reranker.
-    
-    For multi-word queries, uses AND logic to find pages containing all words.
-    For single-word queries or exact phrases, uses phrase matching.
+
+    Uses OR logic for multi-word queries to cast a wider net, relying on the
+    FlashRank reranker to identify the most semantically relevant results.
+    Filters out common stopwords to improve search precision.
     """
     base_url = os.getenv("CONFLUENCE_URL")
     # If CONFLUENCE_URL is unset or empty, disable search completely
@@ -428,25 +472,29 @@ def _search_confluence(query: str) -> list[NodeWithScore]:
 
     try:
         reader = ConfluenceReader(base_url=base_url, user_name=username, password=api_token)
-        
-        # Build CQL query
-        # For multi-word queries, use AND logic to find pages containing all words
-        # This ensures pages with both "foo" and "bar" are found
-        query_words = query.strip().split()
-        
-        if len(query_words) == 1:
-            # Single word: simple contains search
-            # Escape double quotes in the query word
-            escaped_query = query_words[0].replace('"', '\\"')
-            cql = f'text ~ "{escaped_query}" AND type = "page"'
+
+        # Prepare query terms (filter stopwords, escape special chars)
+        query_terms = _prepare_confluence_query_terms(query)
+
+        # Build CQL query using OR logic to cast a wider net
+        if not query_terms:
+            # All words were stopwords - fall back to using original query as phrase
+            escaped = query.strip().replace('"', '\\"')
+            if not escaped:
+                logger.warning("Confluence search skipped: empty query after processing")
+                return []
+            cql = f'text ~ "{escaped}" AND type = "page"'
+        elif len(query_terms) == 1:
+            # Single meaningful word
+            cql = f'text ~ "{query_terms[0]}" AND type = "page"'
         else:
-            # Multiple words: use AND logic to find pages containing all words
-            # For "foo bar", this becomes: text ~ "foo" AND text ~ "bar"
-            escaped_words = [word.replace('"', '\\"') for word in query_words]
-            text_conditions = ' AND '.join([f'text ~ "{word}"' for word in escaped_words])
-            cql = f'{text_conditions} AND type = "page"'
-        
-        documents = reader.load_data(cql=cql)
+            # Multiple words: use OR logic to find pages with ANY matching word
+            # The reranker will sort by semantic relevance
+            text_conditions = ' OR '.join([f'text ~ "{term}"' for term in query_terms])
+            cql = f'({text_conditions}) AND type = "page"'
+
+        logger.debug(f"Confluence CQL query: {cql}")
+        documents = reader.load_data(cql=cql, max_results=CONFLUENCE_MAX_RESULTS)
 
         nodes: list[NodeWithScore] = []
         for doc in documents:

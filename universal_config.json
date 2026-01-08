@@ -12,6 +12,7 @@
             "CONFLUENCE_URL": "",
             "CONFLUENCE_USERNAME": "",
             "CONFLUENCE_API_TOKEN": "",
+            "CONFLUENCE_MAX_RESULTS": "30",
             "CA_BUNDLE_PATH": ""
         }
     },
