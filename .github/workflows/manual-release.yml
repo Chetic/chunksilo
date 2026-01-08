@@ -241,35 +241,22 @@ jobs:
         id: find_artifacts
         run: |
           set -eo pipefail
-          FILES=""
-
           if [[ "${{ inputs.include_manylinux_2_34 }}" == "true" ]]; then
             PKG_234=$(find packages -name "opd-mcp-*-manylinux_2_34*.tar.gz" -type f | head -1)
             if [ -z "$PKG_234" ]; then
               echo "Error: Missing manylinux_2_34 package" >&2
               exit 1
             fi
-            FILES+="$PKG_234"
             echo "package_234=$PKG_234" >> "$GITHUB_OUTPUT"
           fi
-
           if [[ "${{ inputs.include_manylinux_2_28 }}" == "true" ]]; then
             PKG_228=$(find packages -name "opd-mcp-*-manylinux_2_28*.tar.gz" -type f | head -1)
             if [ -z "$PKG_228" ]; then
               echo "Error: Missing manylinux_2_28 package" >&2
               exit 1
             fi
-            if [ -n "$FILES" ]; then FILES+=$'\n'; fi
-            FILES+="$PKG_228"
             echo "package_228=$PKG_228" >> "$GITHUB_OUTPUT"
           fi
-
-          if [[ -z "$FILES" ]]; then
-            echo "Error: No artifacts to release" >&2
-            exit 1
-          fi
-
-          printf 'files<<EOF\n%s\nEOF\n' "$FILES" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag
         env:
@@ -281,31 +268,38 @@ jobs:
           git tag -a "v${{ needs.prepare.outputs.version }}" -m "Release v${{ needs.prepare.outputs.version }}"
           git push origin "v${{ needs.prepare.outputs.version }}"
 
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v1
+      - name: Upload manylinux_2_34 to Google Drive
+        if: ${{ inputs.include_manylinux_2_34 }}
+        uses: willo32/google-drive-upload-action@v1
         with:
-          tag_name: v${{ needs.prepare.outputs.version }}
-          name: Release v${{ needs.prepare.outputs.version }}
-          body_path: release-notes.md
-          files: ${{ steps.find_artifacts.outputs.files }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          target: ${{ steps.find_artifacts.outputs.package_234 }}
+          credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
+          parent_folder_id: ${{ secrets.GDRIVE_FOLDER_ID }}
+          child_folder: v${{ needs.prepare.outputs.version }}
 
-      - name: Delete previous releases and artifacts
+      - name: Upload manylinux_2_28 to Google Drive
+        if: ${{ inputs.include_manylinux_2_28 }}
+        uses: willo32/google-drive-upload-action@v1
+        with:
+          target: ${{ steps.find_artifacts.outputs.package_228 }}
+          credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
+          parent_folder_id: ${{ secrets.GDRIVE_FOLDER_ID }}
+          child_folder: v${{ needs.prepare.outputs.version }}
+
+      - name: Upload release notes to Google Drive
+        uses: willo32/google-drive-upload-action@v1
+        with:
+          target: release-notes.md
+          credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
+          parent_folder_id: ${{ secrets.GDRIVE_FOLDER_ID }}
+          child_folder: v${{ needs.prepare.outputs.version }}
+          name: RELEASE-NOTES.md
+
+      - name: Delete workflow artifacts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CURRENT_TAG: v${{ needs.prepare.outputs.version }}
         run: |
           set -eo pipefail
-          
-          echo "Deleting previous releases (keeping tags)..."
-          gh release list --limit 100 --json tagName --jq '.[] | .tagName' | while read -r TAG; do
-            if [ "$TAG" != "$CURRENT_TAG" ]; then
-              echo "Deleting release $TAG"
-              gh release delete "$TAG" --yes
-            fi
-          done
-
           echo "Deleting Actions Artifacts..."
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts" --paginate -q '.artifacts[].id' | while read -r ARTIFACT_ID; do
             echo "Deleting artifact $ARTIFACT_ID"
