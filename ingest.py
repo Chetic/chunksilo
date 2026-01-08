@@ -12,6 +12,7 @@ import sqlite3
 import sys
 import threading
 import time
+from datetime import datetime
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -188,7 +189,15 @@ class LocalFileSystemSource(DataSource):
             reader = SimpleDirectoryReader(
                 input_files=[str(file_path)],
             )
-            return reader.load_data()
+            docs = reader.load_data()
+            # Ensure dates are visible to LLM (remove from exclusion list)
+            for doc in docs:
+                if hasattr(doc, 'excluded_llm_metadata_keys') and doc.excluded_llm_metadata_keys:
+                    doc.excluded_llm_metadata_keys = [
+                        k for k in doc.excluded_llm_metadata_keys
+                        if k not in ('creation_date', 'last_modified_date')
+                    ]
+            return docs
 
 
 class SimpleProgressBar:
@@ -439,6 +448,21 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
         logger.warning(f"Failed to open DOCX {docx_path}: {e}")
         return docs
 
+    # Extract file dates from filesystem
+    stat = docx_path.stat()
+    creation_date = datetime.fromtimestamp(stat.st_ctime).strftime("%Y-%m-%d")
+    last_modified_date = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d")
+
+    # Try to extract dates from DOCX core properties (more accurate than filesystem)
+    try:
+        core_props = doc.core_properties
+        if core_props.created:
+            creation_date = core_props.created.strftime("%Y-%m-%d")
+        if core_props.modified:
+            last_modified_date = core_props.modified.strftime("%Y-%m-%d")
+    except Exception:
+        pass  # Fall back to filesystem dates
+
     current_heading: str | None = None
     current_level: int | None = None
     current_body: list[str] = []
@@ -456,8 +480,14 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
             "source": str(docx_path),
             "heading": current_heading,
             "heading_level": current_level,
+            "creation_date": creation_date,
+            "last_modified_date": last_modified_date,
         }
-        docs.append(LlamaIndexDocument(text=text, metadata=metadata))
+        docs.append(LlamaIndexDocument(
+            text=text,
+            metadata=metadata,
+            excluded_llm_metadata_keys=["file_path", "source"],  # Keep dates visible to LLM
+        ))
 
     for para in doc.paragraphs:
         style_name = getattr(para.style, "name", "") or ""
@@ -491,8 +521,14 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
                 "source": str(docx_path),
                 "heading": None,
                 "heading_level": None,
+                "creation_date": creation_date,
+                "last_modified_date": last_modified_date,
             }
-            docs.append(LlamaIndexDocument(text=full_text, metadata=metadata))
+            docs.append(LlamaIndexDocument(
+                text=full_text,
+                metadata=metadata,
+                excluded_llm_metadata_keys=["file_path", "source"],  # Keep dates visible to LLM
+            ))
 
     logger.info(
         f"Split DOCX {docx_path} into {len(docs)} heading-based document(s)"

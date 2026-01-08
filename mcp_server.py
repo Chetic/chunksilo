@@ -18,10 +18,13 @@ from llama_index.core.schema import TextNode, NodeWithScore
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 try:
     from llama_index.readers.confluence import ConfluenceReader
+    import requests  # Available when llama-index-readers-confluence is installed
 except ImportError:
     ConfluenceReader = None
+    requests = None
 
 import asyncio
+import math
 import logging
 
 # Log file configuration
@@ -85,6 +88,11 @@ RETRIEVAL_MODEL_CACHE_DIR = Path(os.getenv("RETRIEVAL_MODEL_CACHE_DIR", "./model
 # Confluence Configuration
 CONFLUENCE_TIMEOUT = float(os.getenv("CONFLUENCE_TIMEOUT", "10.0"))
 CONFLUENCE_MAX_RESULTS = int(os.getenv("CONFLUENCE_MAX_RESULTS", "30"))
+
+# Recency boost configuration
+# Documents are boosted based on their age using exponential decay
+RETRIEVAL_RECENCY_BOOST = float(os.getenv("RETRIEVAL_RECENCY_BOOST", "0.3"))  # 0.0-1.0
+RETRIEVAL_RECENCY_HALF_LIFE_DAYS = int(os.getenv("RETRIEVAL_RECENCY_HALF_LIFE_DAYS", "365"))
 
 # Common English stopwords to filter from Confluence CQL queries
 # These words add no search value and can cause overly broad/narrow results
@@ -438,6 +446,55 @@ def _prepare_confluence_query_terms(query: str) -> list[str]:
     return [w.replace('"', '\\"') for w in meaningful]
 
 
+def _get_confluence_page_dates(
+    base_url: str, page_id: str, username: str, api_token: str
+) -> dict[str, str]:
+    """
+    Fetch creation and modification dates for a Confluence page.
+
+    Args:
+        base_url: Confluence base URL
+        page_id: The Confluence page ID
+        username: Confluence username
+        api_token: Confluence API token
+
+    Returns:
+        Dict with 'creation_date' and/or 'last_modified_date' in YYYY-MM-DD format
+    """
+    if requests is None:
+        return {}
+
+    try:
+        # Use v2 API to get page with version info
+        url = f"{base_url.rstrip('/')}/wiki/api/v2/pages/{page_id}"
+        response = requests.get(
+            url,
+            auth=(username, api_token),
+            timeout=5.0,
+            verify=CA_BUNDLE_PATH if CA_BUNDLE_PATH else True,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            result = {}
+            if "createdAt" in data:
+                # Parse ISO format: "2023-01-25T09:40:17.506Z"
+                try:
+                    dt = datetime.fromisoformat(data["createdAt"].replace("Z", "+00:00"))
+                    result["creation_date"] = dt.strftime("%Y-%m-%d")
+                except Exception:
+                    pass
+            if "version" in data and "createdAt" in data["version"]:
+                try:
+                    dt = datetime.fromisoformat(data["version"]["createdAt"].replace("Z", "+00:00"))
+                    result["last_modified_date"] = dt.strftime("%Y-%m-%d")
+                except Exception:
+                    pass
+            return result
+    except Exception as e:
+        logger.debug(f"Failed to fetch Confluence page dates for {page_id}: {e}")
+    return {}
+
+
 def _search_confluence(query: str) -> list[NodeWithScore]:
     """
     Search Confluence for documents matching the query using CQL.
@@ -505,10 +562,16 @@ def _search_confluence(query: str) -> list[NodeWithScore]:
             if "title" in metadata:
                  metadata["file_name"] = metadata["title"]  # Use title as filename
 
+            # Fetch dates for this page
+            page_id = metadata.get("page_id")
+            if page_id:
+                date_info = _get_confluence_page_dates(base_url, page_id, username, api_token)
+                metadata.update(date_info)
+
             node = TextNode(text=doc.text, metadata=metadata)
             # Assign a default score of 0.0 (will be updated by reranker)
             nodes.append(NodeWithScore(node=node, score=0.0))
-        
+
         return nodes
 
     except Exception as e:
@@ -541,10 +604,135 @@ def load_llamaindex_index():
     return index
 
 
+def _parse_date(date_str: str) -> datetime | None:
+    """Parse date string in YYYY-MM-DD format."""
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
+
+
+def _filter_nodes_by_date(
+    nodes: list[NodeWithScore],
+    date_from: str | None,
+    date_to: str | None
+) -> list[NodeWithScore]:
+    """
+    Filter nodes by date range.
+
+    Args:
+        nodes: List of nodes to filter
+        date_from: Optional start date (YYYY-MM-DD, inclusive)
+        date_to: Optional end date (YYYY-MM-DD, inclusive)
+
+    Returns:
+        Filtered list of nodes. Nodes without dates pass through for backward compatibility.
+    """
+    if not date_from and not date_to:
+        return nodes
+
+    from_dt = _parse_date(date_from) if date_from else None
+    to_dt = _parse_date(date_to) if date_to else None
+
+    filtered = []
+    for node in nodes:
+        metadata = node.node.metadata or {}
+        # Check last_modified_date first, fall back to creation_date
+        doc_date_str = metadata.get("last_modified_date") or metadata.get("creation_date")
+        if not doc_date_str:
+            # No date info - include by default (backward compatibility)
+            filtered.append(node)
+            continue
+
+        doc_date = _parse_date(doc_date_str)
+        if not doc_date:
+            filtered.append(node)
+            continue
+
+        # Apply filters
+        if from_dt and doc_date < from_dt:
+            continue
+        if to_dt and doc_date > to_dt:
+            continue
+
+        filtered.append(node)
+
+    return filtered
+
+
+def _apply_recency_boost(
+    nodes: list[NodeWithScore],
+    boost_weight: float,
+    half_life_days: int = 365
+) -> list[NodeWithScore]:
+    """
+    Apply time-decay boost to nodes based on document recency.
+
+    Args:
+        nodes: List of nodes to boost
+        boost_weight: How much to weight recency (0.0 = no boost, 1.0 = recency dominates)
+        half_life_days: Days until a document's recency boost is halved
+
+    Returns:
+        Nodes with adjusted scores, re-sorted by boosted score
+    """
+    if not nodes or boost_weight <= 0:
+        return nodes
+
+    today = datetime.now()
+    boosted_nodes = []
+
+    for node in nodes:
+        metadata = node.node.metadata or {}
+        doc_date_str = metadata.get("last_modified_date") or metadata.get("creation_date")
+
+        # Calculate base score (or default to 0.5 if no score)
+        base_score = node.score if node.score is not None else 0.5
+
+        if not doc_date_str:
+            # No date - use base score only
+            boosted_nodes.append(NodeWithScore(node=node.node, score=base_score))
+            continue
+
+        doc_date = _parse_date(doc_date_str)
+        if not doc_date:
+            boosted_nodes.append(NodeWithScore(node=node.node, score=base_score))
+            continue
+
+        # Calculate age in days
+        age_days = (today - doc_date).days
+        if age_days < 0:
+            age_days = 0  # Future dates treated as today
+
+        # Exponential decay: recency_factor = 0.5^(age/half_life)
+        decay_rate = math.log(2) / half_life_days
+        recency_factor = math.exp(-decay_rate * age_days)
+
+        # Combine base score with recency boost
+        # Formula: final_score = base_score * (1 + weight * recency_factor)
+        boosted_score = base_score * (1 + boost_weight * recency_factor)
+
+        boosted_nodes.append(NodeWithScore(node=node.node, score=boosted_score))
+
+    # Sort by boosted score (descending)
+    boosted_nodes.sort(key=lambda x: x.score or 0, reverse=True)
+
+    return boosted_nodes
+
+
 @mcp.tool()
-async def retrieve_docs(query: str) -> dict[str, Any]:
+async def retrieve_docs(
+    query: str,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict[str, Any]:
     """
 Search the local documentation corpus and return the most relevant chunks.
+
+Args:
+    query: Search query text
+    date_from: Optional start date filter (YYYY-MM-DD format, inclusive)
+    date_to: Optional end date filter (YYYY-MM-DD format, inclusive)
 
 The tool returns a structured response with:
 - `chunks`: Array of retrieved document chunks
@@ -556,7 +744,7 @@ The tool returns a structured response with:
 Each chunk includes:
 - `text`: Full chunk text content
 - `location`: Structured location details (file, page, heading, heading_path)
-- `metadata`: Original document metadata
+- `metadata`: Original document metadata (includes creation_date and last_modified_date when available)
 - `score`: Relevance score
     """
     start_time = time.time()
@@ -611,6 +799,16 @@ Each chunk includes:
 
         if confluence_nodes:
              nodes.extend(confluence_nodes)
+
+        # Apply date filtering if requested
+        if date_from or date_to:
+            original_count = len(nodes)
+            nodes = _filter_nodes_by_date(nodes, date_from, date_to)
+            logger.info(f"Date filtering: {original_count} -> {len(nodes)} nodes")
+
+        # Apply recency boost if configured
+        if RETRIEVAL_RECENCY_BOOST > 0:
+            nodes = _apply_recency_boost(nodes, RETRIEVAL_RECENCY_BOOST, RETRIEVAL_RECENCY_HALF_LIFE_DAYS)
 
         # Rerank the retrieved nodes with FlashRank (CPU-only, ONNX-based) and trim to the
         # configured final Top K for the tool response.
