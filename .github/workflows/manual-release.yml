@@ -244,7 +244,7 @@ jobs:
           FILES=""
 
           if [[ "${{ inputs.include_manylinux_2_34 }}" == "true" ]]; then
-            PKG_234=$(find packages -name "opd-mcp-*-manylinux_2_34*.zip" -type f | head -1)
+            PKG_234=$(find packages -name "opd-mcp-*-manylinux_2_34*.tar.gz" -type f | head -1)
             if [ -z "$PKG_234" ]; then
               echo "Error: Missing manylinux_2_34 package" >&2
               exit 1
@@ -254,7 +254,7 @@ jobs:
           fi
 
           if [[ "${{ inputs.include_manylinux_2_28 }}" == "true" ]]; then
-            PKG_228=$(find packages -name "opd-mcp-*-manylinux_2_28*.zip" -type f | head -1)
+            PKG_228=$(find packages -name "opd-mcp-*-manylinux_2_28*.tar.gz" -type f | head -1)
             if [ -z "$PKG_228" ]; then
               echo "Error: Missing manylinux_2_28 package" >&2
               exit 1

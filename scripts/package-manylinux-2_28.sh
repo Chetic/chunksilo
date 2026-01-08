@@ -32,7 +32,7 @@ if [ -z "$GITHUB_ACTIONS" ] && [ ! -f /etc/redhat-release ]; then
     "$CONTAINER_IMAGE" \
     bash /workspace/scripts/package-manylinux-2_28.sh "$VERSION"
   
-  echo "Package built successfully: build-output/opd-mcp-${VERSION}-manylinux_2_28_x86_64.zip"
+  echo "Package built successfully: build-output/opd-mcp-${VERSION}-manylinux_2_28_x86_64.tar.gz"
   exit 0
 fi
 
@@ -47,7 +47,7 @@ fi
 
 # Install dependencies including build tools (needed for source distributions)
 # Note: Some packages may require additional build tools, but we install the essentials
-dnf install -y python3.11 python3.11-pip zip git which gcc gcc-c++ make
+dnf install -y python3.11 python3.11-pip git which gcc gcc-c++ make
 
 # Prepare manylinux_2_28 release package
 PACKAGE_ROOT="release_package_manylinux_2_28/opd-mcp"
@@ -122,42 +122,42 @@ WORK_DIR="/workspace"
 
 if [ -n "$GITHUB_ACTIONS" ] && [ -z "$LOCAL_DOCKER" ]; then
   # In actual CI, output to current directory
-  OUTPUT_ZIP="opd-mcp-${VERSION}-manylinux_2_28_x86_64.zip"
-  ZIP_PATH="../$OUTPUT_ZIP"
-  FINAL_OUTPUT="$OUTPUT_ZIP"
+  OUTPUT_TAR="opd-mcp-${VERSION}-manylinux_2_28_x86_64.tar.gz"
+  TAR_PATH="../$OUTPUT_TAR"
+  FINAL_OUTPUT="$OUTPUT_TAR"
 else
   # Local Docker execution or when LOCAL_DOCKER is set, output to build-output directory
   OUTPUT_DIR="$WORK_DIR/build-output"
   mkdir -p "$OUTPUT_DIR"
-  OUTPUT_ZIP="$OUTPUT_DIR/opd-mcp-${VERSION}-manylinux_2_28_x86_64.zip"
-  # Create zip in current directory first, then move it
-  TEMP_ZIP="opd-mcp-${VERSION}-manylinux_2_28_x86_64.zip"
-  ZIP_PATH="../$TEMP_ZIP"
-  FINAL_OUTPUT="$OUTPUT_ZIP"
+  OUTPUT_TAR="$OUTPUT_DIR/opd-mcp-${VERSION}-manylinux_2_28_x86_64.tar.gz"
+  # Create tarball in current directory first, then move it
+  TEMP_TAR="opd-mcp-${VERSION}-manylinux_2_28_x86_64.tar.gz"
+  TAR_PATH="../$TEMP_TAR"
+  FINAL_OUTPUT="$OUTPUT_TAR"
 fi
 
-# Create zip file
-(cd "$WORK_DIR/release_package_manylinux_2_28" && zip -r "$ZIP_PATH" .)
+# Create tar.gz file (preserves file permissions including +x)
+(cd "$WORK_DIR/release_package_manylinux_2_28" && tar -czvf "$TAR_PATH" .)
 
 # Move to final location if needed (for local Docker execution)
 if [ -n "$LOCAL_DOCKER" ] || [ -z "$GITHUB_ACTIONS" ]; then
-  # The zip was created relative to release_package_manylinux_2_28, so it's in WORK_DIR
+  # The tarball was created relative to release_package_manylinux_2_28, so it's in WORK_DIR
   # Move it to the build-output directory
-  if [ -f "$WORK_DIR/$TEMP_ZIP" ]; then
+  if [ -f "$WORK_DIR/$TEMP_TAR" ]; then
     mkdir -p "$WORK_DIR/build-output"
-    mv "$WORK_DIR/$TEMP_ZIP" "$WORK_DIR/build-output/$TEMP_ZIP"
-    OUTPUT_ZIP="$WORK_DIR/build-output/$TEMP_ZIP"
-  elif [ -f "$TEMP_ZIP" ]; then
+    mv "$WORK_DIR/$TEMP_TAR" "$WORK_DIR/build-output/$TEMP_TAR"
+    OUTPUT_TAR="$WORK_DIR/build-output/$TEMP_TAR"
+  elif [ -f "$TEMP_TAR" ]; then
     # File is in current directory
     mkdir -p "$WORK_DIR/build-output"
-    mv "$TEMP_ZIP" "$WORK_DIR/build-output/$TEMP_ZIP"
-    OUTPUT_ZIP="$WORK_DIR/build-output/$TEMP_ZIP"
+    mv "$TEMP_TAR" "$WORK_DIR/build-output/$TEMP_TAR"
+    OUTPUT_TAR="$WORK_DIR/build-output/$TEMP_TAR"
   fi
 fi
 
 # Set output for GitHub Actions
 if [ -n "$GITHUB_ACTIONS" ] && [ -n "$GITHUB_OUTPUT" ]; then
-  echo "asset_path=$OUTPUT_ZIP" >> "$GITHUB_OUTPUT"
+  echo "asset_path=$OUTPUT_TAR" >> "$GITHUB_OUTPUT"
 fi
 
-echo "Package created: $OUTPUT_ZIP"
+echo "Package created: $OUTPUT_TAR"
