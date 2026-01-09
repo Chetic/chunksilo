@@ -9,7 +9,7 @@ on:
       - main
 
 jobs:
-  test-unit:
+  test-all:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,31 +25,18 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install -r test/requirements.txt
 
-      - name: Run unit tests
-        run: |
-          pytest test/test_chunk_location.py test/test_heading_path_integration.py -v
-
-  test-incremental:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install -r test/requirements.txt
-
-      - name: Run incremental ingest test
+      - name: Download models for offline tests
         env:
           DATA_DIR: ./test_data_dummy
           STORAGE_DIR: ./test_storage_dummy
         run: |
-          # Download models first so offline mode works in tests
           python ingest.py --download-models
-          pytest test/test_incremental_ingest.py
+
+      - name: Run all functional tests
+        env:
+          DATA_DIR: ./test_data_dummy
+          STORAGE_DIR: ./test_storage_dummy
+        run: |
+          # Run all tests except large_scale (which has its own workflow)
+          # This automatically discovers new test files
+          pytest test/ -v --ignore=test/test_large_scale.py
