@@ -916,7 +916,7 @@ Each chunk includes:
 
             # Build heading path from document structure
             headings = metadata.get("document_headings") or metadata.get("headings") or []
-            char_start = metadata.get("start_char_idx")
+            char_start = getattr(node.node, "start_char_idx", None)
             heading_text = metadata.get("heading")
             heading_path: list[str] = []
             if isinstance(headings, list) and headings:

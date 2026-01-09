@@ -27,7 +27,7 @@ jobs:
 
       - name: Run unit tests
         run: |
-          pytest test/test_chunk_location.py -v
+          pytest test/test_chunk_location.py test/test_heading_path_integration.py -v
 
   test-incremental:
     runs-on: ubuntu-latest
