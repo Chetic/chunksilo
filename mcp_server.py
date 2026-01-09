@@ -94,6 +94,9 @@ CONFLUENCE_MAX_RESULTS = int(os.getenv("CONFLUENCE_MAX_RESULTS", "30"))
 RETRIEVAL_RECENCY_BOOST = float(os.getenv("RETRIEVAL_RECENCY_BOOST", "0.3"))  # 0.0-1.0
 RETRIEVAL_RECENCY_HALF_LIFE_DAYS = int(os.getenv("RETRIEVAL_RECENCY_HALF_LIFE_DAYS", "365"))
 
+# Score threshold for filtering low-relevance results
+RETRIEVAL_SCORE_THRESHOLD = float(os.getenv("RETRIEVAL_SCORE_THRESHOLD", "0.1"))
+
 # Common English stopwords to filter from Confluence CQL queries
 # These words add no search value and can cause overly broad/narrow results
 CONFLUENCE_STOPWORDS = frozenset({
@@ -271,6 +274,32 @@ def _build_heading_path(headings: list[dict], char_start: int | None) -> tuple[s
     path = [h.get("text", "") for h in headings[: current_idx + 1] if h.get("text")]
     current_heading_text = path[-1] if path else None
     return current_heading_text, path
+
+
+def _char_offset_to_line(char_offset: int | None, line_offsets: list[int] | None) -> int | None:
+    """
+    Convert a character offset to a line number (1-indexed) using precomputed line offsets.
+
+    Args:
+        char_offset: Character position in the document (0-indexed)
+        line_offsets: List where line_offsets[i] is the char position where line i+1 starts
+
+    Returns:
+        Line number (1-indexed) or None if cannot be determined
+    """
+    if char_offset is None or not line_offsets:
+        return None
+
+    # Binary search to find the line containing char_offset
+    left, right = 0, len(line_offsets) - 1
+    while left < right:
+        mid = (left + right + 1) // 2
+        if line_offsets[mid] <= char_offset:
+            left = mid
+        else:
+            right = mid - 1
+
+    return left + 1  # Convert to 1-indexed line number
 
 
 def _get_cached_model_path(cache_dir: Path, model_name: str) -> Path | None:
@@ -864,162 +893,107 @@ Each chunk includes:
                 logger.error(f"Reranking failed, falling back to vector search order: {e}")
                 nodes = nodes[:rerank_limit]
 
-        # Format chunks with full content and metadata
+        # Filter nodes by score threshold
+        if RETRIEVAL_SCORE_THRESHOLD > 0:
+            nodes = [
+                node for node in nodes
+                if rerank_scores.get(id(node), 0.0) >= RETRIEVAL_SCORE_THRESHOLD
+            ]
+
+        # Format chunks with simplified structure
         chunks = []
-        unique_sources: dict[str, dict[str, Any]] = {}  # uri -> source info
         for node in nodes:
             metadata = dict(node.node.metadata or {})
-            raw_text = node.node.get_content()
+            chunk_text = node.node.get_content()
 
-            # Get headings for this chunk/document if available directly from metadata
+            # Get file path for URI building
             file_path = (
                 metadata.get("file_path")
                 or metadata.get("file_name")
                 or metadata.get("source")
             )
-            headings = metadata.get("document_headings") or metadata.get("headings") or []
+            original_source = metadata.get("source")
 
-            # Build heading context (current heading + full path) if we have
-            # document-level heading structure and character offsets.
+            # Build heading path from document structure
+            headings = metadata.get("document_headings") or metadata.get("headings") or []
             char_start = metadata.get("start_char_idx")
-            heading_text = metadata.get("heading")  # may be set directly for per-heading chunks
+            heading_text = metadata.get("heading")
             heading_path: list[str] = []
-            heading_titles: list[str] = []
             if isinstance(headings, list) and headings:
-                # Collect all heading titles for this document (normalized)
-                heading_titles = [h.get("text", "").strip() for h in headings if isinstance(h, dict) and h.get("text")]
-                # Only try to infer heading from document_headings if we don't
-                # already have an explicit "heading" on the chunk.
                 if heading_text is None and char_start is not None:
                     heading_text, heading_path = _build_heading_path(headings, char_start)
+            # Use explicit heading_path from metadata if available
+            meta_heading_path = metadata.get("heading_path")
+            if not heading_path and meta_heading_path:
+                heading_path = list(meta_heading_path)
+            # Add current heading to path if not already included
+            if heading_text and (not heading_path or heading_path[-1] != heading_text):
+                heading_path = heading_path + [heading_text] if heading_path else [heading_text]
 
-            # Normalize a short document title for display
-            doc_title = None
-            if file_path:
+            # Build URI for the source document
+            source_uri = None
+            if original_source == "Confluence":
+                # Handle Confluence sources
+                confluence_url = os.getenv("CONFLUENCE_URL", "")
+                page_id = metadata.get("page_id")
+                if confluence_url and page_id:
+                    source_uri = f"{confluence_url.rstrip('/')}/pages/viewpage.action?pageId={page_id}"
+                elif confluence_url:
+                    title = metadata.get("title", metadata.get("file_name", ""))
+                    if title:
+                        from urllib.parse import quote
+                        encoded_title = quote(title.replace(" ", "+"))
+                        source_uri = f"{confluence_url.rstrip('/')}/spaces/~{encoded_title}"
+            elif file_path:
+                # Create file:// URI for local files
                 try:
-                    doc_title = Path(str(file_path)).name
+                    file_path_obj = Path(str(file_path))
+                    if file_path_obj.is_absolute():
+                        source_uri = f"file://{file_path_obj.resolve()}"
+                    else:
+                        data_dir = Path(os.getenv("DATA_DIR", "./data"))
+                        resolved_path = (data_dir / file_path_obj).resolve()
+                        source_uri = f"file://{resolved_path}"
                 except Exception:
-                    doc_title = str(file_path)
+                    source_uri = None
 
-            # Clean up metadata to remove redundant path fields (sources array has full URIs)
-            # Store original file_path for source URI building before cleaning
-            original_file_path = metadata.get("file_path")
-            original_source = metadata.get("source")
-            
-            # Remove redundant path fields from metadata
-            if "file_path" in metadata:
-                del metadata["file_path"]
-            # Remove source if it's just a duplicate file path (keep "Confluence" as it's useful context)
-            if metadata.get("source") and metadata.get("source") != "Confluence":
-                # If source matches the file_path we just removed, it's redundant
-                if original_source == original_file_path:
-                    del metadata["source"]
-            
-            # Set minimal file info in metadata (just filename)
-            if doc_title:
-                metadata["file_name"] = doc_title
-            if heading_text:
-                metadata["heading"] = heading_text
-            if heading_path:
-                metadata["heading_path"] = heading_path
-
-            # Use raw text directly (no header prefix needed with resource links)
-            chunk_text = raw_text
-
-            # Use just filename in location (full URI is in sources array)
-            location = {
-                "file": doc_title or "Unknown source",
-                "page": metadata.get("page_label")
+            # Get page number (for PDFs and DOCX)
+            page_number = (
+                metadata.get("page_label")
                 or metadata.get("page_number")
-                or metadata.get("page"),
-                "heading": heading_text,
-                "heading_path": heading_path or None,
+                or metadata.get("page")
+            )
+
+            # Get line number (for markdown/txt files)
+            line_number = None
+            line_offsets = metadata.get("line_offsets")
+            if line_offsets and char_start is not None:
+                line_number = _char_offset_to_line(char_start, line_offsets)
+
+            # Build simplified location object
+            location = {
+                "uri": source_uri,
+                "page": page_number,
+                "line": line_number,
+                "heading_path": heading_path if heading_path else None,
             }
+
+            # Build chunk with simplified structure (no metadata)
             score_value = rerank_scores.get(id(node), getattr(node, "score", None))
             chunk_data = {
                 "text": chunk_text,
                 "score": round(float(score_value), 3) if score_value is not None else 0.0,
-                "metadata": metadata,
                 "location": location,
             }
             chunks.append(chunk_data)
-            
-            # Collect unique source files for resource links (used by Roo Code for clickable links)
-            # Use original_file_path if available, otherwise fall back to file_path
-            source_path = original_file_path or file_path
-            if source_path:
-                source_uri = None
-                source_name = doc_title or str(source_path)
-                mime_type = "application/octet-stream"  # default
-                
-                # Handle Confluence sources
-                if original_source == "Confluence":
-                    confluence_url = os.getenv("CONFLUENCE_URL", "")
-                    page_id = metadata.get("page_id")
-                    if confluence_url and page_id:
-                        # Build Confluence page URL
-                        source_uri = f"{confluence_url.rstrip('/')}/pages/viewpage.action?pageId={page_id}"
-                    elif confluence_url:
-                        # Fallback: use title-based URL if page_id not available
-                        title = metadata.get("title", metadata.get("file_name", ""))
-                        if title:
-                            # URL-encode the title for the URL
-                            from urllib.parse import quote
-                            encoded_title = quote(title.replace(" ", "+"))
-                            source_uri = f"{confluence_url.rstrip('/')}/spaces/~{encoded_title}"
-                    if source_uri:
-                        mime_type = "text/html"
-                else:
-                    # Create a file:// URI for local files
-                    try:
-                        file_path_obj = Path(str(source_path))
-                        if file_path_obj.is_absolute():
-                            # Use file:/// format (three slashes) for absolute paths
-                            source_uri = f"file://{file_path_obj.resolve()}"
-                        else:
-                            # If relative, try to resolve it relative to DATA_DIR
-                            data_dir = Path(os.getenv("DATA_DIR", "./data"))
-                            resolved_path = (data_dir / file_path_obj).resolve()
-                            source_uri = f"file://{resolved_path}"
-                        
-                        # Determine MIME type based on file extension
-                        file_path_str = str(file_path)
-                        if file_path_str.endswith(".pdf"):
-                            mime_type = "application/pdf"
-                        elif file_path_str.endswith((".docx", ".doc")):
-                            mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                        elif file_path_str.endswith((".md", ".markdown")):
-                            mime_type = "text/markdown"
-                        elif file_path_str.endswith(".txt"):
-                            mime_type = "text/plain"
-                    except Exception:
-                        # If we can't create a proper URI, skip this source
-                        source_uri = None
-                
-                if source_uri and source_uri not in unique_sources:
-                    unique_sources[source_uri] = {
-                        "uri": source_uri,
-                        "name": source_name,
-                        "mime_type": mime_type,
-                    }
 
         elapsed = time.time() - start_time
 
-        # Build sources list for structured response (Roo Code uses this for clickable links)
-        sources_list = []
-        for source_info in unique_sources.values():
-            sources_list.append({
-                "uri": source_info["uri"],
-                "name": source_info["name"],
-                "mimeType": source_info.get("mime_type", "application/octet-stream"),
-            })
-        
         structured_response = {
             "chunks": chunks,
             "query": query,
             "num_chunks": len(chunks),
             "retrieval_time": f"{elapsed:.2f}s",
-            "sources": sources_list,  # Roo Code displays these as clickable links
         }
         
         return structured_response

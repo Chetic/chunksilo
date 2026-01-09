@@ -152,6 +152,19 @@ class DataSource(ABC):
         pass
 
 
+def _compute_line_offsets(text: str) -> List[int]:
+    """Compute character offset positions for each line start.
+
+    Returns a list where line_offsets[i] is the character position where line i+1 starts.
+    Line 1 starts at position 0 (implicit).
+    """
+    offsets = [0]  # Line 1 starts at position 0
+    for i, char in enumerate(text):
+        if char == '\n':
+            offsets.append(i + 1)  # Next line starts after the newline
+    return offsets
+
+
 class LocalFileSystemSource(DataSource):
     """Implementation of DataSource for the local file system."""
 
@@ -197,6 +210,14 @@ class LocalFileSystemSource(DataSource):
                         k for k in doc.excluded_llm_metadata_keys
                         if k not in ('creation_date', 'last_modified_date')
                     ]
+
+            # Add line offsets for text-based files (markdown, txt) to enable line number lookup
+            if file_path.suffix.lower() in {".md", ".txt"}:
+                for doc in docs:
+                    text = doc.get_content()
+                    line_offsets = _compute_line_offsets(text)
+                    doc.metadata["line_offsets"] = line_offsets
+
             return docs
 
 
