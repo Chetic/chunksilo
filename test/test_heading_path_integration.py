@@ -48,33 +48,52 @@ def test_env(tmp_path):
     }
 
 def create_markdown_file(path):
-    """Create a markdown file with headings."""
-    content = """
-# Heading 1
-Content under heading 1.
+    """Create a markdown file with nested headings."""
+    content = """# Top Level Heading
+Introduction paragraph with Lorem ipsum dolor sit amet consectetur adipiscing elit.
+Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam quis nostrud exercitation ullamco.
+Laboris nisi ut aliquip ex ea commodo consequat duis aute irure dolor in reprehenderit in voluptate velit.
+Esse cillum dolore eu fugiat nulla pariatur excepteur sint occaecat cupidatat non proident sunt in culpa qui.
+Officia deserunt mollit anim id est laborum sed ut perspiciatis unde omnis iste natus error sit voluptatem.
+Accusantium doloremque laudantium totam rem aperiam eaque ipsa quae ab illo inventore veritatis quasi architecto.
+Beatae vitae dicta sunt explicabo nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit.
 
-## Subheading 1.1
-Content under subheading 1.1.
-Target content for markdown.
+## Second Level
+Brief content here.
 
-# Heading 2
-Content under heading 2.
+### Third Level
+Target content for markdown with deep nesting and this is where we test the actual functionality with lots of text.
+This is the specific content we're looking for in our test assertions to verify correct behavior and proper heading hierarchy.
+It should appear under the full hierarchy of headings showing all three levels properly extracted from the document structure.
+Additional sentences here to make this section more substantial and realistic for testing purposes and push boundaries.
+More content to ensure this Third Level section is long enough to get its own dedicated chunk during the splitting process.
+Even more filler text here to make absolutely sure that chunks starting in this section capture the full heading path correctly.
+
+## Another Second Level
+More content in this section with additional paragraphs for completeness.
+This provides additional test coverage for the heading extraction logic implementation.
 """
     with open(path, "w") as f:
         f.write(content)
 
 def create_docx_file(path):
-    """Create a DOCX file with headings."""
+    """Create a DOCX file with nested headings."""
     if not Document:
         pytest.skip("python-docx not installed")
-    
+
     doc = Document()
-    doc.add_heading("Major Section", level=1)
-    doc.add_paragraph("Introduction to major section.")
-    
-    doc.add_heading("Minor Detail", level=2)
-    doc.add_paragraph("Target content for docx.")
-    
+    doc.add_heading("Chapter 1: Introduction", level=1)
+    doc.add_paragraph("Overview of the system with detailed introduction text.")
+    doc.add_paragraph("This section provides background and context for understanding the architecture.")
+
+    doc.add_heading("Architecture", level=2)
+    doc.add_paragraph("System design details and architectural patterns.")
+    doc.add_paragraph("This section describes the overall structure and components of the system.")
+
+    doc.add_heading("Components", level=3)
+    doc.add_paragraph("Target content for docx with hierarchy and nested structure.")
+    doc.add_paragraph("This specific section contains the test content we're searching for.")
+
     doc.save(path)
 
 def create_pdf_file(path):
@@ -111,10 +130,13 @@ async def _async_test_heading_path_extraction(test_env):
     
     # 2. Run Ingestion
     # Patch globals in ingest module
+    # Use chunk size 200 to ensure proper heading resolution without metadata warnings
     with patch("ingest.DATA_DIR", data_dir), \
          patch("ingest.STORAGE_DIR", storage_dir), \
          patch("ingest.STATE_DB_PATH", storage_dir / "ingestion_state.db"), \
          patch("ingest.RETRIEVAL_MODEL_CACHE_DIR", Path("./models").resolve()), \
+         patch("ingest.CHUNK_SIZE", 200), \
+         patch("ingest.CHUNK_OVERLAP", 25), \
          patch("mcp_server.STORAGE_DIR", storage_dir), \
          patch("mcp_server.RETRIEVAL_MODEL_CACHE_DIR", Path("./models").resolve()):
         
@@ -268,19 +290,32 @@ async def _async_test_heading_path_extraction(test_env):
                     md_chunk = target_md[0]
                     
                     print(f"MD Location: {md_chunk['location']}")
-                    
+
+                    # Test Markdown heading path - should have nested hierarchy
+                    print("Testing MD heading path...")
+                    assert md_chunk["location"]["heading_path"] is not None, "MD should have heading_path"
+                    heading_path_md = md_chunk["location"]["heading_path"]
+                    assert len(heading_path_md) >= 2, f"MD should have nested path, got {heading_path_md}"
+                    assert "Third Level" in heading_path_md, "Should include deepest heading"
+                    print(f"✓ MD heading_path has {len(heading_path_md)} levels: {heading_path_md}")
+
                     # Test DOCX
                     print("Querying DOCX...")
-                    result_docx = await mcp_server.retrieve_docs("docx")
+                    result_docx = await mcp_server.retrieve_docs("hierarchy nested structure")
                     chunks_docx = result_docx["chunks"]
                     target_docx = [c for c in chunks_docx if "Target content for docx" in c["text"]]
                     assert len(target_docx) > 0, "DOCX chunk not found in results"
                     docx_chunk = target_docx[0]
-                    
+
                     print(f"DOCX Location: {docx_chunk['location']}")
+
+                    # Test DOCX heading path hierarchy
+                    print("Testing DOCX heading path...")
                     assert docx_chunk["location"]["heading_path"] is not None, "DOCX heading_path should not be None"
-                    # Current implementation only captures immediate heading
-                    assert "Minor Detail" in docx_chunk["location"]["heading_path"]
+                    heading_path_docx = docx_chunk["location"]["heading_path"]
+                    assert len(heading_path_docx) >= 2, f"DOCX should have nested path, got {heading_path_docx}"
+                    assert "Components" in heading_path_docx, "Should include deepest heading"
+                    print(f"✓ DOCX heading_path has {len(heading_path_docx)} levels: {heading_path_docx}")
 
 
                     # Test PDF

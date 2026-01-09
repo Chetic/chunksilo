@@ -65,6 +65,7 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "100"))
 # These keys are excluded from the embedding text to save tokens and avoid length errors
 EXCLUDED_EMBED_METADATA_KEYS = [
     "line_offsets",      # Large integer array, primary cause of length errors
+    "document_headings", # Heading hierarchy array with positions, excluded like line_offsets
     "file_path",         # redundant with file_name/source, strict path less useful for semantic similarity
     "source",            # often same as file_path
     "creation_date",     # temporal, not semantic
@@ -186,6 +187,97 @@ def _compute_line_offsets(text: str) -> List[int]:
     return offsets
 
 
+def _extract_markdown_headings(text: str) -> List[dict]:
+    """Extract heading hierarchy from Markdown text using ATX-style syntax.
+
+    Parses # Heading syntax and returns list of dicts with text, position, level.
+    Handles ATX-style headings (# Heading) but not Setext (underlined).
+
+    Returns:
+        List of dicts with keys: text (str), position (int), level (int)
+    """
+    import re
+
+    headings = []
+    # Match ATX-style headings: line start, 1-6 #s, space, text
+    pattern = re.compile(r'^(#{1,6})\s+(.+?)$', re.MULTILINE)
+
+    # Find all code block ranges to skip headings inside them
+    code_blocks = []
+    for match in re.finditer(r'```.*?```', text, flags=re.DOTALL):
+        code_blocks.append((match.start(), match.end()))
+
+    def is_in_code_block(pos):
+        """Check if position is inside a code block."""
+        return any(start <= pos < end for start, end in code_blocks)
+
+    for match in pattern.finditer(text):
+        # Skip headings inside code blocks
+        if is_in_code_block(match.start()):
+            continue
+
+        level = len(match.group(1))
+        heading_text = match.group(2).strip()
+        position = match.start()
+
+        if heading_text:
+            headings.append({
+                "text": heading_text,
+                "position": position,
+                "level": level
+            })
+
+    return headings
+
+
+def _extract_pdf_headings_from_outline(pdf_path: Path) -> List[dict]:
+    """Extract headings from PDF outline/bookmarks (TOC).
+
+    Returns list of dicts with text, position (estimated), level.
+    Position is approximate based on cumulative page character counts.
+    Falls back to empty list if PDF has no outline or extraction fails.
+
+    Returns:
+        List of dicts with keys: text (str), position (int), level (int)
+    """
+    try:
+        import fitz  # pymupdf
+    except ImportError:
+        logger.warning("PyMuPDF not available, skipping PDF heading extraction")
+        return []
+
+    try:
+        doc = fitz.open(pdf_path)
+        toc = doc.get_toc()  # Returns [[level, title, page_num], ...]
+
+        if not toc:
+            return []
+
+        headings = []
+        for item in toc:
+            level, title, page_num = item[0], item[1], item[2]
+
+            # Estimate position by accumulating text from previous pages
+            position = 0
+            for page_idx in range(page_num - 1):
+                if page_idx < len(doc):
+                    page = doc[page_idx]
+                    position += len(page.get_text())
+
+            headings.append({
+                "text": title.strip(),
+                "position": position,
+                "level": level
+            })
+
+        doc.close()
+        return headings
+
+    except Exception as e:
+        logger.warning(f"Failed to extract PDF outline from {pdf_path}: {e}")
+        return []
+
+
 class LocalFileSystemSource(DataSource):
     """Implementation of DataSource for the local file system."""
 
@@ -238,6 +330,17 @@ class LocalFileSystemSource(DataSource):
                     text = doc.get_content()
                     line_offsets = _compute_line_offsets(text)
                     doc.metadata["line_offsets"] = line_offsets
+
+                    # Extract headings for Markdown
+                    if file_path.suffix.lower() == ".md":
+                        headings = _extract_markdown_headings(text)
+                        doc.metadata["document_headings"] = headings
+
+            # Extract headings for PDF files
+            if file_path.suffix.lower() == ".pdf":
+                headings = _extract_pdf_headings_from_outline(file_path)
+                for doc in docs:
+                    doc.metadata["document_headings"] = headings
 
             # Apply metadata exclusions
             for doc in docs:
@@ -510,6 +613,28 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
     except Exception:
         pass  # Fall back to filesystem dates
 
+    # First pass: Extract all headings with positions for hierarchy metadata
+    all_headings = []
+    char_position = 0
+    for para in doc.paragraphs:
+        style_name = getattr(para.style, "name", "") or ""
+        is_heading = (
+            style_name.startswith("Heading")
+            or style_name.startswith("heading")
+            or "Heading" in style_name
+        )
+
+        if is_heading and para.text.strip():
+            heading_level = _parse_heading_level(style_name)
+            all_headings.append({
+                "text": para.text.strip(),
+                "position": char_position,
+                "level": heading_level
+            })
+
+        char_position += len(para.text) + 1  # +1 for newline
+
+    # Second pass: Split by heading (existing logic)
     current_heading: str | None = None
     current_level: int | None = None
     current_body: list[str] = []
@@ -521,6 +646,26 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
         if not text:
             return
 
+        # Build hierarchical heading_path by finding parent headings based on level
+        heading_path = []
+        if all_headings:
+            # Find the index of the current heading in all_headings
+            current_idx = None
+            for idx, h in enumerate(all_headings):
+                if h["text"] == current_heading and h["level"] == current_level:
+                    current_idx = idx
+                    break
+
+            if current_idx is not None:
+                # Build path by including all parent headings (those with lower level numbers)
+                # Walk backwards from current heading and include headings with level < current_level
+                path_headings = [all_headings[current_idx]]  # Start with current
+                for idx in range(current_idx - 1, -1, -1):
+                    h = all_headings[idx]
+                    if h["level"] < path_headings[0]["level"]:
+                        path_headings.insert(0, h)
+                heading_path = [h["text"] for h in path_headings]
+
         metadata = {
             "file_path": str(docx_path),
             "file_name": docx_path.name,
@@ -529,6 +674,8 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
             "heading_level": current_level,
             "creation_date": creation_date,
             "last_modified_date": last_modified_date,
+            "document_headings": all_headings,  # Full hierarchy for heading_path building
+            "heading_path": heading_path,  # Pre-computed hierarchical path
         }
         docs.append(LlamaIndexDocument(
             text=text,
@@ -571,6 +718,7 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
                 "heading_level": None,
                 "creation_date": creation_date,
                 "last_modified_date": last_modified_date,
+                "document_headings": all_headings,  # Will be empty list if no headings
             }
             docs.append(LlamaIndexDocument(
                 text=full_text,
