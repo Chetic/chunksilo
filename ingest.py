@@ -58,8 +58,11 @@ RETRIEVAL_RERANK_MODEL_NAME = os.getenv(
 RETRIEVAL_MODEL_CACHE_DIR = Path(os.getenv("RETRIEVAL_MODEL_CACHE_DIR", "./models"))
 
 # Text chunking configuration
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "100"))
+# Note: 2048 is used to accommodate metadata overhead during splitting.
+# LlamaIndex's split_text_metadata_aware counts all metadata (not just non-excluded)
+# when calculating available space, so larger chunks prevent overflow errors.
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "2048"))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "200"))
 
 # BM25 index directory for file name matching
 BM25_INDEX_DIR = STORAGE_DIR / "bm25_index"
