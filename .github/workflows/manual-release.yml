@@ -129,7 +129,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-common-${{ steps.version.outputs.next_version }}
-          path: release_common
+          path: release_common.tar
           retention-days: 1
 
       - name: Upload release notes
@@ -156,7 +156,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: release-common-${{ needs.prepare.outputs.version }}
-          path: release_common
+
+      - name: Extract common files (preserves file permissions)
+        if: ${{ inputs.include_manylinux_2_28 }}
+        run: |
+          mkdir -p release_common
+          tar -xvf release_common.tar -C release_common
 
       - name: Build manylinux package
         id: build_package
@@ -190,7 +195,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: release-common-${{ needs.prepare.outputs.version }}
-          path: release_common
+
+      - name: Extract common files (preserves file permissions)
+        if: ${{ inputs.include_manylinux_2_34 }}
+        run: |
+          mkdir -p release_common
+          tar -xvf release_common.tar -C release_common
 
       - name: Build manylinux package
         id: build_package

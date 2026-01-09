@@ -53,4 +53,9 @@ else
   exit 1
 fi
 
+# Create tarball to preserve file permissions during artifact upload/download
+# GitHub Actions artifacts don't preserve Unix permissions, but tar does
+tar -cvf release_common.tar -C "$COMMON_ROOT" .
+
 echo "Common files prepared in $COMMON_ROOT/"
+echo "Tarball created: release_common.tar (preserves file permissions)"
