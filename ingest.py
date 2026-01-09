@@ -61,6 +61,9 @@ RETRIEVAL_MODEL_CACHE_DIR = Path(os.getenv("RETRIEVAL_MODEL_CACHE_DIR", "./model
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "100"))
 
+# BM25 index directory for file name matching
+BM25_INDEX_DIR = STORAGE_DIR / "bm25_index"
+
 # Metadata exclusion configuration
 # These keys are excluded from the embedding text to save tokens and avoid length errors
 EXCLUDED_EMBED_METADATA_KEYS = [
@@ -733,6 +736,89 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
     return docs
 
 
+def tokenize_filename(filename: str) -> List[str]:
+    """
+    Tokenize a filename for BM25 indexing.
+
+    Splits on delimiters (underscore, hyphen, dot, space) and camelCase.
+
+    Examples:
+        'cpp_styleguide.md' -> ['cpp', 'styleguide', 'md']
+        'API-Reference-v2.pdf' -> ['api', 'reference', 'v2', 'pdf']
+        'CamelCaseDoc.docx' -> ['camel', 'case', 'doc', 'docx']
+    """
+    import re
+
+    name_parts = filename.rsplit('.', 1)
+    base_name = name_parts[0]
+    extension = name_parts[1] if len(name_parts) > 1 else ""
+
+    # Split on explicit delimiters
+    parts = re.split(r'[_\-\.\s]+', base_name)
+
+    # Split camelCase within each part
+    tokens = []
+    for part in parts:
+        camel_split = re.sub(r'([a-z])([A-Z])', r'\1 \2', part).split()
+        tokens.extend(t.lower() for t in camel_split if t)
+
+    # Add extension as a token
+    if extension:
+        tokens.append(extension.lower())
+
+    return tokens
+
+
+def build_bm25_index(index, storage_dir: Path) -> None:
+    """
+    Build a BM25 index over file names from the docstore.
+
+    This enables keyword matching for queries like 'cpp styleguide' to find
+    files named 'cpp_styleguide.md'.
+    """
+    from llama_index.retrievers.bm25 import BM25Retriever
+    from llama_index.core.schema import TextNode
+
+    logger.info("Building BM25 index for file name matching...")
+
+    # Create filename nodes - one per unique file
+    filename_nodes = []
+    seen_files: Set[str] = set()
+
+    for doc_id, node in index.docstore.docs.items():
+        metadata = node.metadata or {}
+        file_name = metadata.get("file_name", "")
+        file_path = metadata.get("file_path", "")
+
+        if not file_name or file_path in seen_files:
+            continue
+        seen_files.add(file_path)
+
+        tokens = tokenize_filename(file_name)
+        filename_nodes.append(TextNode(
+            text=" ".join(tokens),
+            metadata={"file_name": file_name, "file_path": file_path},
+            id_=f"bm25_{file_path}"
+        ))
+
+    if not filename_nodes:
+        logger.warning("No documents found for BM25 indexing")
+        return
+
+    logger.info(f"Creating BM25 index with {len(filename_nodes)} file name entries")
+
+    bm25_retriever = BM25Retriever.from_defaults(
+        nodes=filename_nodes,
+        similarity_top_k=10,
+    )
+
+    bm25_dir = storage_dir / "bm25_index"
+    bm25_dir.mkdir(parents=True, exist_ok=True)
+    bm25_retriever.persist(str(bm25_dir))
+
+    logger.info(f"BM25 index persisted to {bm25_dir}")
+
+
 def configure_offline_mode(offline: bool, cache_dir: Path) -> None:
     """Configure environment variables for offline mode."""
     if offline:
@@ -856,6 +942,10 @@ def build_index(download_only: bool = False, offline: bool = False) -> None:
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     logger.info(f"Persisting index to {STORAGE_DIR}")
     index.storage_context.persist(persist_dir=str(STORAGE_DIR))
+
+    # Build BM25 index for file name matching
+    build_bm25_index(index, STORAGE_DIR)
+
     logger.info("Ingestion complete.")
 
 

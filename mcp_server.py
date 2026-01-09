@@ -97,6 +97,10 @@ RETRIEVAL_RECENCY_HALF_LIFE_DAYS = int(os.getenv("RETRIEVAL_RECENCY_HALF_LIFE_DA
 # Score threshold for filtering low-relevance results
 RETRIEVAL_SCORE_THRESHOLD = float(os.getenv("RETRIEVAL_SCORE_THRESHOLD", "0.1"))
 
+# BM25 file name search configuration
+BM25_INDEX_DIR = STORAGE_DIR / "bm25_index"
+BM25_SIMILARITY_TOP_K = int(os.getenv("BM25_SIMILARITY_TOP_K", "10"))
+
 # Common English stopwords to filter from Confluence CQL queries
 # These words add no search value and can cause overly broad/narrow results
 CONFLUENCE_STOPWORDS = frozenset({
@@ -154,6 +158,7 @@ mcp = FastMCP("llamaindex-docs-rag")
 _index_cache = None
 _embed_model_initialized = False
 _reranker_model = None
+_bm25_retriever_cache = None
 
 
 # Startup log buffer - populated at module load, flushed on first list_tools call
@@ -425,6 +430,95 @@ def _ensure_reranker():
     
     logger.info(f"Rerank model '{model_name}' loaded successfully")
     return _reranker_model
+
+
+def _ensure_bm25_retriever():
+    """
+    Load the BM25 retriever for file name matching.
+
+    Returns None if the BM25 index doesn't exist (e.g., not yet built).
+    """
+    global _bm25_retriever_cache
+
+    if _bm25_retriever_cache is not None:
+        return _bm25_retriever_cache
+
+    if not BM25_INDEX_DIR.exists():
+        logger.warning(f"BM25 index not found at {BM25_INDEX_DIR}. Run ingest.py to create it.")
+        return None
+
+    try:
+        from llama_index.retrievers.bm25 import BM25Retriever
+        logger.info(f"Loading BM25 index from {BM25_INDEX_DIR}")
+        _bm25_retriever_cache = BM25Retriever.from_persist_dir(str(BM25_INDEX_DIR))
+        logger.info("BM25 retriever loaded successfully")
+        return _bm25_retriever_cache
+    except Exception as e:
+        logger.error(f"Failed to load BM25 retriever: {e}")
+        return None
+
+
+def _reciprocal_rank_fusion(
+    results_lists: list[list[NodeWithScore]],
+    k: int = 60
+) -> list[NodeWithScore]:
+    """
+    Combine multiple ranked lists using Reciprocal Rank Fusion (RRF).
+
+    RRF Score = sum(1 / (k + rank)) for each list the document appears in.
+
+    Args:
+        results_lists: List of ranked result lists (each list is NodeWithScore)
+        k: Constant to prevent high scores for top-ranked items (default 60)
+
+    Returns:
+        Combined and re-ranked list of NodeWithScore with RRF scores
+    """
+    rrf_scores: dict[str, float] = {}
+    node_map: dict[str, NodeWithScore] = {}
+
+    for results in results_lists:
+        for rank, node in enumerate(results, start=1):
+            node_id = node.node.node_id
+            rrf_scores[node_id] = rrf_scores.get(node_id, 0.0) + 1.0 / (k + rank)
+            if node_id not in node_map:
+                node_map[node_id] = node
+
+    sorted_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
+    return [NodeWithScore(node=node_map[nid].node, score=rrf_scores[nid]) for nid in sorted_ids]
+
+
+def _expand_filename_matches(bm25_nodes: list[NodeWithScore], docstore) -> list[NodeWithScore]:
+    """
+    Expand BM25 file name matches to all chunks from those files.
+
+    When BM25 matches a file name, we want to return all chunks from that file,
+    not just the synthetic filename node.
+
+    Args:
+        bm25_nodes: BM25 search results (file name nodes)
+        docstore: The document store containing all chunks
+
+    Returns:
+        List of NodeWithScore for all chunks from matched files
+    """
+    expanded = []
+    matched_paths: set[str] = set()
+
+    # Collect file paths from BM25 matches
+    for bm25_node in bm25_nodes:
+        file_path = bm25_node.node.metadata.get("file_path")
+        if file_path:
+            matched_paths.add(file_path)
+
+    # Find all chunks from matched files
+    for doc_id, node in docstore.docs.items():
+        node_file_path = node.metadata.get("file_path")
+        if node_file_path in matched_paths:
+            # Give BM25-matched chunks a baseline score
+            expanded.append(NodeWithScore(node=node, score=0.5))
+
+    return expanded
 
 
 def _preprocess_query(query: str) -> str:
@@ -787,11 +881,30 @@ Each chunk includes:
         # Load index
         index = load_llamaindex_index()
 
-        # Use retriever (no LLM needed - just retrieval)
+        # Stage 1a: Vector search (embedding-based semantic search)
         retriever = index.as_retriever(similarity_top_k=RETRIEVAL_EMBED_TOP_K)
+        vector_nodes = retriever.retrieve(enhanced_query)
 
-        # Retrieve relevant chunks (embedding stage) using enhanced query
-        nodes = retriever.retrieve(enhanced_query)
+        # Stage 1b: BM25 file name search (keyword-based)
+        # This helps find documents where the query matches the file name
+        # (e.g., "cpp styleguide" -> cpp_styleguide.md)
+        bm25_retriever = _ensure_bm25_retriever()
+        if bm25_retriever:
+            try:
+                bm25_matches = bm25_retriever.retrieve(enhanced_query)
+                if bm25_matches:
+                    bm25_nodes = _expand_filename_matches(bm25_matches, index.docstore)
+                    logger.info(f"BM25 matched {len(bm25_matches)} files, expanded to {len(bm25_nodes)} chunks")
+                    # Fuse vector and BM25 results using Reciprocal Rank Fusion
+                    nodes = _reciprocal_rank_fusion([vector_nodes, bm25_nodes])
+                    logger.info(f"Fused {len(vector_nodes)} vector + {len(bm25_nodes)} BM25 -> {len(nodes)} unique nodes")
+                else:
+                    nodes = vector_nodes
+            except Exception as e:
+                logger.error(f"BM25 search failed, using vector-only results: {e}")
+                nodes = vector_nodes
+        else:
+            nodes = vector_nodes
 
         # Search Confluence in parallel (with timeout)
         # Optimization: Check if CONFLUENCE_URL is set before even attempting it
