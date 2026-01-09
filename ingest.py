@@ -61,6 +61,27 @@ RETRIEVAL_MODEL_CACHE_DIR = Path(os.getenv("RETRIEVAL_MODEL_CACHE_DIR", "./model
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "100"))
 
+# Metadata exclusion configuration
+# These keys are excluded from the embedding text to save tokens and avoid length errors
+EXCLUDED_EMBED_METADATA_KEYS = [
+    "line_offsets",      # Large integer array, primary cause of length errors
+    "file_path",         # redundant with file_name/source, strict path less useful for semantic similarity
+    "source",            # often same as file_path
+    "creation_date",     # temporal, not semantic
+    "last_modified_date",# temporal, not semantic
+    "doc_ids",           # internal tracking
+    "hash",              # internal tracking
+]
+
+# These keys are excluded from the LLM context to save context window
+EXCLUDED_LLM_METADATA_KEYS = [
+    "line_offsets",      # LLM needs text content, not integer map
+    "hash",              # internal tracking
+    "doc_ids",           # internal tracking
+    "file_path",         # usually redundant if file_name is present
+    "source",            # usually redundant
+]
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
@@ -217,6 +238,11 @@ class LocalFileSystemSource(DataSource):
                     text = doc.get_content()
                     line_offsets = _compute_line_offsets(text)
                     doc.metadata["line_offsets"] = line_offsets
+
+            # Apply metadata exclusions
+            for doc in docs:
+                doc.excluded_embed_metadata_keys = EXCLUDED_EMBED_METADATA_KEYS
+                doc.excluded_llm_metadata_keys = EXCLUDED_LLM_METADATA_KEYS
 
             return docs
 
@@ -507,7 +533,8 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
         docs.append(LlamaIndexDocument(
             text=text,
             metadata=metadata,
-            excluded_llm_metadata_keys=["file_path", "source"],  # Keep dates visible to LLM
+            excluded_embed_metadata_keys=EXCLUDED_EMBED_METADATA_KEYS,
+            excluded_llm_metadata_keys=EXCLUDED_LLM_METADATA_KEYS,
         ))
 
     for para in doc.paragraphs:
@@ -548,7 +575,8 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
             docs.append(LlamaIndexDocument(
                 text=full_text,
                 metadata=metadata,
-                excluded_llm_metadata_keys=["file_path", "source"],  # Keep dates visible to LLM
+                excluded_embed_metadata_keys=EXCLUDED_EMBED_METADATA_KEYS,
+                excluded_llm_metadata_keys=EXCLUDED_LLM_METADATA_KEYS,
             ))
 
     logger.info(
