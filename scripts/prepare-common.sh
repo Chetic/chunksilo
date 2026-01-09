@@ -32,7 +32,6 @@ cp mcp_server.py "$COMMON_ROOT/"
 cp ingest.py "$COMMON_ROOT/"
 cp requirements.txt "$COMMON_ROOT/"
 cp README.md "$COMMON_ROOT/"
-cp env.template "$COMMON_ROOT/"
 cp universal_config.json "$COMMON_ROOT/"
 # The installer runs setup.sh and needs generate_configs.py; include them so the
 # packaged artifacts remain fully offline and self-contained.

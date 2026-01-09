@@ -48,7 +48,7 @@ If you prefer to run from source:
 
 The installer generates tool-specific configurations from a single source of truth: `universal_config.json`.
 
-- **Settings**: Adjust `DATA_DIR` (documents), `STORAGE_DIR` (index), and `RETRIEVAL_MODEL_CACHE_DIR` directly in the generated config if needed, or modify `universal_config.json` before running the installer.
+- **Settings**: Adjust environment variables directly in the generated config if needed, or modify `universal_config.json` before running the installer.
 - **Documents**: Place your documents in the `DATA_DIR` (default: `data/` inside the install location).
 - **Indexing**: The server runs `ingest.py` automatically, or you can run it manually:
   ```bash
@@ -57,13 +57,60 @@ The installer generates tool-specific configurations from a single source of tru
   python ingest.py
   ```
 
+### Environment Variables
+
+Configure the MCP server by setting environment variables in your MCP client configuration (e.g., `cline_mcp_settings.json`, `config.json` for Continue, etc.).
+
+#### Core Settings
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `DATA_DIR` | `./data` | Directory containing PDF, DOCX, Markdown (.md), and TXT (.txt) files to index |
+| `STORAGE_DIR` | `./storage` | Directory for storing the LlamaIndex vector index and ingestion state |
+| `RETRIEVAL_MODEL_CACHE_DIR` | `./models` | Cache directory for embedding and reranking models |
+| `OFFLINE` | `1` | Offline mode (1=enabled, 0=disabled). Prevents all network requests by ML libraries |
+
+#### Retrieval Settings
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `RETRIEVAL_EMBED_MODEL_NAME` | `BAAI/bge-small-en-v1.5` | Hugging Face embedding model for vector search (stage 1) |
+| `RETRIEVAL_EMBED_TOP_K` | `20` | Number of candidates retrieved from vector search before reranking |
+| `RETRIEVAL_RERANK_MODEL_NAME` | `ms-marco-MiniLM-L-12-v2` | FlashRank reranker model for semantic reranking (stage 2) |
+| `RETRIEVAL_RERANK_TOP_K` | `5` | Final number of results returned after reranking |
+| `RETRIEVAL_RECENCY_BOOST` | `0.3` | Weight for recency boost (0.0=disabled, 1.0=recency dominates relevance) |
+| `RETRIEVAL_RECENCY_HALF_LIFE_DAYS` | `365` | Days until a document's recency boost is halved (exponential decay) |
+
+#### Text Chunking (ingest.py only)
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `CHUNK_SIZE` | `512` | Maximum size of text chunks for indexing |
+| `CHUNK_OVERLAP` | `100` | Number of overlapping characters between adjacent chunks |
+
+#### Confluence Integration (Optional)
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `CONFLUENCE_URL` | None | Confluence base URL (e.g., `https://confluence.example.com`). If unset, Confluence search is disabled |
+| `CONFLUENCE_USERNAME` | None | Confluence username for authentication |
+| `CONFLUENCE_API_TOKEN` | None | Confluence API token for authentication |
+| `CONFLUENCE_TIMEOUT` | `10.0` | Timeout in seconds for Confluence search requests |
+| `CONFLUENCE_MAX_RESULTS` | `30` | Maximum number of results to retrieve from Confluence |
+
+#### SSL/TLS Settings (Optional)
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `CA_BUNDLE_PATH` | None | Path to CA bundle file for custom certificates (e.g., self-signed or internal CA). Used for HTTPS connections to Confluence and other endpoints. Example: `/path/to/ca-bundle.crt` |
+
 ## Troubleshooting
 
 - **Index missing**: Run `python ingest.py` in the install directory.
 - **Retrieval errors**: Check paths in your tool's MCP config file.
-- **Offline mode**: The installer includes models. Ensure `OFFLINE=1` is set in the environment or `.env` file (automatically handled by the installer).
-- **Confluence Integration**: To enable Confluence search, set `CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, and `CONFLUENCE_API_TOKEN` environment variables in your MCP client configuration (e.g., `cline_mcp_settings.json`, `config.json` for Continue, etc.).
-- **Custom CA Bundle**: If your Confluence instance or other HTTPS endpoints use custom certificates (e.g., self-signed or internal CA), set the `CA_BUNDLE_PATH` environment variable to point to a CA bundle file containing the certificate chain. This is required for HTTPS connections to work with custom certificates. Example: `CA_BUNDLE_PATH=/path/to/ca-bundle.crt`
+- **Offline mode**: The installer includes models and sets `OFFLINE=1` automatically. If you need network access, set `OFFLINE=0` in your MCP client configuration.
+- **Confluence Integration**: Set `CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, and `CONFLUENCE_API_TOKEN` in your MCP client configuration to enable Confluence search.
+- **Custom CA Bundle**: Set `CA_BUNDLE_PATH` to point to your CA bundle file if using custom certificates for HTTPS endpoints.
 
 ## License
 
