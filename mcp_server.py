@@ -674,7 +674,7 @@ def _search_confluence(query: str) -> list[NodeWithScore]:
             cql = f'({text_conditions}) AND type = "page"'
 
         logger.debug(f"Confluence CQL query: {cql}")
-        documents = reader.load_data(cql=cql, max_results=CONFLUENCE_MAX_RESULTS)
+        documents = reader.load_data(cql=cql, max_num_results=CONFLUENCE_MAX_RESULTS)
 
         nodes: list[NodeWithScore] = []
         for doc in documents:
