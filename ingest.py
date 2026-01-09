@@ -69,6 +69,7 @@ BM25_INDEX_DIR = STORAGE_DIR / "bm25_index"
 EXCLUDED_EMBED_METADATA_KEYS = [
     "line_offsets",      # Large integer array, primary cause of length errors
     "document_headings", # Heading hierarchy array with positions, excluded like line_offsets
+    "heading_path",      # List of parent heading texts, can exceed chunk size for nested docs
     "file_path",         # redundant with file_name/source, strict path less useful for semantic similarity
     "source",            # often same as file_path
     "creation_date",     # temporal, not semantic
@@ -80,6 +81,7 @@ EXCLUDED_EMBED_METADATA_KEYS = [
 # These keys are excluded from the LLM context to save context window
 EXCLUDED_LLM_METADATA_KEYS = [
     "line_offsets",      # LLM needs text content, not integer map
+    "heading_path",      # Provided separately in location field of response
     "hash",              # internal tracking
     "doc_ids",           # internal tracking
     "file_path",         # usually redundant if file_name is present
