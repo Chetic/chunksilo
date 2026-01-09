@@ -357,14 +357,17 @@ fi
 echo "Installing dependencies..."
 DEP_DIR="$INSTALL_DIR/dependencies"
 
-if [ ! -d "$DEP_DIR" ] || [ -z "$(ls -A "$DEP_DIR" 2>/dev/null)" ]; then
-    die "Packaged dependencies not found. Please use the packaged installer build that includes wheels."
+if [ -d "$DEP_DIR" ] && [ -n "$(ls -A "$DEP_DIR" 2>/dev/null)" ]; then
+    # Packaged mode: use pre-downloaded wheels (offline installation)
+    echo "Using packaged dependencies from $DEP_DIR"
+    ./venv/bin/pip install --no-index --find-links "$DEP_DIR" --no-cache-dir wheel
+    ./venv/bin/pip install --no-index --find-links "$DEP_DIR" --no-cache-dir -r requirements.txt
+else
+    # Development mode: install from PyPI
+    echo "Development mode: installing dependencies from PyPI..."
+    ./venv/bin/pip install --no-cache-dir wheel
+    ./venv/bin/pip install --no-cache-dir -r requirements.txt
 fi
-
-# Install wheel first to handle legacy setup.py builds
-./venv/bin/pip install --no-index --find-links "$DEP_DIR" --no-cache-dir wheel
-
-./venv/bin/pip install --no-index --find-links "$DEP_DIR" --no-cache-dir -r requirements.txt
 
 echo "Installation complete!"
 echo "MCP Server installed at: $INSTALL_DIR"
