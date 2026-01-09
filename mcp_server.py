@@ -210,7 +210,12 @@ def _collect_startup_info():
                 username = os.getenv("CONFLUENCE_USERNAME")
                 api_token = os.getenv("CONFLUENCE_API_TOKEN")
                 if username and api_token:
-                    reader = ConfluenceReader(base_url=confluence_url, user_name=username, password=api_token)
+                    reader = ConfluenceReader(
+                        base_url=confluence_url,
+                        user_name=username,
+                        password=api_token,
+                        cloud=_is_confluence_cloud(confluence_url),
+                    )
                     _startup_log_buffer.append("Confluence Connection: Credentials provided, reader initialized.")
                 else:
                     _startup_log_buffer.append("Confluence Configuration: Missing USERNAME or API_TOKEN")
@@ -569,6 +574,28 @@ def _prepare_confluence_query_terms(query: str) -> list[str]:
     return [w.replace('"', '\\"') for w in meaningful]
 
 
+def _is_confluence_cloud(base_url: str) -> bool:
+    """
+    Detect if a Confluence URL is Cloud or Server/Data Center.
+
+    Checks CONFLUENCE_CLOUD env var first (true/false), otherwise
+    auto-detects based on the URL (*.atlassian.net = Cloud).
+
+    Args:
+        base_url: Confluence base URL
+
+    Returns:
+        True for Confluence Cloud, False for Server/Data Center
+    """
+    cloud_env = os.getenv("CONFLUENCE_CLOUD", "").lower()
+    if cloud_env in ("true", "1", "yes"):
+        return True
+    if cloud_env in ("false", "0", "no"):
+        return False
+    # Auto-detect: atlassian.net URLs are Cloud
+    return "atlassian.net" in base_url.lower()
+
+
 def _get_confluence_page_dates(
     base_url: str, page_id: str, username: str, api_token: str
 ) -> dict[str, str]:
@@ -651,7 +678,12 @@ def _search_confluence(query: str) -> list[NodeWithScore]:
         return []
 
     try:
-        reader = ConfluenceReader(base_url=base_url, user_name=username, password=api_token)
+        reader = ConfluenceReader(
+            base_url=base_url,
+            user_name=username,
+            password=api_token,
+            cloud=_is_confluence_cloud(base_url),
+        )
 
         # Prepare query terms (filter stopwords, escape special chars)
         query_terms = _prepare_confluence_query_terms(query)

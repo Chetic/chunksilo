@@ -98,6 +98,7 @@ Configure the MCP server by setting environment variables in your MCP client con
 | `CONFLUENCE_API_TOKEN` | None | Confluence API token for authentication |
 | `CONFLUENCE_TIMEOUT` | `10.0` | Timeout in seconds for Confluence search requests |
 | `CONFLUENCE_MAX_RESULTS` | `30` | Maximum number of results to retrieve from Confluence |
+| `CONFLUENCE_CLOUD` | Auto | Set to `true` for Confluence Cloud, `false` for Server/Data Center. Auto-detects based on URL if not set (*.atlassian.net = Cloud) |
 
 #### SSL/TLS Settings (Optional)
 
