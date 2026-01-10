@@ -6,6 +6,7 @@ Supports incremental indexing using a local SQLite database to track file states
 import argparse
 import hashlib
 import itertools
+import json
 import logging
 import os
 import sqlite3
@@ -64,11 +65,15 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "100"))
 # BM25 index directory for file name matching
 BM25_INDEX_DIR = STORAGE_DIR / "bm25_index"
 
+# Heading store for document headings (stored separately to avoid metadata size issues)
+HEADING_STORE_PATH = STORAGE_DIR / "heading_store.json"
+
 # Metadata exclusion configuration
 # These keys are excluded from the embedding text to save tokens and avoid length errors
 EXCLUDED_EMBED_METADATA_KEYS = [
     "line_offsets",      # Large integer array, primary cause of length errors
     "document_headings", # Heading hierarchy array with positions, excluded like line_offsets
+    "heading_path",      # Pre-computed heading hierarchy, stored separately to save chunk space
     "file_path",         # redundant with file_name/source, strict path less useful for semantic similarity
     "source",            # often same as file_path
     "creation_date",     # temporal, not semantic
@@ -92,6 +97,64 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+class HeadingStore:
+    """Stores document headings separately from chunk metadata.
+
+    This avoids the LlamaIndex SentenceSplitter metadata size validation issue,
+    which checks metadata length before applying exclusions. By storing headings
+    in a separate file, we keep chunk metadata small while preserving heading
+    data for retrieval.
+    """
+
+    def __init__(self, store_path: Path):
+        self.store_path = store_path
+        self._data: Dict[str, List[dict]] = {}
+        self._load()
+
+    def _load(self):
+        """Load heading data from disk."""
+        if self.store_path.exists():
+            try:
+                with open(self.store_path, "r", encoding="utf-8") as f:
+                    self._data = json.load(f)
+            except Exception as e:
+                logger.warning(f"Failed to load heading store: {e}")
+                self._data = {}
+
+    def _save(self):
+        """Save heading data to disk."""
+        self.store_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.store_path, "w", encoding="utf-8") as f:
+            json.dump(self._data, f)
+
+    def set_headings(self, file_path: str, headings: List[dict]):
+        """Store headings for a file."""
+        self._data[file_path] = headings
+        self._save()
+
+    def get_headings(self, file_path: str) -> List[dict]:
+        """Get headings for a file."""
+        return self._data.get(file_path, [])
+
+    def remove_headings(self, file_path: str):
+        """Remove headings for a file."""
+        if file_path in self._data:
+            del self._data[file_path]
+            self._save()
+
+
+# Module-level heading store instance (lazy initialized)
+_heading_store: Optional["HeadingStore"] = None
+
+
+def get_heading_store() -> HeadingStore:
+    """Get the singleton HeadingStore instance."""
+    global _heading_store
+    if _heading_store is None:
+        _heading_store = HeadingStore(HEADING_STORE_PATH)
+    return _heading_store
 
 
 @dataclass
@@ -334,16 +397,16 @@ class LocalFileSystemSource(DataSource):
                     line_offsets = _compute_line_offsets(text)
                     doc.metadata["line_offsets"] = line_offsets
 
-                    # Extract headings for Markdown
+                    # Extract headings for Markdown and store separately
+                    # (not in metadata to avoid SentenceSplitter size validation)
                     if file_path.suffix.lower() == ".md":
                         headings = _extract_markdown_headings(text)
-                        doc.metadata["document_headings"] = headings
+                        get_heading_store().set_headings(str(file_path), headings)
 
-            # Extract headings for PDF files
+            # Extract headings for PDF files and store separately
             if file_path.suffix.lower() == ".pdf":
                 headings = _extract_pdf_headings_from_outline(file_path)
-                for doc in docs:
-                    doc.metadata["document_headings"] = headings
+                get_heading_store().set_headings(str(file_path), headings)
 
             # Apply metadata exclusions
             for doc in docs:
@@ -637,6 +700,9 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
 
         char_position += len(para.text) + 1  # +1 for newline
 
+    # Store headings separately to avoid metadata size issues during chunking
+    get_heading_store().set_headings(str(docx_path), all_headings)
+
     # Second pass: Split by heading (existing logic)
     current_heading: str | None = None
     current_level: int | None = None
@@ -677,7 +743,6 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
             "heading_level": current_level,
             "creation_date": creation_date,
             "last_modified_date": last_modified_date,
-            "document_headings": all_headings,  # Full hierarchy for heading_path building
             "heading_path": heading_path,  # Pre-computed hierarchical path
         }
         docs.append(LlamaIndexDocument(
@@ -721,7 +786,6 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
                 "heading_level": None,
                 "creation_date": creation_date,
                 "last_modified_date": last_modified_date,
-                "document_headings": all_headings,  # Will be empty list if no headings
             }
             docs.append(LlamaIndexDocument(
                 text=full_text,
@@ -908,6 +972,8 @@ def build_index(download_only: bool = False, offline: bool = False) -> None:
                 index.delete_ref_doc(doc_id, delete_from_docstore=True)
             except Exception as e:
                 logger.warning(f"Failed to delete doc {doc_id} from index: {e}")
+        # Clean up heading data for deleted file
+        get_heading_store().remove_headings(deleted_path)
         ingestion_state.remove_file_state(deleted_path)
 
     if not files_to_process and not deleted_files:
