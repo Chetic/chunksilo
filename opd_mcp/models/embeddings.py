@@ -7,11 +7,7 @@ from typing import Optional
 from llama_index.core import Settings
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
-from opd_mcp.config import (
-    RETRIEVAL_EMBED_MODEL_NAME,
-    RETRIEVAL_MODEL_CACHE_DIR,
-    is_offline_mode,
-)
+import opd_mcp.config as config
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +60,7 @@ def verify_model_cache_exists(cache_dir: Path, model_name: str = None) -> bool:
     """
     from fastembed import TextEmbedding
 
-    model_name = model_name or RETRIEVAL_EMBED_MODEL_NAME
+    model_name = model_name or config.RETRIEVAL_EMBED_MODEL_NAME
 
     try:
         models = TextEmbedding.list_supported_models()
@@ -110,7 +106,7 @@ def create_fastembed_embedding(
     Returns:
         Configured FastEmbedEmbedding instance
     """
-    model_name = model_name or RETRIEVAL_EMBED_MODEL_NAME
+    model_name = model_name or config.RETRIEVAL_EMBED_MODEL_NAME
 
     if offline:
         cached_model_path = get_cached_model_path(cache_dir, model_name)
@@ -147,9 +143,9 @@ def ensure_embed_model(
     if _embed_model_initialized:
         return
 
-    cache_dir = cache_dir or RETRIEVAL_MODEL_CACHE_DIR
-    offline = offline if offline is not None else is_offline_mode()
-    model_name = model_name or RETRIEVAL_EMBED_MODEL_NAME
+    cache_dir = cache_dir or config.RETRIEVAL_MODEL_CACHE_DIR
+    offline = offline if offline is not None else config.is_offline_mode()
+    model_name = model_name or config.RETRIEVAL_EMBED_MODEL_NAME
 
     cached_model_path = get_cached_model_path(cache_dir, model_name)
     if cached_model_path and offline:
@@ -193,7 +189,7 @@ def ensure_embedding_model_cached(cache_dir: Path, offline: bool = False) -> Non
                 cache_dir,
             )
             raise FileNotFoundError(
-                f"Embedding model '{RETRIEVAL_EMBED_MODEL_NAME}' not found in cache directory '{cache_dir}'."
+                f"Embedding model '{config.RETRIEVAL_EMBED_MODEL_NAME}' not found in cache directory '{cache_dir}'."
             )
 
     try:
