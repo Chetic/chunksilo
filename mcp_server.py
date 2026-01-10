@@ -16,6 +16,7 @@ from mcp.server.fastmcp import FastMCP, Context
 from llama_index.core import StorageContext, load_index_from_storage, Settings
 from llama_index.core.schema import TextNode, NodeWithScore
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
+from ingest import get_heading_store
 try:
     from llama_index.readers.confluence import ConfluenceReader
     import requests  # Available when llama-index-readers-confluence is installed
@@ -1028,7 +1029,11 @@ Each chunk includes:
             original_source = metadata.get("source")
 
             # Build heading path from document structure
+            # First check metadata, then fall back to separate heading store
             headings = metadata.get("document_headings") or metadata.get("headings") or []
+            if not headings and file_path:
+                # Look up headings from separate storage (avoids metadata size issues)
+                headings = get_heading_store().get_headings(str(file_path))
             char_start = getattr(node.node, "start_char_idx", None)
             heading_text = metadata.get("heading")
             heading_path: list[str] = []
