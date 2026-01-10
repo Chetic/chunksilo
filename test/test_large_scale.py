@@ -40,7 +40,8 @@ logger = logging.getLogger(__name__)
 os.environ["OFFLINE"] = "0"
 
 # Import after logging is set up
-from ingest import DATA_DIR, STORAGE_DIR, build_index
+from opd_mcp.config import DATA_DIR, STORAGE_DIR
+from ingest import build_index
 from mcp_server import retrieve_docs
 
 # Test corpus configuration
