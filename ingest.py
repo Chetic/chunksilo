@@ -58,21 +58,24 @@ RETRIEVAL_RERANK_MODEL_NAME = os.getenv(
 RETRIEVAL_MODEL_CACHE_DIR = Path(os.getenv("RETRIEVAL_MODEL_CACHE_DIR", "./models"))
 
 # Text chunking configuration
-# Note: 2048 is used to accommodate metadata overhead during splitting.
-# LlamaIndex's split_text_metadata_aware counts all metadata (not just non-excluded)
-# when calculating available space, so larger chunks prevent overflow errors.
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "2048"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "200"))
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "100"))
 
 # BM25 index directory for file name matching
 BM25_INDEX_DIR = STORAGE_DIR / "bm25_index"
 
+# Auxiliary metadata file path - stores large per-file metadata separately
+# to avoid LlamaIndex chunk size overflow during splitting
+AUX_METADATA_PATH = STORAGE_DIR / "aux_metadata.json"
+
+# Large metadata keys that should be stored in auxiliary file, not in document metadata.
+# These are excluded from LlamaIndex documents to prevent chunk size overflow,
+# since split_text_metadata_aware counts ALL metadata regardless of exclusion lists.
+AUX_METADATA_KEYS = ["line_offsets", "document_headings", "heading_path"]
+
 # Metadata exclusion configuration
 # These keys are excluded from the embedding text to save tokens and avoid length errors
 EXCLUDED_EMBED_METADATA_KEYS = [
-    "line_offsets",      # Large integer array, primary cause of length errors
-    "document_headings", # Heading hierarchy array with positions, excluded like line_offsets
-    "heading_path",      # List of parent heading texts, can exceed chunk size for nested docs
     "file_path",         # redundant with file_name/source, strict path less useful for semantic similarity
     "source",            # often same as file_path
     "creation_date",     # temporal, not semantic
@@ -83,8 +86,6 @@ EXCLUDED_EMBED_METADATA_KEYS = [
 
 # These keys are excluded from the LLM context to save context window
 EXCLUDED_LLM_METADATA_KEYS = [
-    "line_offsets",      # LLM needs text content, not integer map
-    "heading_path",      # Provided separately in location field of response
     "hash",              # internal tracking
     "doc_ids",           # internal tracking
     "file_path",         # usually redundant if file_name is present
@@ -97,6 +98,49 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+class AuxiliaryMetadataStore:
+    """
+    Stores large per-file metadata separately from LlamaIndex documents.
+
+    This prevents chunk size overflow errors in LlamaIndex's split_text_metadata_aware,
+    which counts ALL metadata regardless of exclusion lists.
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._data: dict[str, dict] = {}
+        self._load()
+
+    def _load(self) -> None:
+        """Load existing metadata from disk."""
+        if self.path.exists():
+            try:
+                with open(self.path, "r", encoding="utf-8") as f:
+                    self._data = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                self._data = {}
+        else:
+            self._data = {}
+
+    def save(self) -> None:
+        """Persist metadata to disk."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(self._data, f)
+
+    def set(self, file_path: str, metadata: dict) -> None:
+        """Store metadata for a file."""
+        self._data[file_path] = metadata
+
+    def get(self, file_path: str) -> dict:
+        """Retrieve metadata for a file."""
+        return self._data.get(file_path, {})
+
+    def remove(self, file_path: str) -> None:
+        """Remove metadata for a file."""
+        self._data.pop(file_path, None)
 
 
 @dataclass
@@ -289,8 +333,9 @@ def _extract_pdf_headings_from_outline(pdf_path: Path) -> List[dict]:
 class LocalFileSystemSource(DataSource):
     """Implementation of DataSource for the local file system."""
 
-    def __init__(self, base_dir: Path):
+    def __init__(self, base_dir: Path, aux_store: AuxiliaryMetadataStore | None = None):
         self.base_dir = base_dir
+        self.aux_store = aux_store
 
     def iter_files(self) -> Iterator[FileInfo]:
         extensions = {".pdf", ".md", ".txt", ".docx"}
@@ -308,7 +353,7 @@ class LocalFileSystemSource(DataSource):
             while len(buf) > 0:
                 hasher.update(buf)
                 buf = f.read(65536)
-        
+
         return FileInfo(
             path=str(file_path.absolute()),
             hash=hasher.hexdigest(),
@@ -318,7 +363,7 @@ class LocalFileSystemSource(DataSource):
     def load_file(self, file_info: FileInfo) -> List[LlamaIndexDocument]:
         file_path = Path(file_info.path)
         if file_path.suffix.lower() == ".docx":
-            return split_docx_into_heading_documents(file_path)
+            return split_docx_into_heading_documents(file_path, self.aux_store)
         else:
             reader = SimpleDirectoryReader(
                 input_files=[str(file_path)],
@@ -332,23 +377,29 @@ class LocalFileSystemSource(DataSource):
                         if k not in ('creation_date', 'last_modified_date')
                     ]
 
+            # Collect auxiliary metadata for this file
+            aux_metadata: dict = {}
+
             # Add line offsets for text-based files (markdown, txt) to enable line number lookup
             if file_path.suffix.lower() in {".md", ".txt"}:
                 for doc in docs:
                     text = doc.get_content()
                     line_offsets = _compute_line_offsets(text)
-                    doc.metadata["line_offsets"] = line_offsets
+                    aux_metadata["line_offsets"] = line_offsets
 
                     # Extract headings for Markdown
                     if file_path.suffix.lower() == ".md":
                         headings = _extract_markdown_headings(text)
-                        doc.metadata["document_headings"] = headings
+                        aux_metadata["document_headings"] = headings
 
             # Extract headings for PDF files
             if file_path.suffix.lower() == ".pdf":
                 headings = _extract_pdf_headings_from_outline(file_path)
-                for doc in docs:
-                    doc.metadata["document_headings"] = headings
+                aux_metadata["document_headings"] = headings
+
+            # Store auxiliary metadata separately (not in document)
+            if self.aux_store and aux_metadata:
+                self.aux_store.set(str(file_path), aux_metadata)
 
             # Apply metadata exclusions
             for doc in docs:
@@ -597,7 +648,10 @@ def _parse_heading_level(style_name: str | None) -> int:
     return 1
 
 
-def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocument]:
+def split_docx_into_heading_documents(
+    docx_path: Path,
+    aux_store: AuxiliaryMetadataStore | None = None,
+) -> List[LlamaIndexDocument]:
     """Split DOCX into documents by heading."""
     docs: List[LlamaIndexDocument] = []
     try:
@@ -642,6 +696,11 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
 
         char_position += len(para.text) + 1  # +1 for newline
 
+    # Store document_headings in auxiliary store (not in document metadata)
+    # This prevents LlamaIndex chunk size overflow
+    if aux_store and all_headings:
+        aux_store.set(str(docx_path), {"document_headings": all_headings})
+
     # Second pass: Split by heading (existing logic)
     current_heading: str | None = None
     current_level: int | None = None
@@ -654,26 +713,8 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
         if not text:
             return
 
-        # Build hierarchical heading_path by finding parent headings based on level
-        heading_path = []
-        if all_headings:
-            # Find the index of the current heading in all_headings
-            current_idx = None
-            for idx, h in enumerate(all_headings):
-                if h["text"] == current_heading and h["level"] == current_level:
-                    current_idx = idx
-                    break
-
-            if current_idx is not None:
-                # Build path by including all parent headings (those with lower level numbers)
-                # Walk backwards from current heading and include headings with level < current_level
-                path_headings = [all_headings[current_idx]]  # Start with current
-                for idx in range(current_idx - 1, -1, -1):
-                    h = all_headings[idx]
-                    if h["level"] < path_headings[0]["level"]:
-                        path_headings.insert(0, h)
-                heading_path = [h["text"] for h in path_headings]
-
+        # Note: heading_path is computed at query time from document_headings
+        # to avoid storing large metadata in chunks
         metadata = {
             "file_path": str(docx_path),
             "file_name": docx_path.name,
@@ -682,8 +723,6 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
             "heading_level": current_level,
             "creation_date": creation_date,
             "last_modified_date": last_modified_date,
-            "document_headings": all_headings,  # Full hierarchy for heading_path building
-            "heading_path": heading_path,  # Pre-computed hierarchical path
         }
         docs.append(LlamaIndexDocument(
             text=text,
@@ -726,7 +765,6 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
                 "heading_level": None,
                 "creation_date": creation_date,
                 "last_modified_date": last_modified_date,
-                "document_headings": all_headings,  # Will be empty list if no headings
             }
             docs.append(LlamaIndexDocument(
                 text=full_text,
@@ -857,7 +895,8 @@ def build_index(download_only: bool = False, offline: bool = False) -> None:
 
     # Initialize State and Data Source
     ingestion_state = IngestionState(STATE_DB_PATH)
-    data_source = LocalFileSystemSource(DATA_DIR)
+    aux_store = AuxiliaryMetadataStore(AUX_METADATA_PATH)
+    data_source = LocalFileSystemSource(DATA_DIR, aux_store)
 
     # Initialize Embedding Model
     logger.info(f"Initializing embedding model: {RETRIEVAL_EMBED_MODEL_NAME}")
@@ -914,6 +953,7 @@ def build_index(download_only: bool = False, offline: bool = False) -> None:
             except Exception as e:
                 logger.warning(f"Failed to delete doc {doc_id} from index: {e}")
         ingestion_state.remove_file_state(deleted_path)
+        aux_store.remove(deleted_path)
 
     if not files_to_process and not deleted_files:
         logger.info("No changes detected. Index is up to date.")
@@ -947,6 +987,9 @@ def build_index(download_only: bool = False, offline: bool = False) -> None:
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     logger.info(f"Persisting index to {STORAGE_DIR}")
     index.storage_context.persist(persist_dir=str(STORAGE_DIR))
+
+    # Save auxiliary metadata
+    aux_store.save()
 
     # Build BM25 index for file name matching
     build_bm25_index(index, STORAGE_DIR)

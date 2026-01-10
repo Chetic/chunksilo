@@ -68,6 +68,30 @@ logging.basicConfig(
 # Configuration
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "./storage"))
 
+# Auxiliary metadata file - stores large per-file metadata separately
+AUX_METADATA_PATH = STORAGE_DIR / "aux_metadata.json"
+
+# Global cache for auxiliary metadata (loaded once at startup)
+_aux_metadata_cache: dict[str, dict] | None = None
+
+
+def _load_aux_metadata() -> dict[str, dict]:
+    """Load auxiliary metadata from disk, caching for subsequent calls."""
+    global _aux_metadata_cache
+    if _aux_metadata_cache is not None:
+        return _aux_metadata_cache
+
+    if AUX_METADATA_PATH.exists():
+        try:
+            with open(AUX_METADATA_PATH, "r", encoding="utf-8") as f:
+                _aux_metadata_cache = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            _aux_metadata_cache = {}
+    else:
+        _aux_metadata_cache = {}
+    return _aux_metadata_cache
+
+
 # Two-stage retrieval configuration
 # Stage 1: vector search over embeddings
 # Higher values provide more candidates for reranking, improving precision
@@ -1013,6 +1037,9 @@ Each chunk includes:
                 if rerank_scores.get(id(node), 0.0) >= RETRIEVAL_SCORE_THRESHOLD
             ]
 
+        # Load auxiliary metadata for looking up large per-file data
+        aux_metadata = _load_aux_metadata()
+
         # Format chunks with simplified structure
         chunks = []
         for node in nodes:
@@ -1027,8 +1054,17 @@ Each chunk includes:
             )
             original_source = metadata.get("source")
 
+            # Look up auxiliary metadata for this file (large fields stored separately)
+            file_aux = aux_metadata.get(str(file_path), {}) if file_path else {}
+
             # Build heading path from document structure
-            headings = metadata.get("document_headings") or metadata.get("headings") or []
+            # Check node metadata first, then auxiliary store
+            headings = (
+                metadata.get("document_headings")
+                or metadata.get("headings")
+                or file_aux.get("document_headings")
+                or []
+            )
             char_start = getattr(node.node, "start_char_idx", None)
             heading_text = metadata.get("heading")
             heading_path: list[str] = []
@@ -1036,7 +1072,7 @@ Each chunk includes:
                 if heading_text is None and char_start is not None:
                     heading_text, heading_path = _build_heading_path(headings, char_start)
             # Use explicit heading_path from metadata if available
-            meta_heading_path = metadata.get("heading_path")
+            meta_heading_path = metadata.get("heading_path") or file_aux.get("heading_path")
             if not heading_path and meta_heading_path:
                 heading_path = list(meta_heading_path)
             # Add current heading to path if not already included
@@ -1078,8 +1114,9 @@ Each chunk includes:
             )
 
             # Get line number (for markdown/txt files)
+            # Check node metadata first, then auxiliary store
             line_number = None
-            line_offsets = metadata.get("line_offsets")
+            line_offsets = metadata.get("line_offsets") or file_aux.get("line_offsets")
             if line_offsets and char_start is not None:
                 line_number = _char_offset_to_line(char_start, line_offsets)
 

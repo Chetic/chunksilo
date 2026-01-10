@@ -86,8 +86,8 @@ Configure the MCP server by setting environment variables in your MCP client con
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `CHUNK_SIZE` | `2048` | Maximum size of text chunks for indexing |
-| `CHUNK_OVERLAP` | `200` | Number of overlapping characters between adjacent chunks |
+| `CHUNK_SIZE` | `512` | Maximum size of text chunks for indexing |
+| `CHUNK_OVERLAP` | `100` | Number of overlapping characters between adjacent chunks |
 
 #### Confluence Integration (Optional)
 
