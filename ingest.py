@@ -69,6 +69,7 @@ BM25_INDEX_DIR = STORAGE_DIR / "bm25_index"
 EXCLUDED_EMBED_METADATA_KEYS = [
     "line_offsets",      # Large integer array, primary cause of length errors
     "document_headings", # Heading hierarchy array with positions, excluded like line_offsets
+    "heading_path",      # Pre-computed heading hierarchy, stored separately to save chunk space
     "file_path",         # redundant with file_name/source, strict path less useful for semantic similarity
     "source",            # often same as file_path
     "creation_date",     # temporal, not semantic
