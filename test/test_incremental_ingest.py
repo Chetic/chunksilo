@@ -4,6 +4,7 @@ import sqlite3
 import logging
 import sys
 from pathlib import Path
+from unittest.mock import patch
 import pytest
 
 # Add parent directory to path to import ingest modules
@@ -16,36 +17,67 @@ from ingest import build_index, IngestionState
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("test_incremental")
 
+
+def _create_mock_embedding():
+    """Create a lightweight mock embedding model for testing."""
+    from llama_index.core.embeddings import BaseEmbedding
+
+    class MockEmbedding(BaseEmbedding):
+        """Simple mock embedding that creates deterministic vectors from text."""
+
+        def _get_vector(self, text: str):
+            vec = [0.0] * 384
+            for word in text.lower().split():
+                idx = sum(ord(c) for c in word) % 384
+                vec[idx] += 1.0
+            return vec
+
+        def _get_query_embedding(self, query: str):
+            return self._get_vector(query)
+
+        def _get_text_embedding(self, text: str):
+            return self._get_vector(text)
+
+        async def _aget_query_embedding(self, query: str):
+            return self._get_vector(query)
+
+    return MockEmbedding(model_name="mock-test")
+
+
 @pytest.fixture
 def test_env(tmp_path):
-    """Setup test environment with temporary data and storage directories."""
+    """Setup test environment with temporary data and storage directories.
+
+    Uses mock embedding model to avoid needing real models in cache.
+    """
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     storage_dir = tmp_path / "storage"
     db_path = storage_dir / "ingestion_state.db"
-    
+
     # Save original globals
     orig_data_dir = ingest.DATA_DIR
     orig_storage_dir = ingest.STORAGE_DIR
     orig_db_path = ingest.STATE_DB_PATH
-    orig_cache_dir = ingest.RETRIEVAL_MODEL_CACHE_DIR
-    
+
     # Set globals to test paths
     ingest.DATA_DIR = data_dir
     ingest.STORAGE_DIR = storage_dir
     ingest.STATE_DB_PATH = db_path
-    
-    # Point cache to real models directory to avoid re-downloading
-    project_root = Path(__file__).parent.parent
-    ingest.RETRIEVAL_MODEL_CACHE_DIR = project_root / "models"
-    
-    yield data_dir, storage_dir, db_path
-    
+
+    # Create mock embedding model
+    mock_embed = _create_mock_embedding()
+
+    # Patch embedding/rerank functions to use mock instead of real models
+    with patch("ingest._create_fastembed_embedding", return_value=mock_embed), \
+         patch("ingest.ensure_embedding_model_cached"), \
+         patch("ingest.ensure_rerank_model_cached"):
+        yield data_dir, storage_dir, db_path
+
     # Restore globals
     ingest.DATA_DIR = orig_data_dir
     ingest.STORAGE_DIR = orig_storage_dir
     ingest.STATE_DB_PATH = orig_db_path
-    ingest.RETRIEVAL_MODEL_CACHE_DIR = orig_cache_dir
 
 def create_file(data_dir, name, content):
     path = data_dir / name
