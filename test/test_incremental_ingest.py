@@ -10,8 +10,13 @@ import pytest
 # Add parent directory to path to import ingest modules
 sys.path.append(str(Path(__file__).parent.parent))
 
+import opd_mcp.config as config
+from opd_mcp.models import embeddings as embed_module
+from opd_mcp.models import reranking as rerank_module
+from opd_mcp.storage import headings as headings_module
 import ingest
-from ingest import build_index, IngestionState
+from ingest import build_index
+from opd_mcp.storage import IngestionState
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO)
@@ -55,47 +60,54 @@ def test_env(tmp_path):
     storage_dir = tmp_path / "storage"
     db_path = storage_dir / "ingestion_state.db"
 
-    # Save original globals
-    orig_data_dir = ingest.DATA_DIR
-    orig_storage_dir = ingest.STORAGE_DIR
-    orig_db_path = ingest.STATE_DB_PATH
+    # Save original config values
+    orig_data_dir = config.DATA_DIR
+    orig_storage_dir = config.STORAGE_DIR
+    orig_db_path = config.STATE_DB_PATH
 
-    # Set globals to test paths
-    ingest.DATA_DIR = data_dir
-    ingest.STORAGE_DIR = storage_dir
-    ingest.STATE_DB_PATH = db_path
+    # Set config to test paths
+    config.DATA_DIR = data_dir
+    config.STORAGE_DIR = storage_dir
+    config.STATE_DB_PATH = db_path
+
+    # Reset heading store singleton
+    headings_module._heading_store = None
 
     # Create mock embedding model
     mock_embed = _create_mock_embedding()
 
-    # Patch embedding/rerank functions to use mock instead of real models
-    with patch("ingest._create_fastembed_embedding", return_value=mock_embed), \
+    # Patch embedding/rerank functions at the import location in ingest.py
+    with patch("ingest.create_fastembed_embedding", return_value=mock_embed), \
          patch("ingest.ensure_embedding_model_cached"), \
          patch("ingest.ensure_rerank_model_cached"):
         yield data_dir, storage_dir, db_path
 
-    # Restore globals
-    ingest.DATA_DIR = orig_data_dir
-    ingest.STORAGE_DIR = orig_storage_dir
-    ingest.STATE_DB_PATH = orig_db_path
+    # Restore original config
+    config.DATA_DIR = orig_data_dir
+    config.STORAGE_DIR = orig_storage_dir
+    config.STATE_DB_PATH = orig_db_path
+    headings_module._heading_store = None
+
 
 def create_file(data_dir, name, content):
     path = data_dir / name
     path.write_text(content)
     return path
 
+
 def check_db_count(db_path, expected_count):
     if not db_path.exists():
          if expected_count == 0: return
          raise AssertionError(f"DB not found but expected {expected_count} files")
-    
+
     with sqlite3.connect(db_path) as conn:
         count = conn.execute("SELECT count(*) FROM files").fetchone()[0]
         assert count == expected_count, f"Expected {expected_count} files in DB, found {count}"
 
+
 def test_incremental_ingestion(test_env):
     data_dir, storage_dir, db_path = test_env
-    
+
     logger.info("--- Step 1: Initial Run (1 file) ---")
     create_file(data_dir, "doc1.txt", "This is document 1.")
     build_index(offline=True)
@@ -114,7 +126,7 @@ def test_incremental_ingestion(test_env):
     create_file(data_dir, "doc1.txt", "This is document 1 modified.")
     build_index(offline=True)
     check_db_count(db_path, 2)
-    
+
     # Check if hash changed in DB
     with sqlite3.connect(db_path) as conn:
         row = conn.execute("SELECT hash FROM files WHERE path LIKE '%doc1.txt'").fetchone()

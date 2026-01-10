@@ -20,159 +20,159 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 # =============================================================================
-# Tests for _compute_line_offsets (ingest.py)
+# Tests for compute_line_offsets (opd_mcp.utils.text)
 # =============================================================================
 
 class TestComputeLineOffsets:
-    """Tests for _compute_line_offsets in ingest.py"""
+    """Tests for compute_line_offsets in opd_mcp.utils.text"""
 
     def test_empty_text(self):
-        from ingest import _compute_line_offsets
-        result = _compute_line_offsets("")
+        from opd_mcp.utils.text import compute_line_offsets
+        result = compute_line_offsets("")
         assert result == [0]
 
     def test_single_line(self):
-        from ingest import _compute_line_offsets
-        result = _compute_line_offsets("Hello world")
+        from opd_mcp.utils.text import compute_line_offsets
+        result = compute_line_offsets("Hello world")
         assert result == [0]
 
     def test_multiple_lines(self):
-        from ingest import _compute_line_offsets
+        from opd_mcp.utils.text import compute_line_offsets
         text = "Line 1\nLine 2\nLine 3"
-        result = _compute_line_offsets(text)
+        result = compute_line_offsets(text)
         # Line 1 starts at 0, Line 2 starts at 7, Line 3 starts at 14
         assert result == [0, 7, 14]
 
     def test_trailing_newline(self):
-        from ingest import _compute_line_offsets
+        from opd_mcp.utils.text import compute_line_offsets
         text = "Line 1\nLine 2\n"
-        result = _compute_line_offsets(text)
+        result = compute_line_offsets(text)
         # Line 1 at 0, Line 2 at 7, empty line 3 at 14
         assert result == [0, 7, 14]
 
     def test_empty_lines(self):
-        from ingest import _compute_line_offsets
+        from opd_mcp.utils.text import compute_line_offsets
         text = "Line 1\n\nLine 3"
-        result = _compute_line_offsets(text)
+        result = compute_line_offsets(text)
         # Line 1 at 0, empty line 2 at 7, Line 3 at 8
         assert result == [0, 7, 8]
 
 
 # =============================================================================
-# Tests for _char_offset_to_line (mcp_server.py)
+# Tests for char_offset_to_line (opd_mcp.retrieval.location)
 # =============================================================================
 
 class TestCharOffsetToLine:
-    """Tests for _char_offset_to_line in mcp_server.py"""
+    """Tests for char_offset_to_line in opd_mcp.retrieval.location"""
 
     def test_none_offset(self):
-        from mcp_server import _char_offset_to_line
-        result = _char_offset_to_line(None, [0, 10, 20])
+        from opd_mcp.retrieval.location import char_offset_to_line
+        result = char_offset_to_line(None, [0, 10, 20])
         assert result is None
 
     def test_none_offsets_list(self):
-        from mcp_server import _char_offset_to_line
-        result = _char_offset_to_line(5, None)
+        from opd_mcp.retrieval.location import char_offset_to_line
+        result = char_offset_to_line(5, None)
         assert result is None
 
     def test_empty_offsets_list(self):
-        from mcp_server import _char_offset_to_line
-        result = _char_offset_to_line(5, [])
+        from opd_mcp.retrieval.location import char_offset_to_line
+        result = char_offset_to_line(5, [])
         assert result is None
 
     def test_first_line(self):
-        from mcp_server import _char_offset_to_line
+        from opd_mcp.retrieval.location import char_offset_to_line
         offsets = [0, 10, 20, 30]
-        assert _char_offset_to_line(0, offsets) == 1
-        assert _char_offset_to_line(5, offsets) == 1
-        assert _char_offset_to_line(9, offsets) == 1
+        assert char_offset_to_line(0, offsets) == 1
+        assert char_offset_to_line(5, offsets) == 1
+        assert char_offset_to_line(9, offsets) == 1
 
     def test_second_line(self):
-        from mcp_server import _char_offset_to_line
+        from opd_mcp.retrieval.location import char_offset_to_line
         offsets = [0, 10, 20, 30]
-        assert _char_offset_to_line(10, offsets) == 2
-        assert _char_offset_to_line(15, offsets) == 2
+        assert char_offset_to_line(10, offsets) == 2
+        assert char_offset_to_line(15, offsets) == 2
 
     def test_last_line(self):
-        from mcp_server import _char_offset_to_line
+        from opd_mcp.retrieval.location import char_offset_to_line
         offsets = [0, 10, 20, 30]
-        assert _char_offset_to_line(30, offsets) == 4
-        assert _char_offset_to_line(35, offsets) == 4
+        assert char_offset_to_line(30, offsets) == 4
+        assert char_offset_to_line(35, offsets) == 4
 
     def test_boundary_cases(self):
-        from mcp_server import _char_offset_to_line
+        from opd_mcp.retrieval.location import char_offset_to_line
         offsets = [0, 7, 14, 21]  # "Line 1\nLine 2\nLine 3\nLine 4"
         # Exactly at line starts
-        assert _char_offset_to_line(0, offsets) == 1
-        assert _char_offset_to_line(7, offsets) == 2
-        assert _char_offset_to_line(14, offsets) == 3
-        assert _char_offset_to_line(21, offsets) == 4
+        assert char_offset_to_line(0, offsets) == 1
+        assert char_offset_to_line(7, offsets) == 2
+        assert char_offset_to_line(14, offsets) == 3
+        assert char_offset_to_line(21, offsets) == 4
 
 
 # =============================================================================
-# Tests for _build_heading_path (mcp_server.py)
+# Tests for build_heading_path (opd_mcp.retrieval.location)
 # =============================================================================
 
 class TestBuildHeadingPath:
-    """Tests for _build_heading_path in mcp_server.py"""
+    """Tests for build_heading_path in opd_mcp.retrieval.location"""
 
     def test_empty_headings(self):
-        from mcp_server import _build_heading_path
-        heading_text, path = _build_heading_path([], 100)
+        from opd_mcp.retrieval.location import build_heading_path
+        heading_text, path = build_heading_path([], 100)
         assert heading_text is None
         assert path == []
 
     def test_none_char_start(self):
-        from mcp_server import _build_heading_path
+        from opd_mcp.retrieval.location import build_heading_path
         headings = [{"text": "Intro", "position": 0}]
-        heading_text, path = _build_heading_path(headings, None)
+        heading_text, path = build_heading_path(headings, None)
         assert heading_text is None
         assert path == []
 
     def test_single_heading(self):
-        from mcp_server import _build_heading_path
+        from opd_mcp.retrieval.location import build_heading_path
         headings = [{"text": "Introduction", "position": 0}]
-        heading_text, path = _build_heading_path(headings, 50)
+        heading_text, path = build_heading_path(headings, 50)
         assert heading_text == "Introduction"
         assert path == ["Introduction"]
 
     def test_multiple_headings_first(self):
-        from mcp_server import _build_heading_path
+        from opd_mcp.retrieval.location import build_heading_path
         headings = [
             {"text": "Chapter 1", "position": 0},
             {"text": "Chapter 2", "position": 100},
             {"text": "Chapter 3", "position": 200},
         ]
-        heading_text, path = _build_heading_path(headings, 50)
+        heading_text, path = build_heading_path(headings, 50)
         assert heading_text == "Chapter 1"
         assert path == ["Chapter 1"]
 
     def test_multiple_headings_middle(self):
-        from mcp_server import _build_heading_path
+        from opd_mcp.retrieval.location import build_heading_path
         headings = [
             {"text": "Chapter 1", "position": 0},
             {"text": "Chapter 2", "position": 100},
             {"text": "Chapter 3", "position": 200},
         ]
-        heading_text, path = _build_heading_path(headings, 150)
+        heading_text, path = build_heading_path(headings, 150)
         assert heading_text == "Chapter 2"
         assert path == ["Chapter 1", "Chapter 2"]
 
     def test_multiple_headings_last(self):
-        from mcp_server import _build_heading_path
+        from opd_mcp.retrieval.location import build_heading_path
         headings = [
             {"text": "Chapter 1", "position": 0},
             {"text": "Chapter 2", "position": 100},
             {"text": "Chapter 3", "position": 200},
         ]
-        heading_text, path = _build_heading_path(headings, 250)
+        heading_text, path = build_heading_path(headings, 250)
         assert heading_text == "Chapter 3"
         assert path == ["Chapter 1", "Chapter 2", "Chapter 3"]
 
     def test_char_start_before_first_heading(self):
-        from mcp_server import _build_heading_path
+        from opd_mcp.retrieval.location import build_heading_path
         headings = [{"text": "Chapter 1", "position": 100}]
-        heading_text, path = _build_heading_path(headings, 50)
+        heading_text, path = build_heading_path(headings, 50)
         assert heading_text is None
         assert path == []
 
@@ -286,7 +286,7 @@ class TestLocationIntegration:
 
     def test_pdf_chunk_location(self):
         """Test location fields for a PDF chunk"""
-        from mcp_server import _build_heading_path
+        from opd_mcp.retrieval.location import build_heading_path
 
         metadata = {
             "file_path": "/Users/test/data/manual.pdf",
@@ -313,7 +313,7 @@ class TestLocationIntegration:
         line = None
 
         # Get heading path
-        _, heading_path = _build_heading_path(headings, char_start)
+        _, heading_path = build_heading_path(headings, char_start)
 
         location = {
             "uri": source_uri,
@@ -330,7 +330,7 @@ class TestLocationIntegration:
 
     def test_markdown_chunk_location(self):
         """Test location fields for a markdown chunk"""
-        from mcp_server import _char_offset_to_line
+        from opd_mcp.retrieval.location import char_offset_to_line
 
         metadata = {
             "file_path": "/Users/test/data/readme.md",
@@ -351,7 +351,7 @@ class TestLocationIntegration:
         page = None
 
         # Get line
-        line = _char_offset_to_line(char_start, line_offsets)
+        line = char_offset_to_line(char_start, line_offsets)
 
         # Get heading path
         heading_text = metadata.get("heading")

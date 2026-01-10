@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for error handling and edge cases in mcp_server.py and ingest.py.
+"""Tests for error handling and edge cases in opd_mcp package.
 
 These tests verify that the system handles malformed inputs, missing data,
 and error conditions gracefully without crashing.
@@ -7,7 +7,6 @@ and error conditions gracefully without crashing.
 
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -24,17 +23,17 @@ class TestEmptyQueries:
 
     def test_preprocess_empty_query(self):
         """Empty query returns empty or original."""
-        from mcp_server import _preprocess_query
+        from opd_mcp.utils.text import preprocess_query
 
-        result = _preprocess_query("")
+        result = preprocess_query("")
         # Should not crash, return empty or stripped
         assert isinstance(result, str)
 
     def test_preprocess_whitespace_query(self):
         """Whitespace-only query is handled."""
-        from mcp_server import _preprocess_query
+        from opd_mcp.utils.text import preprocess_query
 
-        result = _preprocess_query("   ")
+        result = preprocess_query("   ")
         # Should strip whitespace
         assert result.strip() == ""
 
@@ -48,24 +47,24 @@ class TestInvalidDates:
 
     def test_parse_date_malformed(self):
         """Malformed date string returns None."""
-        from mcp_server import _parse_date
+        from opd_mcp.retrieval.ranking import parse_date
 
         # Various malformed formats
-        assert _parse_date("not-a-date") is None
-        assert _parse_date("2024/01/15") is None  # Wrong separator
-        assert _parse_date("15-01-2024") is None  # Wrong order
-        assert _parse_date("2024-13-01") is None  # Invalid month
+        assert parse_date("not-a-date") is None
+        assert parse_date("2024/01/15") is None  # Wrong separator
+        assert parse_date("15-01-2024") is None  # Wrong order
+        assert parse_date("2024-13-01") is None  # Invalid month
 
     def test_parse_date_partial(self):
         """Partial date string returns None."""
-        from mcp_server import _parse_date
+        from opd_mcp.retrieval.ranking import parse_date
 
-        assert _parse_date("2024-01") is None  # Missing day
-        assert _parse_date("2024") is None  # Just year
+        assert parse_date("2024-01") is None  # Missing day
+        assert parse_date("2024") is None  # Just year
 
     def test_filter_nodes_invalid_dates(self):
         """Filter with invalid date strings doesn't crash."""
-        from mcp_server import _filter_nodes_by_date
+        from opd_mcp.retrieval.ranking import filter_nodes_by_date
         from llama_index.core.schema import TextNode, NodeWithScore
 
         node = TextNode(
@@ -77,7 +76,7 @@ class TestInvalidDates:
 
         # Invalid date formats should be handled gracefully
         # They'll fail to parse and return None, so no filtering happens
-        result = _filter_nodes_by_date(nodes, "not-a-date", "also-not-a-date")
+        result = filter_nodes_by_date(nodes, "not-a-date", "also-not-a-date")
 
         # Should return nodes (no filtering when dates can't be parsed)
         assert len(result) == 1
@@ -92,32 +91,32 @@ class TestMissingMetadata:
 
     def test_build_heading_path_missing_position(self):
         """Heading without position is handled."""
-        from mcp_server import _build_heading_path
+        from opd_mcp.retrieval.location import build_heading_path
 
         # Heading missing 'position' key
         headings = [{"text": "Chapter 1"}]  # No 'position'
-        heading_text, path = _build_heading_path(headings, 50)
+        heading_text, path = build_heading_path(headings, 50)
 
         # Should not crash - behavior may vary
         assert isinstance(path, list)
 
     def test_char_offset_to_line_missing_offsets(self):
         """Missing line_offsets returns None."""
-        from mcp_server import _char_offset_to_line
+        from opd_mcp.retrieval.location import char_offset_to_line
 
-        assert _char_offset_to_line(100, None) is None
-        assert _char_offset_to_line(100, []) is None
+        assert char_offset_to_line(100, None) is None
+        assert char_offset_to_line(100, []) is None
 
     def test_recency_boost_missing_date(self):
         """Node without date metadata gets base score."""
-        from mcp_server import _apply_recency_boost
+        from opd_mcp.retrieval.ranking import apply_recency_boost
         from llama_index.core.schema import TextNode, NodeWithScore
 
         # Node with no date metadata
         node = TextNode(text="No date", id_="no_date", metadata={})
         nodes = [NodeWithScore(node=node, score=0.7)]
 
-        result = _apply_recency_boost(nodes, boost_weight=0.5)
+        result = apply_recency_boost(nodes, boost_weight=0.5)
 
         # Should not crash and return the node
         assert len(result) == 1
@@ -132,14 +131,14 @@ class TestRRFEdgeCases:
 
     def test_rrf_with_none_scores(self):
         """Nodes with None scores are handled."""
-        from mcp_server import _reciprocal_rank_fusion
+        from opd_mcp.retrieval.ranking import reciprocal_rank_fusion
         from llama_index.core.schema import TextNode, NodeWithScore
 
         node = TextNode(text="Test", id_="test")
         # NodeWithScore with None score
         nodes = [NodeWithScore(node=node, score=None)]
 
-        result = _reciprocal_rank_fusion([nodes])
+        result = reciprocal_rank_fusion([nodes])
 
         # Should not crash, result should have RRF score
         assert len(result) == 1
@@ -147,7 +146,7 @@ class TestRRFEdgeCases:
 
     def test_rrf_duplicate_ids_same_list(self):
         """Duplicate IDs in same list are handled."""
-        from mcp_server import _reciprocal_rank_fusion
+        from opd_mcp.retrieval.ranking import reciprocal_rank_fusion
         from llama_index.core.schema import TextNode, NodeWithScore
 
         # Same ID appearing twice in one list (shouldn't happen but test anyway)
@@ -156,7 +155,7 @@ class TestRRFEdgeCases:
             NodeWithScore(node=TextNode(text="Second", id_="dup"), score=0.8),
         ]
 
-        result = _reciprocal_rank_fusion([nodes])
+        result = reciprocal_rank_fusion([nodes])
 
         # Should handle gracefully - likely keeps one version
         assert len(result) >= 1
@@ -171,7 +170,7 @@ class TestTokenizeFilenameEdgeCases:
 
     def test_empty_filename(self):
         """Empty filename returns empty or minimal tokens."""
-        from ingest import tokenize_filename
+        from opd_mcp.utils.text import tokenize_filename
 
         result = tokenize_filename("")
         # Should not crash
@@ -179,7 +178,7 @@ class TestTokenizeFilenameEdgeCases:
 
     def test_only_extension(self):
         """Filename that is just an extension."""
-        from ingest import tokenize_filename
+        from opd_mcp.utils.text import tokenize_filename
 
         result = tokenize_filename(".gitignore")
         # Should return something reasonable
@@ -188,7 +187,7 @@ class TestTokenizeFilenameEdgeCases:
 
     def test_unicode_filename(self):
         """Unicode characters in filename are handled."""
-        from ingest import tokenize_filename
+        from opd_mcp.utils.text import tokenize_filename
 
         result = tokenize_filename("文档.pdf")
         # Should not crash
@@ -196,7 +195,7 @@ class TestTokenizeFilenameEdgeCases:
 
     def test_very_long_filename(self):
         """Very long filename is handled."""
-        from ingest import tokenize_filename
+        from opd_mcp.utils.text import tokenize_filename
 
         long_name = "a" * 500 + ".txt"
         result = tokenize_filename(long_name)
@@ -213,11 +212,11 @@ class TestComputeLineOffsetsEdgeCases:
 
     def test_binary_content(self):
         """Text with binary-like content doesn't crash."""
-        from ingest import _compute_line_offsets
+        from opd_mcp.utils.text import compute_line_offsets
 
         # Text with null bytes and other binary chars (as string)
         text = "Line1\nLine2\x00Line3\n"
-        result = _compute_line_offsets(text)
+        result = compute_line_offsets(text)
 
         # Should handle gracefully
         assert isinstance(result, list)
@@ -225,10 +224,10 @@ class TestComputeLineOffsetsEdgeCases:
 
     def test_only_newlines(self):
         """Text that is only newlines."""
-        from ingest import _compute_line_offsets
+        from opd_mcp.utils.text import compute_line_offsets
 
         text = "\n\n\n"
-        result = _compute_line_offsets(text)
+        result = compute_line_offsets(text)
 
         # Should have offset for each line
         assert isinstance(result, list)
@@ -244,7 +243,7 @@ class TestIngestionStateEdgeCases:
 
     def test_state_creates_directory(self, tmp_path):
         """IngestionState creates parent directories if needed."""
-        from ingest import IngestionState
+        from opd_mcp.storage import IngestionState
 
         # Path in non-existent subdirectory
         db_path = tmp_path / "subdir" / "deeper" / "state.db"

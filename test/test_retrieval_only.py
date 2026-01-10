@@ -9,8 +9,9 @@ import pytest
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from ingest import DATA_DIR, build_index
-from mcp_server import STORAGE_DIR, load_llamaindex_index
+from opd_mcp.config import DATA_DIR, STORAGE_DIR
+from opd_mcp.retrieval.index import load_llamaindex_index
+from ingest import build_index
 
 load_dotenv()
 

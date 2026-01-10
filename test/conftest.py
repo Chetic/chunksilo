@@ -101,24 +101,24 @@ def patched_ingest_globals(test_env):
     This fixture patches DATA_DIR, STORAGE_DIR, and STATE_DB_PATH
     to use temporary directories, then restores originals after test.
     """
-    import ingest
+    import opd_mcp.config as config
 
     original = {
-        "DATA_DIR": ingest.DATA_DIR,
-        "STORAGE_DIR": ingest.STORAGE_DIR,
-        "STATE_DB_PATH": ingest.STATE_DB_PATH,
+        "DATA_DIR": config.DATA_DIR,
+        "STORAGE_DIR": config.STORAGE_DIR,
+        "STATE_DB_PATH": config.STATE_DB_PATH,
     }
 
-    ingest.DATA_DIR = test_env["data_dir"]
-    ingest.STORAGE_DIR = test_env["storage_dir"]
-    ingest.STATE_DB_PATH = test_env["db_path"]
+    config.DATA_DIR = test_env["data_dir"]
+    config.STORAGE_DIR = test_env["storage_dir"]
+    config.STATE_DB_PATH = test_env["db_path"]
 
     yield test_env
 
     # Restore originals
-    ingest.DATA_DIR = original["DATA_DIR"]
-    ingest.STORAGE_DIR = original["STORAGE_DIR"]
-    ingest.STATE_DB_PATH = original["STATE_DB_PATH"]
+    config.DATA_DIR = original["DATA_DIR"]
+    config.STORAGE_DIR = original["STORAGE_DIR"]
+    config.STATE_DB_PATH = original["STATE_DB_PATH"]
 
 
 @pytest.fixture
@@ -128,17 +128,20 @@ def patched_mcp_globals(test_env):
     This fixture patches STORAGE_DIR and resets caches to ensure
     tests don't interfere with each other.
     """
-    import mcp_server
+    import opd_mcp.config as config
+    from opd_mcp.models import embeddings
+    from opd_mcp.retrieval import index as index_module, bm25 as bm25_module
 
-    original_storage = mcp_server.STORAGE_DIR
-    original_initialized = mcp_server._embed_model_initialized
+    original_storage = config.STORAGE_DIR
+    original_initialized = embeddings._embed_model_initialized
 
-    mcp_server.STORAGE_DIR = test_env["storage_dir"]
-    mcp_server._index_cache = None
-    mcp_server._embed_model_initialized = False
+    config.STORAGE_DIR = test_env["storage_dir"]
+    embeddings._embed_model_initialized = False
+    index_module._index_cache = None
+    bm25_module._bm25_retriever_cache = None
 
     yield test_env
 
-    mcp_server.STORAGE_DIR = original_storage
-    mcp_server._index_cache = None
-    mcp_server._embed_model_initialized = original_initialized
+    config.STORAGE_DIR = original_storage
+    index_module._index_cache = None
+    embeddings._embed_model_initialized = original_initialized
