@@ -706,18 +706,26 @@ async def run_large_scale_tests() -> Dict[str, Any]:
     try:
         os.environ["DATA_DIR"] = str(TEST_DATA_DIR)
         os.environ["STORAGE_DIR"] = str(TEST_STORAGE_DIR)
-        
-        # Re-import to get updated paths
+
+        # Re-import to get updated paths - must reload config first
         import importlib
+        import opd_mcp.config
+        import opd_mcp.retrieval.index
         import ingest
         import mcp_server
+        importlib.reload(opd_mcp.config)
+        importlib.reload(opd_mcp.retrieval.index)
         importlib.reload(ingest)
         importlib.reload(mcp_server)
-        
+
         # Re-import after reload
         from ingest import build_index as build_test_index
-        from mcp_server import load_llamaindex_index, retrieve_docs as retrieve_docs_reloaded
-        
+        from opd_mcp.retrieval.index import load_llamaindex_index, reset_index_cache
+        from mcp_server import retrieve_docs as retrieve_docs_reloaded
+
+        # Reset index cache to ensure fresh load
+        reset_index_cache()
+
         # Step 3: Build index
         logger.info("\n" + "=" * 80)
         logger.info("Building Index from Test Corpus")
