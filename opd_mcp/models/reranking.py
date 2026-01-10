@@ -4,11 +4,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from opd_mcp.config import (
-    RETRIEVAL_RERANK_MODEL_NAME,
-    RETRIEVAL_MODEL_CACHE_DIR,
-    is_offline_mode,
-)
+import opd_mcp.config as config
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +69,9 @@ def ensure_reranker(
             "flashrank is required for reranking. Please install dependencies from requirements.txt."
         ) from exc
 
-    cache_dir = cache_dir or RETRIEVAL_MODEL_CACHE_DIR
-    offline = offline if offline is not None else is_offline_mode()
-    model_name = _map_model_name(model_name or RETRIEVAL_RERANK_MODEL_NAME)
+    cache_dir = cache_dir or config.RETRIEVAL_MODEL_CACHE_DIR
+    offline = offline if offline is not None else config.is_offline_mode()
+    model_name = _map_model_name(model_name or config.RETRIEVAL_RERANK_MODEL_NAME)
 
     try:
         _reranker_model = Ranker(model_name=model_name, cache_dir=str(cache_dir))
@@ -113,7 +109,7 @@ def ensure_rerank_model_cached(cache_dir: Path, offline: bool = False) -> Path:
     cache_dir_abs = cache_dir.resolve()
     logger.info("Ensuring rerank model is available in cache...")
 
-    model_name = _map_model_name(RETRIEVAL_RERANK_MODEL_NAME)
+    model_name = _map_model_name(config.RETRIEVAL_RERANK_MODEL_NAME)
 
     try:
         Ranker(model_name=model_name, cache_dir=str(cache_dir_abs))

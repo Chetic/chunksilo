@@ -707,28 +707,40 @@ async def run_large_scale_tests() -> Dict[str, Any]:
         os.environ["DATA_DIR"] = str(TEST_DATA_DIR)
         os.environ["STORAGE_DIR"] = str(TEST_STORAGE_DIR)
 
-        # Re-import to get updated paths - must reload config first, then dependent modules
+        # Re-import to get updated paths - must reload config first, then all dependent modules
         import importlib
         import opd_mcp.config
         import opd_mcp.models.embeddings
+        import opd_mcp.models.reranking
         import opd_mcp.retrieval.index
+        import opd_mcp.retrieval.bm25
+        import opd_mcp.storage.headings
         import ingest
         import mcp_server
         importlib.reload(opd_mcp.config)
         importlib.reload(opd_mcp.models.embeddings)
+        importlib.reload(opd_mcp.models.reranking)
         importlib.reload(opd_mcp.retrieval.index)
+        importlib.reload(opd_mcp.retrieval.bm25)
+        importlib.reload(opd_mcp.storage.headings)
         importlib.reload(ingest)
         importlib.reload(mcp_server)
 
         # Re-import after reload
         from ingest import build_index as build_test_index
         from opd_mcp.retrieval.index import load_llamaindex_index, reset_index_cache
+        from opd_mcp.retrieval.bm25 import reset_bm25_retriever
         from opd_mcp.models.embeddings import reset_embed_model_initialized
+        from opd_mcp.models.reranking import reset_reranker
+        from opd_mcp.storage.headings import reset_heading_store
         from mcp_server import retrieve_docs as retrieve_docs_reloaded
 
-        # Reset cached state to ensure fresh initialization
+        # Reset all cached state to ensure fresh initialization
         reset_index_cache()
         reset_embed_model_initialized()
+        reset_bm25_retriever()
+        reset_reranker()
+        reset_heading_store()
 
         # Step 3: Build index
         logger.info("\n" + "=" * 80)

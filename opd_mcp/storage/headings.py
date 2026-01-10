@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from opd_mcp.config import HEADING_STORE_PATH
+import opd_mcp.config as config
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ def get_heading_store(store_path: Optional[Path] = None) -> HeadingStore:
         return _heading_store
 
     if _heading_store is None:
-        _heading_store = HeadingStore(HEADING_STORE_PATH)
+        _heading_store = HeadingStore(config.HEADING_STORE_PATH)
     return _heading_store
 
 

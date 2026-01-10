@@ -6,7 +6,7 @@ from typing import List, Optional
 
 from llama_index.core.schema import NodeWithScore
 
-from opd_mcp.config import BM25_INDEX_DIR
+import opd_mcp.config as config
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ def ensure_bm25_retriever(index_dir: Path = None):
     if _bm25_retriever_cache is not None:
         return _bm25_retriever_cache
 
-    index_dir = index_dir or BM25_INDEX_DIR
+    index_dir = index_dir or config.BM25_INDEX_DIR
 
     if not index_dir.exists():
         logger.warning(f"BM25 index not found at {index_dir}. Run ingest.py to create it.")
