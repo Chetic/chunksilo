@@ -290,7 +290,9 @@ Each chunk includes:
             rerank_limit = max(1, min(RETRIEVAL_RERANK_TOP_K, len(nodes)))
             try:
                 reranker = ensure_reranker()
-                passages = [{"text": node.node.get_content() or ""} for node in nodes]
+                # Limit passages sent to reranker to avoid timeout on large result sets
+                nodes_to_rerank = nodes[:rerank_limit]
+                passages = [{"text": node.node.get_content() or ""} for node in nodes_to_rerank]
 
                 from flashrank import RerankRequest
 
@@ -299,7 +301,7 @@ Each chunk includes:
 
                 # Create a mapping from document text to (index, node)
                 text_to_indices = {}
-                for idx, node in enumerate(nodes):
+                for idx, node in enumerate(nodes_to_rerank):
                     node_text = node.node.get_content() or ""
                     if node_text not in text_to_indices:
                         text_to_indices[node_text] = []
@@ -321,11 +323,11 @@ Each chunk includes:
                                 break
 
                 # Add any nodes that weren't in reranked results
-                for idx, node in enumerate(nodes):
+                for idx, node in enumerate(nodes_to_rerank):
                     if idx not in seen_indices:
                         reranked_nodes.append(node)
 
-                nodes = reranked_nodes[:rerank_limit]
+                nodes = reranked_nodes
             except Exception as e:
                 logger.error(f"Reranking failed, falling back to vector search order: {e}")
                 nodes = nodes[:rerank_limit]
