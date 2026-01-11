@@ -37,6 +37,7 @@ jobs:
           python -m pip install -r test/requirements.txt
 
       - name: Run large-scale test suite
+        timeout-minutes: 20
         env:
           OFFLINE: 0
           TEST_DATA_DIR: ./test_data
