@@ -82,6 +82,8 @@ RETRIEVAL_RERANK_TOP_K = int(os.getenv("RETRIEVAL_RERANK_TOP_K", "5"))
 RETRIEVAL_RERANK_MODEL_NAME = os.getenv(
     "RETRIEVAL_RERANK_MODEL_NAME", "ms-marco-MiniLM-L-12-v2"
 )
+# Maximum candidates to send to reranker (limits memory usage)
+RETRIEVAL_RERANK_CANDIDATES = int(os.getenv("RETRIEVAL_RERANK_CANDIDATES", "50"))
 
 # Shared cache directory for embedding and reranking models
 RETRIEVAL_MODEL_CACHE_DIR = Path(os.getenv("RETRIEVAL_MODEL_CACHE_DIR", "./models"))
@@ -957,6 +959,12 @@ Each chunk includes:
         # configured final Top K for the tool response.
         rerank_scores: dict[int, float] = {}
         if nodes:
+            # Limit candidates sent to reranker to control memory usage
+            # (BM25 expansion can produce hundreds of chunks from matched files)
+            if len(nodes) > RETRIEVAL_RERANK_CANDIDATES:
+                logger.info(f"Limiting rerank candidates: {len(nodes)} -> {RETRIEVAL_RERANK_CANDIDATES}")
+                nodes = nodes[:RETRIEVAL_RERANK_CANDIDATES]
+
             rerank_limit = max(1, min(RETRIEVAL_RERANK_TOP_K, len(nodes)))
             try:
                 reranker = _ensure_reranker()
