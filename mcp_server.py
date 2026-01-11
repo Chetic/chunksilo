@@ -287,11 +287,14 @@ Each chunk includes:
         # Rerank the retrieved nodes with FlashRank
         rerank_scores: dict[int, float] = {}
         if nodes:
-            rerank_limit = max(1, min(RETRIEVAL_RERANK_TOP_K, len(nodes)))
+            # Limit how many nodes to rerank (for performance) - rerank more than we return
+            # to give the reranker enough candidates to find the best results
+            rerank_input_limit = min(50, len(nodes))
+            output_limit = max(1, min(RETRIEVAL_RERANK_TOP_K, len(nodes)))
             try:
                 reranker = ensure_reranker()
                 # Limit passages sent to reranker to avoid timeout on large result sets
-                nodes_to_rerank = nodes[:rerank_limit]
+                nodes_to_rerank = nodes[:rerank_input_limit]
                 passages = [{"text": node.node.get_content() or ""} for node in nodes_to_rerank]
 
                 from flashrank import RerankRequest
@@ -327,10 +330,10 @@ Each chunk includes:
                     if idx not in seen_indices:
                         reranked_nodes.append(node)
 
-                nodes = reranked_nodes
+                nodes = reranked_nodes[:output_limit]
             except Exception as e:
                 logger.error(f"Reranking failed, falling back to vector search order: {e}")
-                nodes = nodes[:rerank_limit]
+                nodes = nodes[:output_limit]
 
         # Filter nodes by score threshold
         if RETRIEVAL_SCORE_THRESHOLD > 0:
