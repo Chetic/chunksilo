@@ -28,6 +28,9 @@ except ImportError:
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Disable offline mode for tests that need to download models
+os.environ["OFFLINE"] = "0"
+
 # We need to import ingest and mcp_server after setting up sys.path
 # We will patch their globals during tests
 import ingest

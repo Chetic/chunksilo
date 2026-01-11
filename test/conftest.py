@@ -1,7 +1,12 @@
 """Shared pytest fixtures for opd-mcp tests."""
+import os
 import pytest
 from pathlib import Path
 import sys
+
+# Disable offline mode for tests that need to download models
+# This must be set BEFORE any test file imports mcp_server
+os.environ["OFFLINE"] = "0"
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))

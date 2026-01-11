@@ -894,6 +894,17 @@ def configure_offline_mode(offline: bool, cache_dir: Path) -> None:
         os.environ["HF_HUB_CACHE"] = str(cache_dir_abs)
         os.environ["HF_DATASETS_CACHE"] = str(cache_dir_abs)
         logger.info("Offline mode enabled.")
+    else:
+        # Clear offline mode environment variables to allow downloads
+        for var in ["HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE"]:
+            os.environ.pop(var, None)
+
+    # Update huggingface_hub's cached constant (it caches at import time)
+    try:
+        from huggingface_hub import constants
+        constants.HF_HUB_OFFLINE = offline
+    except ImportError:
+        pass
 
 
 def build_index(download_only: bool = False, offline: bool = False) -> None:
