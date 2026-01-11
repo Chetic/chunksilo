@@ -81,6 +81,9 @@ Configure the MCP server by setting environment variables in your MCP client con
 | `RETRIEVAL_SCORE_THRESHOLD` | `0.1` | Minimum reranker score (0.0-1.0) for results. Set to 0.0 to disable filtering |
 | `RETRIEVAL_RECENCY_BOOST` | `0.3` | Weight for recency boost (0.0=disabled, 1.0=recency dominates relevance) |
 | `RETRIEVAL_RECENCY_HALF_LIFE_DAYS` | `365` | Days until a document's recency boost is halved (exponential decay) |
+| `BM25_SIMILARITY_TOP_K` | `10` | Number of files matched by BM25 filename search |
+| `BM25_MAX_CHUNKS_PER_FILE` | `20` | Maximum chunks returned per BM25-matched file |
+| `RETRIEVAL_RERANK_CANDIDATES` | `100` | Maximum candidates sent to reranker (safety cap) |
 
 #### Text Chunking (ingest.py only)
 

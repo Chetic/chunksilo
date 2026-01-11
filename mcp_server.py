@@ -101,6 +101,10 @@ RETRIEVAL_SCORE_THRESHOLD = float(os.getenv("RETRIEVAL_SCORE_THRESHOLD", "0.1"))
 # BM25 file name search configuration
 BM25_INDEX_DIR = STORAGE_DIR / "bm25_index"
 BM25_SIMILARITY_TOP_K = int(os.getenv("BM25_SIMILARITY_TOP_K", "10"))
+BM25_MAX_CHUNKS_PER_FILE = int(os.getenv("BM25_MAX_CHUNKS_PER_FILE", "20"))
+
+# Global cap on candidates sent to reranker (safety net for memory/performance)
+RETRIEVAL_RERANK_CANDIDATES = int(os.getenv("RETRIEVAL_RERANK_CANDIDATES", "100"))
 
 # Common English stopwords to filter from Confluence CQL queries
 # These words add no search value and can cause overly broad/narrow results
@@ -489,21 +493,25 @@ def _reciprocal_rank_fusion(
     return [NodeWithScore(node=node_map[nid].node, score=rrf_scores[nid]) for nid in sorted_ids]
 
 
-def _expand_filename_matches(bm25_nodes: list[NodeWithScore], docstore) -> list[NodeWithScore]:
+def _expand_filename_matches(
+    bm25_nodes: list[NodeWithScore],
+    docstore,
+    max_chunks_per_file: int = 20
+) -> list[NodeWithScore]:
     """
-    Expand BM25 file name matches to all chunks from those files.
+    Expand BM25 file name matches to chunks from those files.
 
-    When BM25 matches a file name, we want to return all chunks from that file,
-    not just the synthetic filename node.
+    Limits chunks per file to prevent large documents from overwhelming
+    the reranker.
 
     Args:
         bm25_nodes: BM25 search results (file name nodes)
         docstore: The document store containing all chunks
+        max_chunks_per_file: Maximum chunks to return per matched file
 
     Returns:
-        List of NodeWithScore for all chunks from matched files
+        List of NodeWithScore for chunks from matched files
     """
-    expanded = []
     matched_paths: set[str] = set()
 
     # Collect file paths from BM25 matches
@@ -512,11 +520,17 @@ def _expand_filename_matches(bm25_nodes: list[NodeWithScore], docstore) -> list[
         if file_path:
             matched_paths.add(file_path)
 
-    # Find all chunks from matched files
+    # Group chunks by file path
+    chunks_by_file: dict[str, list] = {path: [] for path in matched_paths}
     for doc_id, node in docstore.docs.items():
         node_file_path = node.metadata.get("file_path")
-        if node_file_path in matched_paths:
-            # Give BM25-matched chunks a baseline score
+        if node_file_path in chunks_by_file:
+            chunks_by_file[node_file_path].append(node)
+
+    # Take first N chunks per file (preserves document order)
+    expanded = []
+    for file_path, chunks in chunks_by_file.items():
+        for node in chunks[:max_chunks_per_file]:
             expanded.append(NodeWithScore(node=node, score=0.5))
 
     return expanded
@@ -894,7 +908,9 @@ Each chunk includes:
             try:
                 bm25_matches = bm25_retriever.retrieve(enhanced_query)
                 if bm25_matches:
-                    bm25_nodes = _expand_filename_matches(bm25_matches, index.docstore)
+                    bm25_nodes = _expand_filename_matches(
+                        bm25_matches, index.docstore, BM25_MAX_CHUNKS_PER_FILE
+                    )
                     logger.info(f"BM25 matched {len(bm25_matches)} files, expanded to {len(bm25_nodes)} chunks")
                     # Fuse vector and BM25 results using Reciprocal Rank Fusion
                     nodes = _reciprocal_rank_fusion([vector_nodes, bm25_nodes])
@@ -952,6 +968,11 @@ Each chunk includes:
         # Apply recency boost if configured
         if RETRIEVAL_RECENCY_BOOST > 0:
             nodes = _apply_recency_boost(nodes, RETRIEVAL_RECENCY_BOOST, RETRIEVAL_RECENCY_HALF_LIFE_DAYS)
+
+        # Cap candidates before reranking (safety net for memory/performance)
+        if len(nodes) > RETRIEVAL_RERANK_CANDIDATES:
+            logger.info(f"Capping rerank candidates: {len(nodes)} -> {RETRIEVAL_RERANK_CANDIDATES}")
+            nodes = nodes[:RETRIEVAL_RERANK_CANDIDATES]
 
         # Rerank the retrieved nodes with FlashRank (CPU-only, ONNX-based) and trim to the
         # configured final Top K for the tool response.
