@@ -415,6 +415,7 @@ Each chunk includes:
             # Build simplified location object
             location = {
                 "uri": source_uri,
+                "file": str(file_path) if file_path else None,
                 "page": page_number,
                 "line": line_number,
                 "heading_path": heading_path if heading_path else None,
