@@ -36,6 +36,15 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install -r test/requirements.txt
 
+      - name: Show system resources
+        run: |
+          echo "=== System Memory ==="
+          free -h
+          echo "=== Disk Space ==="
+          df -h .
+          echo "=== CPU Info ==="
+          nproc
+
       - name: Run large-scale test suite
         timeout-minutes: 20
         env:
@@ -44,9 +53,10 @@ jobs:
           TEST_STORAGE_DIR: ./test_storage
           TEST_RESULTS_DIR: ./test_results
           ABORT_ON_DOWNLOAD_FAILURE: 1
+          PYTHONUNBUFFERED: 1
         run: |
           cd test
-          python test_large_scale.py
+          python -u test_large_scale.py
 
       - name: Check metrics against thresholds
         run: |

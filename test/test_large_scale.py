@@ -10,6 +10,7 @@ This test suite:
 5. Challenges the models with various query types and edge cases
 """
 import asyncio
+import gc
 import json
 import logging
 import math
@@ -35,6 +36,20 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def log_memory_usage(label: str = ""):
+    """Log current memory usage for debugging OOM issues."""
+    try:
+        import psutil
+        process = psutil.Process()
+        mem_info = process.memory_info()
+        mem_mb = mem_info.rss / (1024 * 1024)
+        logger.info(f"[MEMORY] {label}: {mem_mb:.1f} MB RSS")
+    except ImportError:
+        # psutil not available, skip memory logging
+        pass
+
 
 # Force online mode for tests (to download models)
 os.environ["OFFLINE"] = "0"
@@ -690,9 +705,13 @@ async def run_large_scale_tests() -> Dict[str, Any]:
     logger.info("=" * 80)
     logger.info("Large-Scale RAG System Test Suite")
     logger.info("=" * 80)
-    
+
+    log_memory_usage("Test suite start")
+
     # Step 1: Download test corpus
     downloaded_files = download_test_corpus()
+    log_memory_usage("After corpus download")
+    gc.collect()  # Free memory from download buffers
     
     if not any(downloaded_files.values()):
         logger.error("No documents downloaded. Cannot proceed with tests.")
@@ -721,16 +740,21 @@ async def run_large_scale_tests() -> Dict[str, Any]:
         logger.info("\n" + "=" * 80)
         logger.info("Building Index from Test Corpus")
         logger.info("=" * 80)
-        
+
+        log_memory_usage("Before index build")
         build_test_index()
-        
+        log_memory_usage("After index build")
+        gc.collect()  # Free memory after building index
+
         # Step 4: Load index
         logger.info("\n" + "=" * 80)
         logger.info("Loading Index")
         logger.info("=" * 80)
-        
+
+        log_memory_usage("Before index load")
         index = load_llamaindex_index()
         logger.info("Index loaded successfully")
+        log_memory_usage("After index load")
         
         # Step 5: Run evaluation queries
         logger.info("\n" + "=" * 80)
