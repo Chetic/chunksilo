@@ -215,7 +215,7 @@ def _collect_startup_info():
                 username = os.getenv("CONFLUENCE_USERNAME")
                 api_token = os.getenv("CONFLUENCE_API_TOKEN")
                 if username and api_token:
-                    reader = ConfluenceReader(base_url=confluence_url, user_name=username, password=api_token)
+                    reader = ConfluenceReader(base_url=confluence_url, user_name=username, api_token=api_token)
                     _startup_log_buffer.append("Confluence Connection: Credentials provided, reader initialized.")
                 else:
                     _startup_log_buffer.append("Confluence Configuration: Missing USERNAME or API_TOKEN")
@@ -666,7 +666,7 @@ def _search_confluence(query: str) -> list[NodeWithScore]:
         return []
 
     try:
-        reader = ConfluenceReader(base_url=base_url, user_name=username, password=api_token)
+        reader = ConfluenceReader(base_url=base_url, user_name=username, api_token=api_token)
 
         # Prepare query terms (filter stopwords, escape special chars)
         query_terms = _prepare_confluence_query_terms(query)
