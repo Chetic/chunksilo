@@ -71,8 +71,8 @@ STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "./storage"))
 
 # Two-stage retrieval configuration
 # Stage 1: vector search over embeddings
-# Higher values provide more candidates for reranking, improving precision
-RETRIEVAL_EMBED_TOP_K = int(os.getenv("RETRIEVAL_EMBED_TOP_K", "20"))
+# Higher values provide more candidates for reranking, improving recall
+RETRIEVAL_EMBED_TOP_K = int(os.getenv("RETRIEVAL_EMBED_TOP_K", "35"))
 RETRIEVAL_EMBED_MODEL_NAME = os.getenv(
     "RETRIEVAL_EMBED_MODEL_NAME", "BAAI/bge-small-en-v1.5"
 )
@@ -96,15 +96,15 @@ RETRIEVAL_RECENCY_BOOST = float(os.getenv("RETRIEVAL_RECENCY_BOOST", "0.3"))  # 
 RETRIEVAL_RECENCY_HALF_LIFE_DAYS = int(os.getenv("RETRIEVAL_RECENCY_HALF_LIFE_DAYS", "365"))
 
 # Score threshold for filtering low-relevance results
-RETRIEVAL_SCORE_THRESHOLD = float(os.getenv("RETRIEVAL_SCORE_THRESHOLD", "0.1"))
+RETRIEVAL_SCORE_THRESHOLD = float(os.getenv("RETRIEVAL_SCORE_THRESHOLD", "0.05"))
 
 # BM25 file name search configuration
 BM25_INDEX_DIR = STORAGE_DIR / "bm25_index"
 BM25_SIMILARITY_TOP_K = int(os.getenv("BM25_SIMILARITY_TOP_K", "10"))
-BM25_MAX_CHUNKS_PER_FILE = int(os.getenv("BM25_MAX_CHUNKS_PER_FILE", "20"))
+BM25_MAX_CHUNKS_PER_FILE = int(os.getenv("BM25_MAX_CHUNKS_PER_FILE", "30"))
 
 # Global cap on candidates sent to reranker (safety net for memory/performance)
-RETRIEVAL_RERANK_CANDIDATES = int(os.getenv("RETRIEVAL_RERANK_CANDIDATES", "100"))
+RETRIEVAL_RERANK_CANDIDATES = int(os.getenv("RETRIEVAL_RERANK_CANDIDATES", "150"))
 
 # Common English stopwords to filter from Confluence CQL queries
 # These words add no search value and can cause overly broad/narrow results

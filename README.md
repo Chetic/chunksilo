@@ -75,15 +75,15 @@ Configure the MCP server by setting environment variables in your MCP client con
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `RETRIEVAL_EMBED_MODEL_NAME` | `BAAI/bge-small-en-v1.5` | Hugging Face embedding model for vector search (stage 1) |
-| `RETRIEVAL_EMBED_TOP_K` | `20` | Number of candidates retrieved from vector search before reranking |
+| `RETRIEVAL_EMBED_TOP_K` | `35` | Number of candidates retrieved from vector search before reranking |
 | `RETRIEVAL_RERANK_MODEL_NAME` | `ms-marco-MiniLM-L-12-v2` | FlashRank reranker model for semantic reranking (stage 2) |
 | `RETRIEVAL_RERANK_TOP_K` | `5` | Final number of results returned after reranking |
-| `RETRIEVAL_SCORE_THRESHOLD` | `0.1` | Minimum reranker score (0.0-1.0) for results. Set to 0.0 to disable filtering |
+| `RETRIEVAL_SCORE_THRESHOLD` | `0.05` | Minimum reranker score (0.0-1.0) for results. Set to 0.0 to disable filtering |
 | `RETRIEVAL_RECENCY_BOOST` | `0.3` | Weight for recency boost (0.0=disabled, 1.0=recency dominates relevance) |
 | `RETRIEVAL_RECENCY_HALF_LIFE_DAYS` | `365` | Days until a document's recency boost is halved (exponential decay) |
 | `BM25_SIMILARITY_TOP_K` | `10` | Number of files matched by BM25 filename search |
-| `BM25_MAX_CHUNKS_PER_FILE` | `20` | Maximum chunks returned per BM25-matched file |
-| `RETRIEVAL_RERANK_CANDIDATES` | `100` | Maximum candidates sent to reranker (safety cap) |
+| `BM25_MAX_CHUNKS_PER_FILE` | `30` | Maximum chunks returned per BM25-matched file |
+| `RETRIEVAL_RERANK_CANDIDATES` | `150` | Maximum candidates sent to reranker (safety cap) |
 
 #### Text Chunking (ingest.py only)
 
