@@ -47,12 +47,12 @@ STATE_DB_PATH = STORAGE_DIR / "ingestion_state.db"
 
 # Stage 1 (embedding/vector search) configuration
 RETRIEVAL_EMBED_MODEL_NAME = os.getenv(
-    "RETRIEVAL_EMBED_MODEL_NAME", "BAAI/bge-small-en-v1.5"
+    "RETRIEVAL_EMBED_MODEL_NAME", "BAAI/bge-base-en-v1.5"
 )
 
 # Stage 2 (FlashRank reranking, CPU-only, ONNX-based) configuration
 RETRIEVAL_RERANK_MODEL_NAME = os.getenv(
-    "RETRIEVAL_RERANK_MODEL_NAME", "ms-marco-MiniLM-L-12-v2"
+    "RETRIEVAL_RERANK_MODEL_NAME", "rank-T5-flan"
 )
 
 # Shared cache directory for embedding and reranking models

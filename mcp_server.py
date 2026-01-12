@@ -74,13 +74,13 @@ STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "./storage"))
 # Higher values provide more candidates for reranking, improving recall
 RETRIEVAL_EMBED_TOP_K = int(os.getenv("RETRIEVAL_EMBED_TOP_K", "35"))
 RETRIEVAL_EMBED_MODEL_NAME = os.getenv(
-    "RETRIEVAL_EMBED_MODEL_NAME", "BAAI/bge-small-en-v1.5"
+    "RETRIEVAL_EMBED_MODEL_NAME", "BAAI/bge-base-en-v1.5"
 )
 
 # Stage 2: FlashRank reranking (CPU-only, ONNX-based) of the vector search candidates
 RETRIEVAL_RERANK_TOP_K = int(os.getenv("RETRIEVAL_RERANK_TOP_K", "5"))
 RETRIEVAL_RERANK_MODEL_NAME = os.getenv(
-    "RETRIEVAL_RERANK_MODEL_NAME", "ms-marco-MiniLM-L-12-v2"
+    "RETRIEVAL_RERANK_MODEL_NAME", "rank-T5-flan"
 )
 
 # Shared cache directory for embedding and reranking models
