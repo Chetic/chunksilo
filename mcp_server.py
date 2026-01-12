@@ -467,10 +467,10 @@ def _format_bm25_matches(bm25_nodes: list[NodeWithScore]) -> list[dict[str, Any]
     Format BM25 file name matches for the response.
 
     Converts BM25 NodeWithScore objects into a structured format containing:
-    - file_name: The name of the matched file
-    - file_path: Full path to the file
     - uri: file:// URI for the file
     - score: BM25 relevance score (preserved from retrieval)
+
+    Filters out results with zero scores and limits to max 5 results.
 
     Args:
         bm25_nodes: BM25 search results (file name nodes with scores)
@@ -481,8 +481,11 @@ def _format_bm25_matches(bm25_nodes: list[NodeWithScore]) -> list[dict[str, Any]
     matched_files = []
 
     for node in bm25_nodes:
+        # Filter out zero/null scores
+        if node.score is None or node.score <= 0:
+            continue
+
         metadata = node.node.metadata or {}
-        file_name = metadata.get("file_name", "")
         file_path = metadata.get("file_path", "")
 
         # Build URI
@@ -499,13 +502,12 @@ def _format_bm25_matches(bm25_nodes: list[NodeWithScore]) -> list[dict[str, Any]
                 pass
 
         matched_files.append({
-            "file_name": file_name,
-            "file_path": file_path,
             "uri": source_uri,
-            "score": round(float(node.score), 4) if node.score is not None else 0.0,
+            "score": round(float(node.score), 4),
         })
 
-    return matched_files
+    # Limit to max 5 results
+    return matched_files[:5]
 
 
 def _preprocess_query(query: str) -> str:
