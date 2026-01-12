@@ -101,7 +101,6 @@ RETRIEVAL_SCORE_THRESHOLD = float(os.getenv("RETRIEVAL_SCORE_THRESHOLD", "0.1"))
 # BM25 file name search configuration
 BM25_INDEX_DIR = STORAGE_DIR / "bm25_index"
 BM25_SIMILARITY_TOP_K = int(os.getenv("BM25_SIMILARITY_TOP_K", "10"))
-BM25_MAX_CHUNKS_PER_FILE = int(os.getenv("BM25_MAX_CHUNKS_PER_FILE", "20"))
 
 # Global cap on candidates sent to reranker (safety net for memory/performance)
 RETRIEVAL_RERANK_CANDIDATES = int(os.getenv("RETRIEVAL_RERANK_CANDIDATES", "100"))
@@ -463,77 +462,50 @@ def _ensure_bm25_retriever():
         return None
 
 
-def _reciprocal_rank_fusion(
-    results_lists: list[list[NodeWithScore]],
-    k: int = 60
-) -> list[NodeWithScore]:
+def _format_bm25_matches(bm25_nodes: list[NodeWithScore]) -> list[dict[str, Any]]:
     """
-    Combine multiple ranked lists using Reciprocal Rank Fusion (RRF).
+    Format BM25 file name matches for the response.
 
-    RRF Score = sum(1 / (k + rank)) for each list the document appears in.
+    Converts BM25 NodeWithScore objects into a structured format containing:
+    - file_name: The name of the matched file
+    - file_path: Full path to the file
+    - uri: file:// URI for the file
+    - score: BM25 relevance score (preserved from retrieval)
 
     Args:
-        results_lists: List of ranked result lists (each list is NodeWithScore)
-        k: Constant to prevent high scores for top-ranked items (default 60)
+        bm25_nodes: BM25 search results (file name nodes with scores)
 
     Returns:
-        Combined and re-ranked list of NodeWithScore with RRF scores
+        List of dicts with file metadata, ordered by BM25 score (highest first)
     """
-    rrf_scores: dict[str, float] = {}
-    node_map: dict[str, NodeWithScore] = {}
+    matched_files = []
 
-    for results in results_lists:
-        for rank, node in enumerate(results, start=1):
-            node_id = node.node.node_id
-            rrf_scores[node_id] = rrf_scores.get(node_id, 0.0) + 1.0 / (k + rank)
-            if node_id not in node_map:
-                node_map[node_id] = node
+    for node in bm25_nodes:
+        metadata = node.node.metadata or {}
+        file_name = metadata.get("file_name", "")
+        file_path = metadata.get("file_path", "")
 
-    sorted_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
-    return [NodeWithScore(node=node_map[nid].node, score=rrf_scores[nid]) for nid in sorted_ids]
-
-
-def _expand_filename_matches(
-    bm25_nodes: list[NodeWithScore],
-    docstore,
-    max_chunks_per_file: int = 20
-) -> list[NodeWithScore]:
-    """
-    Expand BM25 file name matches to chunks from those files.
-
-    Limits chunks per file to prevent large documents from overwhelming
-    the reranker.
-
-    Args:
-        bm25_nodes: BM25 search results (file name nodes)
-        docstore: The document store containing all chunks
-        max_chunks_per_file: Maximum chunks to return per matched file
-
-    Returns:
-        List of NodeWithScore for chunks from matched files
-    """
-    matched_paths: set[str] = set()
-
-    # Collect file paths from BM25 matches
-    for bm25_node in bm25_nodes:
-        file_path = bm25_node.node.metadata.get("file_path")
+        # Build URI
+        source_uri = None
         if file_path:
-            matched_paths.add(file_path)
+            try:
+                file_path_obj = Path(str(file_path))
+                if file_path_obj.is_absolute():
+                    source_uri = f"file://{file_path_obj.resolve()}"
+                else:
+                    data_dir = Path(os.getenv("DATA_DIR", "./data"))
+                    source_uri = f"file://{(data_dir / file_path_obj).resolve()}"
+            except Exception:
+                pass
 
-    # Group chunks by file path
-    chunks_by_file: dict[str, list] = {path: [] for path in matched_paths}
-    for doc_id, node in docstore.docs.items():
-        node_file_path = node.metadata.get("file_path")
-        if node_file_path in chunks_by_file:
-            chunks_by_file[node_file_path].append(node)
+        matched_files.append({
+            "file_name": file_name,
+            "file_path": file_path,
+            "uri": source_uri,
+            "score": round(float(node.score), 4) if node.score is not None else 0.0,
+        })
 
-    # Take first N chunks per file (preserves document order)
-    expanded = []
-    for file_path, chunks in chunks_by_file.items():
-        for node in chunks[:max_chunks_per_file]:
-            expanded.append(NodeWithScore(node=node, score=0.5))
-
-    return expanded
+    return matched_files
 
 
 def _preprocess_query(query: str) -> str:
@@ -873,17 +845,23 @@ Args:
     date_to: Optional end date filter (YYYY-MM-DD format, inclusive)
 
 The tool returns a structured response with:
-- `chunks`: Array of retrieved document chunks
+- `chunks`: Array of retrieved document chunks (semantically ranked)
+- `matched_files`: Array of files whose names match the query (BM25 ranked)
 - `query`: The search query used
 - `num_chunks`: Number of chunks returned
+- `num_matched_files`: Number of files matched by name
 - `retrieval_time`: Time taken for retrieval
-- `sources`: Array of unique source documents with URI, name, and MIME type (displayed as clickable links in MCP clients)
 
 Each chunk includes:
 - `text`: Full chunk text content
-- `location`: Structured location details (file, page, heading, heading_path)
-- `metadata`: Original document metadata (includes creation_date and last_modified_date when available)
-- `score`: Relevance score
+- `location`: Structured location details (uri, page, line, heading_path)
+- `score`: Relevance score (from reranker)
+
+Each matched_file includes:
+- `file_name`: Name of the matched file
+- `file_path`: Path to the file
+- `uri`: file:// URI for the file
+- `score`: BM25 relevance score
     """
     start_time = time.time()
     
@@ -901,27 +879,22 @@ Each chunk includes:
         vector_nodes = retriever.retrieve(enhanced_query)
 
         # Stage 1b: BM25 file name search (keyword-based)
-        # This helps find documents where the query matches the file name
-        # (e.g., "cpp styleguide" -> cpp_styleguide.md)
+        # Returns file matches separately - not fused with vector results
+        # This preserves BM25 filename rankings which would otherwise get
+        # buried/reordered by the semantic reranker
+        matched_files: list[dict[str, Any]] = []
         bm25_retriever = _ensure_bm25_retriever()
         if bm25_retriever:
             try:
                 bm25_matches = bm25_retriever.retrieve(enhanced_query)
                 if bm25_matches:
-                    bm25_nodes = _expand_filename_matches(
-                        bm25_matches, index.docstore, BM25_MAX_CHUNKS_PER_FILE
-                    )
-                    logger.info(f"BM25 matched {len(bm25_matches)} files, expanded to {len(bm25_nodes)} chunks")
-                    # Fuse vector and BM25 results using Reciprocal Rank Fusion
-                    nodes = _reciprocal_rank_fusion([vector_nodes, bm25_nodes])
-                    logger.info(f"Fused {len(vector_nodes)} vector + {len(bm25_nodes)} BM25 -> {len(nodes)} unique nodes")
-                else:
-                    nodes = vector_nodes
+                    matched_files = _format_bm25_matches(bm25_matches)
+                    logger.info(f"BM25 matched {len(bm25_matches)} files")
             except Exception as e:
-                logger.error(f"BM25 search failed, using vector-only results: {e}")
-                nodes = vector_nodes
-        else:
-            nodes = vector_nodes
+                logger.error(f"BM25 search failed: {e}")
+
+        # Vector nodes flow through reranking without BM25 fusion
+        nodes = vector_nodes
 
         # Search Confluence in parallel (with timeout)
         # Optimization: Check if CONFLUENCE_URL is set before even attempting it
@@ -1129,9 +1102,11 @@ Each chunk includes:
         elapsed = time.time() - start_time
 
         structured_response = {
+            "matched_files": matched_files,
+            "num_matched_files": len(matched_files),
             "chunks": chunks,
-            "query": query,
             "num_chunks": len(chunks),
+            "query": query,
             "retrieval_time": f"{elapsed:.2f}s",
         }
         
@@ -1140,6 +1115,7 @@ Each chunk includes:
     except Exception as e:
         logger.error(f"Error in retrieve_docs: {e}", exc_info=True)
         error_response = {
+            "matched_files": [],
             "chunks": [],
             "error": str(e),
             "query": query,

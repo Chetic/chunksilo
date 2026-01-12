@@ -9,6 +9,7 @@ Fully local semantic search for your PDF, DOCX, Markdown, and TXT files. The MCP
 - **Multi-Tool Support**: Auto-configuration for Cline, Roo Code, and Continue.
 - **Smart Indexing**: Persistent local index with incremental updates.
 - **Source Links**: MCP `retrieve_docs` tool returns resource links for each source document, displayed as clickable links in supported MCP clients like Roo Code.
+- **Dual Retrieval**: Returns both semantically relevant chunks and BM25 filename matches separately, so filename lookups don't get buried by semantic reranking.
 
 ## Quick Installation (Recommended)
 
@@ -81,8 +82,7 @@ Configure the MCP server by setting environment variables in your MCP client con
 | `RETRIEVAL_SCORE_THRESHOLD` | `0.1` | Minimum reranker score (0.0-1.0) for results. Set to 0.0 to disable filtering |
 | `RETRIEVAL_RECENCY_BOOST` | `0.3` | Weight for recency boost (0.0=disabled, 1.0=recency dominates relevance) |
 | `RETRIEVAL_RECENCY_HALF_LIFE_DAYS` | `365` | Days until a document's recency boost is halved (exponential decay) |
-| `BM25_SIMILARITY_TOP_K` | `10` | Number of files matched by BM25 filename search |
-| `BM25_MAX_CHUNKS_PER_FILE` | `20` | Maximum chunks returned per BM25-matched file |
+| `BM25_SIMILARITY_TOP_K` | `10` | Number of files returned by BM25 filename search (returned separately in `matched_files`) |
 | `RETRIEVAL_RERANK_CANDIDATES` | `100` | Maximum candidates sent to reranker (safety cap) |
 
 #### Text Chunking (ingest.py only)

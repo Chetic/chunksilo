@@ -124,45 +124,6 @@ class TestMissingMetadata:
 
 
 # =============================================================================
-# Tests for RRF edge cases
-# =============================================================================
-
-class TestRRFEdgeCases:
-    """Tests for edge cases in reciprocal rank fusion."""
-
-    def test_rrf_with_none_scores(self):
-        """Nodes with None scores are handled."""
-        from mcp_server import _reciprocal_rank_fusion
-        from llama_index.core.schema import TextNode, NodeWithScore
-
-        node = TextNode(text="Test", id_="test")
-        # NodeWithScore with None score
-        nodes = [NodeWithScore(node=node, score=None)]
-
-        result = _reciprocal_rank_fusion([nodes])
-
-        # Should not crash, result should have RRF score
-        assert len(result) == 1
-        assert result[0].score is not None
-
-    def test_rrf_duplicate_ids_same_list(self):
-        """Duplicate IDs in same list are handled."""
-        from mcp_server import _reciprocal_rank_fusion
-        from llama_index.core.schema import TextNode, NodeWithScore
-
-        # Same ID appearing twice in one list (shouldn't happen but test anyway)
-        nodes = [
-            NodeWithScore(node=TextNode(text="First", id_="dup"), score=0.9),
-            NodeWithScore(node=TextNode(text="Second", id_="dup"), score=0.8),
-        ]
-
-        result = _reciprocal_rank_fusion([nodes])
-
-        # Should handle gracefully - likely keeps one version
-        assert len(result) >= 1
-
-
-# =============================================================================
 # Tests for tokenize_filename edge cases
 # =============================================================================
 
