@@ -466,8 +466,13 @@ BERT is widely used for question answering, sentiment analysis, and named entity
 
 def _get_file_identifier(chunk: Dict) -> str:
     """Extract file identifier from chunk for pattern matching."""
-    # Try location.file first (full path), then metadata.file_name, then metadata.file_path
+    # Try location.file first (full path), then location.uri, then metadata fields
     file_path = chunk.get("location", {}).get("file", "")
+    if not file_path:
+        # Extract path from file:// URI if present
+        uri = chunk.get("location", {}).get("uri", "")
+        if uri and uri.startswith("file://"):
+            file_path = uri[7:]  # Remove "file://" prefix
     if not file_path:
         file_path = chunk.get("metadata", {}).get("file_name", "")
     if not file_path:
