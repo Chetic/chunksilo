@@ -9,7 +9,9 @@ import time
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from mcp.server.fastmcp import FastMCP, Context
 from llama_index.core import StorageContext, load_index_from_storage, Settings
@@ -744,9 +746,9 @@ def _apply_recency_boost(
 
 @mcp.tool()
 async def retrieve_docs(
-    query: str,
-    date_from: str | None = None,
-    date_to: str | None = None,
+    query: Annotated[str, Field(description="Search query text")],
+    date_from: Annotated[str | None, Field(description="Optional start date filter (YYYY-MM-DD format, inclusive)")] = None,
+    date_to: Annotated[str | None, Field(description="Optional end date filter (YYYY-MM-DD format, inclusive)")] = None,
 ) -> dict[str, Any]:
     """
 Search the local documentation corpus and return the most relevant chunks.
