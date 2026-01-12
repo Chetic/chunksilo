@@ -6,7 +6,6 @@ Returns raw document chunks for the calling LLM to synthesize.
 import os
 import sys
 import time
-import sqlite3
 import json
 from datetime import datetime
 from pathlib import Path
@@ -164,99 +163,6 @@ _embed_model_initialized = False
 _reranker_model = None
 _bm25_retriever_cache = None
 
-
-# Startup log buffer - populated at module load, flushed on first list_tools call
-_startup_log_buffer: list[str] = []
-_startup_logs_flushed = False
-
-
-def _collect_startup_info():
-    """Collect startup configuration info into the buffer."""
-    global _startup_log_buffer
-    _startup_log_buffer.append("MCP Server Startup")
-    _startup_log_buffer.append("==================")
-    _startup_log_buffer.append(f"Storage Directory: {STORAGE_DIR.resolve()} (Exists: {STORAGE_DIR.exists()})")
-    _startup_log_buffer.append(f"Embedding Model: {RETRIEVAL_EMBED_MODEL_NAME}")
-    _startup_log_buffer.append(f"Rerank Model: {RETRIEVAL_RERANK_MODEL_NAME}")
-    _startup_log_buffer.append(f"Offline Mode: {_offline_mode}")
-    
-    # Log CA bundle configuration
-    if CA_BUNDLE_PATH:
-        ca_bundle_path = Path(CA_BUNDLE_PATH)
-        if ca_bundle_path.exists():
-            _startup_log_buffer.append(f"CA Bundle: {ca_bundle_path.resolve()}")
-        else:
-            _startup_log_buffer.append(f"CA Bundle: {ca_bundle_path.resolve()} (NOT FOUND)")
-    else:
-        _startup_log_buffer.append("CA Bundle: Not configured (using system defaults)")
-    
-    # Log indexed document stats
-    db_path = STORAGE_DIR / "ingestion_state.db"
-    if db_path.exists():
-        try:
-            with sqlite3.connect(db_path) as conn:
-                cursor = conn.execute("SELECT path, doc_ids FROM files")
-                files = cursor.fetchall()
-                file_count = len(files)
-                total_chunks = sum(len(row[1].split(",")) if row[1] else 0 for row in files)
-                _startup_log_buffer.append(f"Indexed Documents: {file_count} files ({total_chunks} chunks)")
-        except Exception as e:
-            _startup_log_buffer.append(f"Failed to read ingestion state: {e}")
-    else:
-        _startup_log_buffer.append("Indexed Documents: 0 (No ingestion state found)")
-
-    # Log Confluence status
-    confluence_url = os.getenv("CONFLUENCE_URL")
-    if confluence_url:
-        _startup_log_buffer.append(f"Confluence Integration: ENABLED (URL: {confluence_url})")
-        if ConfluenceReader:
-            try:
-                username = os.getenv("CONFLUENCE_USERNAME")
-                api_token = os.getenv("CONFLUENCE_API_TOKEN")
-                if username and api_token:
-                    reader = ConfluenceReader(base_url=confluence_url, user_name=username, api_token=api_token)
-                    _startup_log_buffer.append("Confluence Connection: Credentials provided, reader initialized.")
-                else:
-                    _startup_log_buffer.append("Confluence Configuration: Missing USERNAME or API_TOKEN")
-            except Exception as e:
-                _startup_log_buffer.append(f"Confluence Connection Failed: {e}")
-        else:
-            _startup_log_buffer.append("Confluence Integration: Skipped (Library not installed)")
-    else:
-        _startup_log_buffer.append("Confluence Integration: DISABLED (CONFLUENCE_URL not set)")
-
-
-# Collect startup info at module load
-_collect_startup_info()
-
-
-# Wrap list_tools to flush startup logs on first client connection
-_original_list_tools = mcp.list_tools
-
-
-async def _wrapped_list_tools():
-    """Wrapper that flushes startup logs on first list_tools call."""
-    global _startup_logs_flushed
-    
-    # Flush buffered startup logs on first call
-    if not _startup_logs_flushed and _startup_log_buffer:
-        _startup_logs_flushed = True
-        try:
-            ctx = mcp.get_context()
-            for msg in _startup_log_buffer:
-                await ctx.info(msg)
-        except Exception as e:
-            # Fallback to stderr if context not available
-            logger.warning(f"Could not flush startup logs via MCP: {e}")
-            for msg in _startup_log_buffer:
-                logger.info(msg)
-    
-    # Call original list_tools
-    return await _original_list_tools()
-
-
-# Replace the list_tools handler
-mcp._mcp_server.list_tools()(_wrapped_list_tools)
 
 
 def _build_heading_path(headings: list[dict], char_start: int | None) -> tuple[str | None, list[str]]:
