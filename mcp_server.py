@@ -19,6 +19,10 @@ from ingest import get_heading_store
 try:
     from llama_index.readers.confluence import ConfluenceReader
     import requests  # Available when llama-index-readers-confluence is installed
+    # TEMPORARY FIX: Patch Confluence HTML parser to handle syntax highlighting spans
+    # Remove when upstream issue is fixed (see confluence_html_formatter.py)
+    from confluence_html_formatter import patch_confluence_reader
+    patch_confluence_reader()
 except ImportError:
     ConfluenceReader = None
     requests = None
