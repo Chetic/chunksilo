@@ -481,7 +481,10 @@ class LocalFileSystemSource(DataSource):
         """Check if file matches include patterns and doesn't match exclude patterns.
 
         Uses Path.match() which supports ** glob patterns for directory matching.
+        For directory exclusion patterns like **/*venv*/**, checks each path component.
         """
+        import fnmatch
+
         try:
             rel_path = file_path.relative_to(self.base_dir)
         except ValueError:
@@ -489,9 +492,18 @@ class LocalFileSystemSource(DataSource):
 
         # Check exclude patterns first
         for pattern in self.config.exclude:
-            # Try both relative path and filename matching
-            if rel_path.match(pattern) or file_path.name == pattern:
-                return False
+            # Handle directory exclusion patterns (e.g., **/*venv*/**, **/node_modules/**)
+            # by checking if any directory component matches
+            if pattern.startswith('**/') and pattern.endswith('/**'):
+                # Extract the directory pattern (e.g., *venv* or node_modules)
+                dir_pattern = pattern[3:-3]  # Remove **/ prefix and /** suffix
+                for part in rel_path.parts[:-1]:  # Check all directory components (not filename)
+                    if fnmatch.fnmatch(part, dir_pattern):
+                        return False
+            else:
+                # Standard pattern matching
+                if rel_path.match(pattern) or file_path.name == pattern:
+                    return False
 
         # Check include patterns
         if not self.config.include:
