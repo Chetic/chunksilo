@@ -111,8 +111,8 @@ class DirectoryConfig:
 class IngestConfig:
     """Complete ingestion configuration."""
     directories: List[DirectoryConfig]
-    chunk_size: int = 512
-    chunk_overlap: int = 100
+    chunk_size: int = 1600
+    chunk_overlap: int = 200
 
 
 def load_ingest_config() -> IngestConfig:
@@ -185,8 +185,8 @@ def _parse_ingest_config(config_data: dict) -> IngestConfig:
 
     return IngestConfig(
         directories=directories,
-        chunk_size=config_data.get("chunk_size", 512),
-        chunk_overlap=config_data.get("chunk_overlap", 100),
+        chunk_size=config_data.get("chunk_size", 1600),
+        chunk_overlap=config_data.get("chunk_overlap", 200),
     )
 
 

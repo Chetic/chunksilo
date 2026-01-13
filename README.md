@@ -73,8 +73,8 @@ Create `ingest_config.json` to configure which directories to index:
       "exclude": ["**/archive/**"]
     }
   ],
-  "chunk_size": 512,
-  "chunk_overlap": 100
+  "chunk_size": 1600,
+  "chunk_overlap": 200
 }
 ```
 
@@ -83,8 +83,8 @@ Create `ingest_config.json` to configure which directories to index:
 | Option | Default | Description |
 | :--- | :--- | :--- |
 | `directories` | (required) | List of directory paths or directory config objects |
-| `chunk_size` | `512` | Maximum size of text chunks for indexing |
-| `chunk_overlap` | `100` | Overlap between adjacent chunks |
+| `chunk_size` | `1600` | Maximum size of text chunks for indexing |
+| `chunk_overlap` | `200` | Overlap between adjacent chunks |
 
 **Per-directory options:**
 
