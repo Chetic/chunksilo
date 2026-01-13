@@ -103,25 +103,23 @@ def sample_nodes():
 def patched_ingest_globals(test_env):
     """Patch ingest module globals for isolated testing.
 
-    This fixture patches DATA_DIR, STORAGE_DIR, and STATE_DB_PATH
+    This fixture patches STORAGE_DIR and STATE_DB_PATH
     to use temporary directories, then restores originals after test.
+    Note: DATA_DIR was removed in favor of config-based directories.
     """
     import ingest
 
     original = {
-        "DATA_DIR": ingest.DATA_DIR,
         "STORAGE_DIR": ingest.STORAGE_DIR,
         "STATE_DB_PATH": ingest.STATE_DB_PATH,
     }
 
-    ingest.DATA_DIR = test_env["data_dir"]
     ingest.STORAGE_DIR = test_env["storage_dir"]
     ingest.STATE_DB_PATH = test_env["db_path"]
 
     yield test_env
 
     # Restore originals
-    ingest.DATA_DIR = original["DATA_DIR"]
     ingest.STORAGE_DIR = original["STORAGE_DIR"]
     ingest.STATE_DB_PATH = original["STATE_DB_PATH"]
 

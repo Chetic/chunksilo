@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 os.environ["OFFLINE"] = "0"
 
 # Import after logging is set up
-from ingest import DATA_DIR, STORAGE_DIR, build_index
+from ingest import STORAGE_DIR, build_index
 from mcp_server import retrieve_docs
 
 # Test corpus configuration
@@ -703,12 +703,22 @@ async def run_large_scale_tests() -> Dict[str, Any]:
         logger.error("No documents downloaded. Cannot proceed with tests.")
         return {"error": "No documents downloaded"}
     
-    # Step 2: Temporarily set DATA_DIR and STORAGE_DIR for test
-    original_data_dir = os.environ.get("DATA_DIR")
+    # Step 2: Create test config and set environment variables
+    original_ingest_config = os.environ.get("INGEST_CONFIG")
     original_storage_dir = os.environ.get("STORAGE_DIR")
-    
+
+    # Create temporary ingest config for test data directory
+    test_config_path = TEST_STORAGE_DIR / "test_ingest_config.json"
+    TEST_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    with open(test_config_path, "w") as f:
+        json.dump({
+            "directories": [str(TEST_DATA_DIR)],
+            "chunk_size": 1600,
+            "chunk_overlap": 200
+        }, f)
+
     try:
-        os.environ["DATA_DIR"] = str(TEST_DATA_DIR)
+        os.environ["INGEST_CONFIG"] = str(test_config_path)
         os.environ["STORAGE_DIR"] = str(TEST_STORAGE_DIR)
         
         # Re-import to get updated paths
@@ -838,11 +848,11 @@ async def run_large_scale_tests() -> Dict[str, Any]:
         
     finally:
         # Restore original environment variables
-        if original_data_dir:
-            os.environ["DATA_DIR"] = original_data_dir
-        elif "DATA_DIR" in os.environ:
-            del os.environ["DATA_DIR"]
-        
+        if original_ingest_config:
+            os.environ["INGEST_CONFIG"] = original_ingest_config
+        elif "INGEST_CONFIG" in os.environ:
+            del os.environ["INGEST_CONFIG"]
+
         if original_storage_dir:
             os.environ["STORAGE_DIR"] = original_storage_dir
         elif "STORAGE_DIR" in os.environ:

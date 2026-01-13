@@ -135,14 +135,20 @@ async def _async_test_heading_path_extraction(test_env):
     create_pdf_file(data_dir / "test.pdf")
     
     # 2. Run Ingestion
+    # Create temporary config file for ingestion
+    import json
+    config_path = storage_dir.parent / "ingest_config.json"
+    config_path.write_text(json.dumps({
+        "directories": [str(data_dir)],
+        "chunk_size": 200,
+        "chunk_overlap": 25
+    }))
+
     # Patch globals in ingest module
-    # Use chunk size 200 to ensure proper heading resolution without metadata warnings
-    with patch("ingest.DATA_DIR", data_dir), \
+    with patch("ingest.INGEST_CONFIG_PATH", config_path), \
          patch("ingest.STORAGE_DIR", storage_dir), \
          patch("ingest.STATE_DB_PATH", storage_dir / "ingestion_state.db"), \
          patch("ingest.RETRIEVAL_MODEL_CACHE_DIR", Path("./models").resolve()), \
-         patch("ingest.CHUNK_SIZE", 200), \
-         patch("ingest.CHUNK_OVERLAP", 25), \
          patch("mcp_server.STORAGE_DIR", storage_dir), \
          patch("mcp_server.RETRIEVAL_MODEL_CACHE_DIR", Path("./models").resolve()):
         

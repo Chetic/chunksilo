@@ -55,15 +55,24 @@ def test_env(tmp_path):
     storage_dir = tmp_path / "storage"
     db_path = storage_dir / "ingestion_state.db"
 
+    # Create temporary ingest config pointing to test data dir
+    config_path = tmp_path / "ingest_config.json"
+    import json
+    config_path.write_text(json.dumps({
+        "directories": [str(data_dir)],
+        "chunk_size": 512,
+        "chunk_overlap": 100
+    }))
+
     # Save original globals
-    orig_data_dir = ingest.DATA_DIR
     orig_storage_dir = ingest.STORAGE_DIR
     orig_db_path = ingest.STATE_DB_PATH
+    orig_config_path = ingest.INGEST_CONFIG_PATH
 
     # Set globals to test paths
-    ingest.DATA_DIR = data_dir
     ingest.STORAGE_DIR = storage_dir
     ingest.STATE_DB_PATH = db_path
+    ingest.INGEST_CONFIG_PATH = config_path
 
     # Create mock embedding model
     mock_embed = _create_mock_embedding()
@@ -75,9 +84,9 @@ def test_env(tmp_path):
         yield data_dir, storage_dir, db_path
 
     # Restore globals
-    ingest.DATA_DIR = orig_data_dir
     ingest.STORAGE_DIR = orig_storage_dir
     ingest.STATE_DB_PATH = orig_db_path
+    ingest.INGEST_CONFIG_PATH = orig_config_path
 
 def create_file(data_dir, name, content):
     path = data_dir / name
