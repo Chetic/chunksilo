@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    force=True,  # Override any handlers configured by imported modules (e.g., ingest.py)
     handlers=[
         logging.FileHandler(LOG_FILE, encoding="utf-8"),  # file
         logging.StreamHandler(sys.stderr),                 # stderr
