@@ -54,7 +54,7 @@ The installer generates tool-specific configurations from a single source of tru
 - **Indexing**: The server runs `ingest.py` automatically, or you can run it manually:
   ```bash
   cd <install_dir>
-  source venv/bin/activate
+  source .venv/bin/activate
   python ingest.py
   ```
 
@@ -147,6 +147,23 @@ Configure the MCP server by setting environment variables in your MCP client con
 - **Offline mode**: The installer includes models and sets `OFFLINE=1` automatically. If you need network access, set `OFFLINE=0` in your MCP client configuration.
 - **Confluence Integration**: Set `CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, and `CONFLUENCE_API_TOKEN` in your MCP client configuration to enable Confluence search.
 - **Custom CA Bundle**: Set `CA_BUNDLE_PATH` to point to your CA bundle file if using custom certificates for HTTPS endpoints.
+
+## Development & Testing
+
+**Requirements**: Python 3.11 (matches CI environment)
+
+```bash
+# Set up development environment
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -r test/requirements.txt
+
+# Run tests
+pytest test/ -v --ignore=test/test_large_scale.py
+```
+
+For comprehensive testing documentation, see [test/TESTING.md](test/TESTING.md).
 
 ## License
 

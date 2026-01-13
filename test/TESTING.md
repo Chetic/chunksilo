@@ -48,7 +48,7 @@ A comprehensive RAG test suite should include:
 First, install test dependencies:
 
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 pip install -r test/requirements.txt
 ```
 
@@ -57,7 +57,7 @@ pip install -r test/requirements.txt
 Verify ingestion and retrieval work using only embeddings and vector search (no LLM needed):
 
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 cd test
 python test_retrieval_only.py
 ```
@@ -72,7 +72,7 @@ This will:
 To exercise the same retrieval logic that the MCP server uses (`retrieve_docs`), run the corresponding pytest:
 
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 cd test
 pytest test_system.py
 ```
@@ -85,7 +85,7 @@ This will:
 You can also run the full test suite (including ingestion and system tests) with:
 
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 cd test
 pytest
 ```
@@ -106,7 +106,7 @@ The comprehensive large-scale test suite downloads a diverse corpus of documents
 **Important**: The large-scale test suite requires online access to download test documents. Run it with `OFFLINE=0`:
 
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 cd test
 OFFLINE=0 python test_large_scale.py
 ```
@@ -193,7 +193,7 @@ If metrics are lower, consider:
 You can also run the MCP server directly:
 
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 python mcp_server.py
 ```
 

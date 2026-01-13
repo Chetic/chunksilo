@@ -349,9 +349,9 @@ done
 
 # Setup venv
 cd "$INSTALL_DIR"
-if [ ! -d "venv" ]; then
+if [ ! -d ".venv" ]; then
     echo "Creating virtual environment..."
-    $PYTHON_CMD -m venv venv
+    $PYTHON_CMD -m venv .venv
 fi
 
 echo "Installing dependencies..."
@@ -360,13 +360,13 @@ DEP_DIR="$INSTALL_DIR/dependencies"
 if [ -d "$DEP_DIR" ] && [ -n "$(ls -A "$DEP_DIR" 2>/dev/null)" ]; then
     # Packaged mode: use pre-downloaded wheels (offline installation)
     echo "Using packaged dependencies from $DEP_DIR"
-    ./venv/bin/pip install --no-index --find-links "$DEP_DIR" --no-cache-dir wheel
-    ./venv/bin/pip install --no-index --find-links "$DEP_DIR" --no-cache-dir -r requirements.txt
+    ./.venv/bin/pip install --no-index --find-links "$DEP_DIR" --no-cache-dir wheel
+    ./.venv/bin/pip install --no-index --find-links "$DEP_DIR" --no-cache-dir -r requirements.txt
 else
     # Development mode: install from PyPI
     echo "Development mode: installing dependencies from PyPI..."
-    ./venv/bin/pip install --no-cache-dir wheel
-    ./venv/bin/pip install --no-cache-dir -r requirements.txt
+    ./.venv/bin/pip install --no-cache-dir wheel
+    ./.venv/bin/pip install --no-cache-dir -r requirements.txt
 fi
 
 echo "Installation complete!"
