@@ -50,13 +50,53 @@ If you prefer to run from source:
 The installer generates tool-specific configurations from a single source of truth: `universal_config.json`.
 
 - **Settings**: Adjust environment variables directly in the generated config if needed, or modify `universal_config.json` before running the installer.
-- **Documents**: Place your documents in the `DATA_DIR` (default: `data/` inside the install location).
+- **Documents**: Configure directories to index in `ingest_config.json` (see [Ingestion Configuration](#ingestion-configuration)).
 - **Indexing**: The server runs `ingest.py` automatically, or you can run it manually:
   ```bash
   cd <install_dir>
   source venv/bin/activate
   python ingest.py
   ```
+
+### Ingestion Configuration
+
+Create `ingest_config.json` to configure which directories to index:
+
+```json
+{
+  "directories": [
+    "./data",
+    "/mnt/nfs/shared-docs",
+    {
+      "path": "/mnt/samba/engineering",
+      "include": ["**/*.pdf", "**/*.md"],
+      "exclude": ["**/archive/**"]
+    }
+  ],
+  "chunk_size": 512,
+  "chunk_overlap": 100
+}
+```
+
+**Top-level options:**
+
+| Option | Default | Description |
+| :--- | :--- | :--- |
+| `directories` | (required) | List of directory paths or directory config objects |
+| `chunk_size` | `512` | Maximum size of text chunks for indexing |
+| `chunk_overlap` | `100` | Overlap between adjacent chunks |
+
+**Per-directory options:**
+
+| Option | Default | Description |
+| :--- | :--- | :--- |
+| `path` | (required) | Directory path to index |
+| `include` | `["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx"]` | Glob patterns for files to include |
+| `exclude` | `[]` | Glob patterns for files to exclude |
+| `recursive` | `true` | Whether to recurse into subdirectories |
+| `enabled` | `true` | Whether to index this directory |
+
+**Network mounts (NFS/Samba):** Unavailable directories are skipped with a warning; indexing continues with available directories.
 
 ### Environment Variables
 
@@ -66,7 +106,6 @@ Configure the MCP server by setting environment variables in your MCP client con
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `DATA_DIR` | `./data` | Directory containing PDF, DOCX, Markdown (.md), and TXT (.txt) files to index |
 | `STORAGE_DIR` | `./storage` | Directory for storing the LlamaIndex vector index and ingestion state |
 | `RETRIEVAL_MODEL_CACHE_DIR` | `./models` | Cache directory for embedding and reranking models |
 | `OFFLINE` | `1` | Offline mode (1=enabled, 0=disabled). Prevents all network requests by ML libraries |
@@ -84,13 +123,6 @@ Configure the MCP server by setting environment variables in your MCP client con
 | `RETRIEVAL_RECENCY_HALF_LIFE_DAYS` | `365` | Days until a document's recency boost is halved (exponential decay) |
 | `BM25_SIMILARITY_TOP_K` | `10` | Number of files returned by BM25 filename search (returned separately in `matched_files`) |
 | `RETRIEVAL_RERANK_CANDIDATES` | `100` | Maximum candidates sent to reranker (safety cap) |
-
-#### Text Chunking (ingest.py only)
-
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `CHUNK_SIZE` | `512` | Maximum size of text chunks for indexing |
-| `CHUNK_OVERLAP` | `100` | Number of overlapping characters between adjacent chunks |
 
 #### Confluence Integration (Optional)
 

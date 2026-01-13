@@ -169,6 +169,72 @@ _embed_model_initialized = False
 _reranker_model = None
 _bm25_retriever_cache = None
 
+# Ingest config path for reading directory configuration
+INGEST_CONFIG_PATH = Path(os.getenv("INGEST_CONFIG", "./ingest_config.json"))
+
+# Cache for configured directories (lazy loaded)
+_configured_directories_cache: list[Path] | None = None
+
+
+def _get_configured_directories() -> list[Path]:
+    """Get list of configured data directories for path resolution.
+
+    Reads directories from ingest_config.json. Cached after first load.
+    """
+    global _configured_directories_cache
+
+    if _configured_directories_cache is not None:
+        return _configured_directories_cache
+
+    dirs: list[Path] = []
+
+    if INGEST_CONFIG_PATH.exists():
+        try:
+            with open(INGEST_CONFIG_PATH, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            for entry in config.get("directories", []):
+                if isinstance(entry, str):
+                    dirs.append(Path(entry))
+                elif isinstance(entry, dict) and entry.get("enabled", True):
+                    path_str = entry.get("path")
+                    if path_str:
+                        dirs.append(Path(path_str))
+        except Exception as e:
+            logger.warning(f"Failed to load ingest config for path resolution: {e}")
+
+    # Cache the result
+    _configured_directories_cache = dirs if dirs else []
+    return _configured_directories_cache
+
+
+def _resolve_file_uri(file_path: str) -> str | None:
+    """Resolve a file path to a file:// URI.
+
+    Handles both absolute paths and relative paths by checking against
+    all configured data directories.
+    """
+    try:
+        file_path_obj = Path(str(file_path))
+
+        # Absolute paths: use directly
+        if file_path_obj.is_absolute():
+            if file_path_obj.exists():
+                return f"file://{file_path_obj.resolve()}"
+            # Path might be from an unavailable mount - still return URI
+            return f"file://{file_path_obj}"
+
+        # Relative paths: try each configured directory
+        for data_dir in _get_configured_directories():
+            candidate = data_dir / file_path_obj
+            if candidate.exists():
+                return f"file://{candidate.resolve()}"
+
+        # If no configured directories or file not found, just resolve relative to cwd
+        # This provides some backwards compatibility
+        return f"file://{file_path_obj.resolve()}"
+
+    except Exception:
+        return None
 
 
 def _build_heading_path(headings: list[dict], char_start: int | None) -> tuple[str | None, list[str]]:
@@ -400,18 +466,8 @@ def _format_bm25_matches(bm25_nodes: list[NodeWithScore]) -> list[dict[str, Any]
         metadata = node.node.metadata or {}
         file_path = metadata.get("file_path", "")
 
-        # Build URI
-        source_uri = None
-        if file_path:
-            try:
-                file_path_obj = Path(str(file_path))
-                if file_path_obj.is_absolute():
-                    source_uri = f"file://{file_path_obj.resolve()}"
-                else:
-                    data_dir = Path(os.getenv("DATA_DIR", "./data"))
-                    source_uri = f"file://{(data_dir / file_path_obj).resolve()}"
-            except Exception:
-                pass
+        # Build URI using multi-directory resolver
+        source_uri = _resolve_file_uri(file_path) if file_path else None
 
         matched_files.append({
             "uri": source_uri,
@@ -971,17 +1027,8 @@ Each matched_file includes:
                         encoded_title = quote(title.replace(" ", "+"))
                         source_uri = f"{confluence_url.rstrip('/')}/spaces/~{encoded_title}"
             elif file_path:
-                # Create file:// URI for local files
-                try:
-                    file_path_obj = Path(str(file_path))
-                    if file_path_obj.is_absolute():
-                        source_uri = f"file://{file_path_obj.resolve()}"
-                    else:
-                        data_dir = Path(os.getenv("DATA_DIR", "./data"))
-                        resolved_path = (data_dir / file_path_obj).resolve()
-                        source_uri = f"file://{resolved_path}"
-                except Exception:
-                    source_uri = None
+                # Create file:// URI for local files using multi-directory resolver
+                source_uri = _resolve_file_uri(file_path)
 
             # Get page number (for PDFs and DOCX)
             page_number = (

@@ -15,9 +15,9 @@ import threading
 import time
 from datetime import datetime
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Dict, Optional, Iterator, Set
+from typing import List, Dict, Optional, Iterator, Set, Any
 
 # Check for --offline flag early and set environment variables BEFORE any imports
 if "--offline" in sys.argv:
@@ -38,12 +38,10 @@ from llama_index.core import (
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
-# Load environment variables
-
-# Configuration
-DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
+# Configuration paths
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "./storage"))
 STATE_DB_PATH = STORAGE_DIR / "ingestion_state.db"
+INGEST_CONFIG_PATH = Path(os.getenv("INGEST_CONFIG", "./ingest_config.json"))
 
 # Stage 1 (embedding/vector search) configuration
 RETRIEVAL_EMBED_MODEL_NAME = os.getenv(
@@ -57,10 +55,6 @@ RETRIEVAL_RERANK_MODEL_NAME = os.getenv(
 
 # Shared cache directory for embedding and reranking models
 RETRIEVAL_MODEL_CACHE_DIR = Path(os.getenv("RETRIEVAL_MODEL_CACHE_DIR", "./models"))
-
-# Text chunking configuration
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "100"))
 
 # BM25 index directory for file name matching
 BM25_INDEX_DIR = STORAGE_DIR / "bm25_index"
@@ -97,6 +91,103 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+# Default file type patterns
+DEFAULT_INCLUDE_PATTERNS = ["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx"]
+
+
+@dataclass
+class DirectoryConfig:
+    """Configuration for a single source directory."""
+    path: Path
+    enabled: bool = True
+    include: List[str] = field(default_factory=lambda: DEFAULT_INCLUDE_PATTERNS.copy())
+    exclude: List[str] = field(default_factory=list)
+    recursive: bool = True
+
+
+@dataclass
+class IngestConfig:
+    """Complete ingestion configuration."""
+    directories: List[DirectoryConfig]
+    chunk_size: int = 512
+    chunk_overlap: int = 100
+
+
+def load_ingest_config() -> IngestConfig:
+    """Load ingestion configuration from JSON file.
+
+    Raises:
+        FileNotFoundError: If config file doesn't exist
+        ValueError: If config is invalid
+    """
+    if not INGEST_CONFIG_PATH.exists():
+        raise FileNotFoundError(
+            f"Ingest configuration file not found: {INGEST_CONFIG_PATH}\n"
+            f"Please create {INGEST_CONFIG_PATH} with your directory configuration.\n"
+            f"Example:\n"
+            f'{{\n'
+            f'  "directories": ["./data"],\n'
+            f'  "chunk_size": 512,\n'
+            f'  "chunk_overlap": 100\n'
+            f'}}'
+        )
+
+    logger.info(f"Loading ingest config from {INGEST_CONFIG_PATH}")
+    with open(INGEST_CONFIG_PATH, "r", encoding="utf-8") as f:
+        config_data = json.load(f)
+
+    return _parse_ingest_config(config_data)
+
+
+def _parse_ingest_config(config_data: dict) -> IngestConfig:
+    """Parse raw config dict into IngestConfig."""
+    # Get defaults section
+    defaults = config_data.get("defaults", {})
+    default_include = defaults.get("include", DEFAULT_INCLUDE_PATTERNS.copy())
+    default_exclude = defaults.get("exclude", [])
+    default_recursive = defaults.get("recursive", True)
+
+    # Parse directories
+    directories: List[DirectoryConfig] = []
+    raw_dirs = config_data.get("directories", [])
+
+    if not raw_dirs:
+        raise ValueError("Config must have at least one directory in 'directories' list")
+
+    for entry in raw_dirs:
+        if isinstance(entry, str):
+            # Simple path string - use defaults
+            dir_config = DirectoryConfig(
+                path=Path(entry),
+                include=default_include.copy(),
+                exclude=default_exclude.copy(),
+                recursive=default_recursive,
+            )
+        elif isinstance(entry, dict):
+            # Full directory config object
+            path_str = entry.get("path")
+            if not path_str:
+                raise ValueError(f"Directory config missing 'path': {entry}")
+
+            dir_config = DirectoryConfig(
+                path=Path(path_str),
+                enabled=entry.get("enabled", True),
+                include=entry.get("include", default_include.copy()),
+                exclude=entry.get("exclude", default_exclude.copy()),
+                recursive=entry.get("recursive", default_recursive),
+            )
+        else:
+            raise ValueError(f"Invalid directory entry: {entry}")
+
+        directories.append(dir_config)
+
+    return IngestConfig(
+        directories=directories,
+        chunk_size=config_data.get("chunk_size", 512),
+        chunk_overlap=config_data.get("chunk_overlap", 100),
+    )
 
 
 class HeadingStore:
@@ -163,6 +254,7 @@ class FileInfo:
     path: str
     hash: str
     last_modified: float
+    source_dir: str = ""  # Tracks which configured directory this file came from
 
 
 class IngestionState:
@@ -173,29 +265,48 @@ class IngestionState:
         self._init_db()
 
     def _init_db(self):
-        """Initialize the SQLite database schema."""
+        """Initialize the SQLite database schema with migration support."""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS files (
-                    path TEXT PRIMARY KEY,
-                    hash TEXT NOT NULL,
-                    last_modified REAL NOT NULL,
-                    doc_ids TEXT NOT NULL
-                )
-                """
+            # Check if table exists
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='files'"
             )
+            table_exists = cursor.fetchone() is not None
+
+            if not table_exists:
+                # Create new table with source_dir column
+                conn.execute(
+                    """
+                    CREATE TABLE files (
+                        path TEXT PRIMARY KEY,
+                        hash TEXT NOT NULL,
+                        last_modified REAL NOT NULL,
+                        doc_ids TEXT NOT NULL,
+                        source_dir TEXT DEFAULT ''
+                    )
+                    """
+                )
+            else:
+                # Migration: add source_dir column if missing
+                cursor = conn.execute("PRAGMA table_info(files)")
+                columns = {row[1] for row in cursor}
+                if "source_dir" not in columns:
+                    conn.execute("ALTER TABLE files ADD COLUMN source_dir TEXT DEFAULT ''")
+                    logger.info("Migrated files table: added source_dir column")
 
     def get_all_files(self) -> Dict[str, dict]:
         """Retrieve all tracked files and their metadata."""
         with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute("SELECT path, hash, last_modified, doc_ids FROM files")
+            cursor = conn.execute(
+                "SELECT path, hash, last_modified, doc_ids, source_dir FROM files"
+            )
             return {
                 row[0]: {
                     "hash": row[1],
                     "last_modified": row[2],
                     "doc_ids": row[3].split(",") if row[3] else [],
+                    "source_dir": row[4] if row[4] else "",
                 }
                 for row in cursor
             }
@@ -205,18 +316,20 @@ class IngestionState:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
-                INSERT INTO files (path, hash, last_modified, doc_ids)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO files (path, hash, last_modified, doc_ids, source_dir)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(path) DO UPDATE SET
                     hash=excluded.hash,
                     last_modified=excluded.last_modified,
-                    doc_ids=excluded.doc_ids
+                    doc_ids=excluded.doc_ids,
+                    source_dir=excluded.source_dir
                 """,
                 (
                     file_info.path,
                     file_info.hash,
                     file_info.last_modified,
                     ",".join(doc_ids),
+                    file_info.source_dir,
                 ),
             )
 
@@ -345,32 +458,95 @@ def _extract_pdf_headings_from_outline(pdf_path: Path) -> List[dict]:
 
 
 class LocalFileSystemSource(DataSource):
-    """Implementation of DataSource for the local file system."""
+    """Implementation of DataSource for the local file system with filtering."""
 
-    def __init__(self, base_dir: Path):
-        self.base_dir = base_dir
+    def __init__(self, config: DirectoryConfig):
+        self.config = config
+        self.base_dir = config.path
+
+    def is_available(self) -> bool:
+        """Check if the directory is available and accessible."""
+        try:
+            if not self.base_dir.exists():
+                return False
+            if not self.base_dir.is_dir():
+                return False
+            # Try to list directory to verify access (important for network mounts)
+            next(self.base_dir.iterdir(), None)
+            return True
+        except (OSError, PermissionError):
+            return False
+
+    def _matches_patterns(self, file_path: Path) -> bool:
+        """Check if file matches include patterns and doesn't match exclude patterns.
+
+        Uses Path.match() which supports ** glob patterns for directory matching.
+        """
+        try:
+            rel_path = file_path.relative_to(self.base_dir)
+        except ValueError:
+            rel_path = Path(file_path.name)
+
+        # Check exclude patterns first
+        for pattern in self.config.exclude:
+            # Try both relative path and filename matching
+            if rel_path.match(pattern) or file_path.name == pattern:
+                return False
+
+        # Check include patterns
+        if not self.config.include:
+            return True
+
+        for pattern in self.config.include:
+            # Path.match() supports ** for recursive directory matching
+            if rel_path.match(pattern) or file_path.match(pattern):
+                return True
+
+        return False
 
     def iter_files(self) -> Iterator[FileInfo]:
-        extensions = {".pdf", ".md", ".txt", ".docx"}
-        for root, _, files in os.walk(self.base_dir):
+        """Yield FileInfo for each matching file in the source."""
+        if self.config.recursive:
+            walker = os.walk(self.base_dir)
+        else:
+            # Non-recursive: only top-level files
+            try:
+                top_files = [
+                    f for f in self.base_dir.iterdir() if f.is_file()
+                ]
+                walker = [(str(self.base_dir), [], [f.name for f in top_files])]
+            except OSError as e:
+                logger.warning(f"Could not list directory {self.base_dir}: {e}")
+                return
+
+        for root, _, files in walker:
             for file in files:
-                if Path(file).suffix.lower() in extensions:
-                    file_path = Path(root) / file
+                file_path = Path(root) / file
+
+                # Check patterns
+                if not self._matches_patterns(file_path):
+                    continue
+
+                try:
                     yield self._create_file_info(file_path)
+                except (OSError, IOError) as e:
+                    logger.warning(f"Could not access file {file_path}: {e}")
+                    continue
 
     def _create_file_info(self, file_path: Path) -> FileInfo:
-        # Create a hash of the file content
+        """Create FileInfo with source directory context."""
         hasher = hashlib.md5()
         with open(file_path, "rb") as f:
             buf = f.read(65536)
             while len(buf) > 0:
                 hasher.update(buf)
                 buf = f.read(65536)
-        
+
         return FileInfo(
             path=str(file_path.absolute()),
             hash=hasher.hexdigest(),
             last_modified=file_path.stat().st_mtime,
+            source_dir=str(self.base_dir.absolute()),
         )
 
     def load_file(self, file_info: FileInfo) -> List[LlamaIndexDocument]:
@@ -414,6 +590,61 @@ class LocalFileSystemSource(DataSource):
                 doc.excluded_llm_metadata_keys = EXCLUDED_LLM_METADATA_KEYS
 
             return docs
+
+
+class MultiDirectoryDataSource(DataSource):
+    """Aggregates multiple LocalFileSystemSource instances."""
+
+    def __init__(self, config: IngestConfig):
+        self.config = config
+        self.sources: List[LocalFileSystemSource] = []
+        self.unavailable_dirs: List[DirectoryConfig] = []
+
+        for dir_config in config.directories:
+            if not dir_config.enabled:
+                logger.info(f"Skipping disabled directory: {dir_config.path}")
+                continue
+
+            source = LocalFileSystemSource(dir_config)
+
+            if source.is_available():
+                self.sources.append(source)
+                logger.info(f"Added directory source: {dir_config.path}")
+            else:
+                self.unavailable_dirs.append(dir_config)
+                logger.warning(f"Directory unavailable, skipping: {dir_config.path}")
+
+    def iter_files(self) -> Iterator[FileInfo]:
+        """Iterate over files from all available sources."""
+        seen_paths: Set[str] = set()
+
+        for source in self.sources:
+            for file_info in source.iter_files():
+                # Deduplicate in case of overlapping mounts
+                if file_info.path not in seen_paths:
+                    seen_paths.add(file_info.path)
+                    yield file_info
+
+    def load_file(self, file_info: FileInfo) -> List[LlamaIndexDocument]:
+        """Load file using the appropriate source based on source_dir."""
+        # Find the source that owns this file
+        for source in self.sources:
+            if file_info.source_dir == str(source.base_dir.absolute()):
+                return source.load_file(file_info)
+
+        # Fallback: use first source (shouldn't happen normally)
+        if self.sources:
+            return self.sources[0].load_file(file_info)
+
+        raise ValueError(f"No source available for file: {file_info.path}")
+
+    def get_summary(self) -> Dict[str, Any]:
+        """Return summary of configured directories."""
+        return {
+            "available": [str(s.base_dir) for s in self.sources],
+            "unavailable": [str(d.path) for d in self.unavailable_dirs],
+            "total_sources": len(self.sources),
+        }
 
 
 class SimpleProgressBar:
@@ -910,8 +1141,10 @@ def configure_offline_mode(offline: bool, cache_dir: Path) -> None:
 def build_index(download_only: bool = False, offline: bool = False) -> None:
     """Build and persist the vector index incrementally."""
     configure_offline_mode(offline, RETRIEVAL_MODEL_CACHE_DIR)
-    
-    logger.info(f"Starting ingestion from {DATA_DIR}")
+
+    # Load configuration
+    ingest_config = load_ingest_config()
+    logger.info(f"Ingestion configured with {len(ingest_config.directories)} directories")
 
     ensure_embedding_model_cached(RETRIEVAL_MODEL_CACHE_DIR, offline=offline)
     try:
@@ -925,20 +1158,30 @@ def build_index(download_only: bool = False, offline: bool = False) -> None:
         logger.info("Models downloaded; skipping index build.")
         return
 
-    # Initialize State and Data Source
+    # Initialize State and Multi-Directory Data Source
     ingestion_state = IngestionState(STATE_DB_PATH)
-    data_source = LocalFileSystemSource(DATA_DIR)
+    data_source = MultiDirectoryDataSource(ingest_config)
+
+    # Log directory summary
+    summary = data_source.get_summary()
+    logger.info(f"Active directories: {summary['available']}")
+    if summary['unavailable']:
+        logger.warning(f"Unavailable directories (skipped): {summary['unavailable']}")
+
+    if not data_source.sources:
+        logger.error("No available directories to index. Check your ingest_config.json.")
+        return
 
     # Initialize Embedding Model
     logger.info(f"Initializing embedding model: {RETRIEVAL_EMBED_MODEL_NAME}")
     with Spinner("Initializing embedding model"):
         embed_model = _create_fastembed_embedding(RETRIEVAL_MODEL_CACHE_DIR, offline=offline)
     Settings.embed_model = embed_model
-    
-    # Configure Text Splitter
+
+    # Configure Text Splitter using config values
     text_splitter = SentenceSplitter(
-        chunk_size=CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP,
+        chunk_size=ingest_config.chunk_size,
+        chunk_overlap=ingest_config.chunk_overlap,
         separator=" ",
     )
     Settings.text_splitter = text_splitter
