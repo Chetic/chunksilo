@@ -22,11 +22,6 @@ mkdir -p "$COMMON_ROOT"
 python3.11 -m pip install --upgrade pip
 python3.11 -m pip install -r requirements.txt
 
-# Generate constraints file from installed packages to guide dependency resolution
-# This helps pip know what versions work together, reducing backtracking
-# Note: pip will find compatible versions for target platform if exact versions aren't available
-python3.11 -m pip freeze > "$COMMON_ROOT/minimal-constraints.txt"
-
 # Copy common files that are the same for all platforms
 cp chunksilo.py "$COMMON_ROOT/"
 cp cfgload.py "$COMMON_ROOT/"
