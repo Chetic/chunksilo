@@ -32,11 +32,11 @@ is_writable() {
 # Determine default install location
 determine_install_dir() {
     if [ -d "/data" ] && is_writable "/data"; then
-        echo "/data/opd-mcp"
+        echo "/data/ChunkSilo"
     elif [ -d "/localhome" ] && is_writable "/localhome"; then
-        echo "/localhome/opd-mcp"
+        echo "/localhome/ChunkSilo"
     else
-        echo "$HOME/opd-mcp"
+        echo "$HOME/ChunkSilo"
     fi
 }
 
@@ -76,7 +76,7 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-echo "=== opd-mcp Installer ==="
+echo "=== ChunkSilo Installer ==="
 
 # Prerequisites check
 find_python() {

@@ -32,7 +32,7 @@ if [ -z "$GITHUB_ACTIONS" ] && [ ! -f /etc/redhat-release ]; then
     "$CONTAINER_IMAGE" \
     bash /workspace/scripts/package-manylinux-2_28.sh "$VERSION"
   
-  echo "Package built successfully: build-output/opd-mcp-${VERSION}-manylinux_2_28_x86_64.tar.gz"
+  echo "Package built successfully: build-output/ChunkSilo-${VERSION}-manylinux_2_28_x86_64.tar.gz"
   exit 0
 fi
 
@@ -50,7 +50,7 @@ fi
 dnf install -y python3.11 python3.11-pip git which gcc gcc-c++ make
 
 # Prepare manylinux_2_28 release package
-PACKAGE_ROOT="release_package_manylinux_2_28/opd-mcp"
+PACKAGE_ROOT="release_package_manylinux_2_28/ChunkSilo"
 mkdir -p "$PACKAGE_ROOT"
 
 # Copy common files and models (including hidden files/directories)
@@ -122,16 +122,16 @@ WORK_DIR="/workspace"
 
 if [ -n "$GITHUB_ACTIONS" ] && [ -z "$LOCAL_DOCKER" ]; then
   # In actual CI, output to current directory
-  OUTPUT_TAR="opd-mcp-${VERSION}-manylinux_2_28_x86_64.tar.gz"
+  OUTPUT_TAR="ChunkSilo-${VERSION}-manylinux_2_28_x86_64.tar.gz"
   TAR_PATH="../$OUTPUT_TAR"
   FINAL_OUTPUT="$OUTPUT_TAR"
 else
   # Local Docker execution or when LOCAL_DOCKER is set, output to build-output directory
   OUTPUT_DIR="$WORK_DIR/build-output"
   mkdir -p "$OUTPUT_DIR"
-  OUTPUT_TAR="$OUTPUT_DIR/opd-mcp-${VERSION}-manylinux_2_28_x86_64.tar.gz"
+  OUTPUT_TAR="$OUTPUT_DIR/ChunkSilo-${VERSION}-manylinux_2_28_x86_64.tar.gz"
   # Create tarball in current directory first, then move it
-  TEMP_TAR="opd-mcp-${VERSION}-manylinux_2_28_x86_64.tar.gz"
+  TEMP_TAR="ChunkSilo-${VERSION}-manylinux_2_28_x86_64.tar.gz"
   TAR_PATH="../$TEMP_TAR"
   FINAL_OUTPUT="$OUTPUT_TAR"
 fi

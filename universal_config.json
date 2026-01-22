@@ -1,6 +1,6 @@
 {
     "mcp_server": {
-        "name": "opd-mcp",
+        "name": "ChunkSilo",
         "command": "venv/bin/python",
         "args": [
             "mcp_server.py"
