@@ -12,11 +12,6 @@ on:
           - major
           - minor
           - patch
-      include_manylinux_2_34:
-        description: "Include manylinux_2_34 build"
-        required: true
-        default: true
-        type: boolean
 
 permissions:
   contents: write
@@ -78,39 +73,97 @@ jobs:
           echo "last_tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
           echo "next_version=$NEXT_VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Build release notes from conventional commits
+      - name: Build release notes
         id: notes
         run: |
           set -eo pipefail
           NOTES_FILE="release-notes.md"
           LAST_TAG="${{ steps.version.outputs.last_tag }}"
+          NEXT_VERSION="${{ steps.version.outputs.next_version }}"
           if [ -z "$LAST_TAG" ]; then
             RANGE="HEAD"
           else
             RANGE="$LAST_TAG..HEAD"
           fi
 
-          echo "## Changes" > "$NOTES_FILE"
-          HAS_CHANGES=false
-          PATTERN='^(feat|fix|perf|refactor|docs)(\([^)]+\))?:\ (.+)$'
-          while IFS= read -r SUBJECT; do
-            if [[ $SUBJECT =~ $PATTERN ]]; then
-              TYPE=${BASH_REMATCH[1]}
-              SUMMARY=${BASH_REMATCH[3]}
-              case "$TYPE" in
-                feat) LABEL="Feature";;
-                fix) LABEL="Fix";;
-                perf) LABEL="Performance";;
-                refactor) LABEL="Refactor";;
-                docs) LABEL="Docs";;
-              esac
-              echo "- ${LABEL}: ${SUMMARY}" >> "$NOTES_FILE"
-              HAS_CHANGES=true
-            fi
-          done < <(git log $RANGE --pretty=format:"%s")
+          # Collect commits grouped by type (hash and subject)
+          declare -a FEATURES FIXES REFACTORS CHORES DOCS PERFS OTHERS
+          PATTERN='^(feat|fix|perf|refactor|docs|chore)(\([^)]+\))?:\ (.+)$'
 
-          if [ "$HAS_CHANGES" = false ]; then
-            echo "- No user-facing conventional commit changes since last release." >> "$NOTES_FILE"
+          while IFS= read -r LINE; do
+            HASH="${LINE:0:7}"
+            SUBJECT="${LINE:8}"
+
+            # Skip merge commits
+            if [[ "$SUBJECT" == Merge\ * ]]; then
+              continue
+            fi
+
+            if [[ $SUBJECT =~ $PATTERN ]]; then
+              TYPE="${BASH_REMATCH[1]}"
+              MSG="${BASH_REMATCH[3]}"
+              case "$TYPE" in
+                feat) FEATURES+=("- $MSG ($HASH)");;
+                fix) FIXES+=("- $MSG ($HASH)");;
+                perf) PERFS+=("- $MSG ($HASH)");;
+                refactor) REFACTORS+=("- $MSG ($HASH)");;
+                docs) DOCS+=("- $MSG ($HASH)");;
+                chore) CHORES+=("- $MSG ($HASH)");;
+              esac
+            else
+              OTHERS+=("- $SUBJECT ($HASH)")
+            fi
+          done < <(git log $RANGE --pretty=format:"%h %s")
+
+          # Write release notes
+          echo "## What's Changed" > "$NOTES_FILE"
+          echo "" >> "$NOTES_FILE"
+
+          if [ ${#FEATURES[@]} -gt 0 ]; then
+            echo "### Features" >> "$NOTES_FILE"
+            printf '%s\n' "${FEATURES[@]}" >> "$NOTES_FILE"
+            echo "" >> "$NOTES_FILE"
+          fi
+
+          if [ ${#FIXES[@]} -gt 0 ]; then
+            echo "### Fixes" >> "$NOTES_FILE"
+            printf '%s\n' "${FIXES[@]}" >> "$NOTES_FILE"
+            echo "" >> "$NOTES_FILE"
+          fi
+
+          if [ ${#PERFS[@]} -gt 0 ]; then
+            echo "### Performance" >> "$NOTES_FILE"
+            printf '%s\n' "${PERFS[@]}" >> "$NOTES_FILE"
+            echo "" >> "$NOTES_FILE"
+          fi
+
+          if [ ${#REFACTORS[@]} -gt 0 ]; then
+            echo "### Refactors" >> "$NOTES_FILE"
+            printf '%s\n' "${REFACTORS[@]}" >> "$NOTES_FILE"
+            echo "" >> "$NOTES_FILE"
+          fi
+
+          if [ ${#DOCS[@]} -gt 0 ]; then
+            echo "### Documentation" >> "$NOTES_FILE"
+            printf '%s\n' "${DOCS[@]}" >> "$NOTES_FILE"
+            echo "" >> "$NOTES_FILE"
+          fi
+
+          if [ ${#CHORES[@]} -gt 0 ]; then
+            echo "### Chores" >> "$NOTES_FILE"
+            printf '%s\n' "${CHORES[@]}" >> "$NOTES_FILE"
+            echo "" >> "$NOTES_FILE"
+          fi
+
+          if [ ${#OTHERS[@]} -gt 0 ]; then
+            echo "### Other" >> "$NOTES_FILE"
+            printf '%s\n' "${OTHERS[@]}" >> "$NOTES_FILE"
+            echo "" >> "$NOTES_FILE"
+          fi
+
+          # Add full changelog link
+          if [ -n "$LAST_TAG" ]; then
+            echo "**Full Changelog**: https://github.com/$GITHUB_REPOSITORY/compare/$LAST_TAG...v$NEXT_VERSION" >> "$NOTES_FILE"
           fi
 
           echo "file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
@@ -139,34 +192,26 @@ jobs:
     runs-on: ubuntu-latest
     container: registry.access.redhat.com/ubi9/ubi:9.7
     steps:
-      - name: include_manylinux_2_34 flag
-        run: echo "include_manylinux_2_34=${{ inputs.include_manylinux_2_34 }}"
-
       - name: Check out repository
-        if: ${{ inputs.include_manylinux_2_34 }}
         uses: actions/checkout@v4
 
       - name: Download common files artifact
-        if: ${{ inputs.include_manylinux_2_34 }}
         uses: actions/download-artifact@v4
         with:
           name: release-common-${{ needs.prepare.outputs.version }}
 
       - name: Extract common files (preserves file permissions)
-        if: ${{ inputs.include_manylinux_2_34 }}
         run: |
           mkdir -p release_common
           tar -xvf release_common.tar -C release_common
 
       - name: Build manylinux package
         id: build_package
-        if: ${{ inputs.include_manylinux_2_34 }}
         run: |
           chmod +x scripts/package-manylinux-2_34.sh
           scripts/package-manylinux-2_34.sh "${{ needs.prepare.outputs.version }}"
 
       - name: Upload manylinux package artifact
-        if: ${{ inputs.include_manylinux_2_34 }}
         uses: actions/upload-artifact@v4
         with:
           name: package-manylinux-2_34-${{ needs.prepare.outputs.version }}
@@ -185,7 +230,6 @@ jobs:
 
       - name: Download manylinux_2_34 package
         uses: actions/download-artifact@v4
-        if: ${{ inputs.include_manylinux_2_34 }}
         with:
           name: package-manylinux-2_34-${{ needs.prepare.outputs.version }}
           path: packages
@@ -196,46 +240,15 @@ jobs:
           name: release-notes-${{ needs.prepare.outputs.version }}
           path: .
 
-      - name: Find artifacts
-        id: find_artifacts
-        run: |
-          set -eo pipefail
-          if [[ "${{ inputs.include_manylinux_2_34 }}" == "true" ]]; then
-            PKG_234=$(find packages -name "chunksilo-*-manylinux_2_34*.tar.gz" -type f | head -1)
-            if [ -z "$PKG_234" ]; then
-              echo "Error: Missing manylinux_2_34 package" >&2
-              exit 1
-            fi
-            echo "package_234=$PKG_234" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create and push tag
+      - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eo pipefail
-          git config user.name "github-actions"
-          git config user.email "github-actions@users.noreply.github.com"
-          git tag -a "v${{ needs.prepare.outputs.version }}" -m "Release v${{ needs.prepare.outputs.version }}"
-          git push origin "v${{ needs.prepare.outputs.version }}"
-
-      - name: Upload manylinux_2_34 to Google Drive
-        if: ${{ inputs.include_manylinux_2_34 }}
-        uses: willo32/google-drive-upload-action@v1
-        with:
-          target: ${{ steps.find_artifacts.outputs.package_234 }}
-          credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
-          parent_folder_id: ${{ secrets.GDRIVE_FOLDER_ID }}
-          child_folder: v${{ needs.prepare.outputs.version }}
-
-      - name: Upload release notes to Google Drive
-        uses: willo32/google-drive-upload-action@v1
-        with:
-          target: release-notes.md
-          credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
-          parent_folder_id: ${{ secrets.GDRIVE_FOLDER_ID }}
-          child_folder: v${{ needs.prepare.outputs.version }}
-          name: RELEASE-NOTES.md
+          gh release create "v${{ needs.prepare.outputs.version }}" \
+            --title "v${{ needs.prepare.outputs.version }}" \
+            --notes-file release-notes.md \
+            packages/*.tar.gz
 
       - name: Delete workflow artifacts
         env:
