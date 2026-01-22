@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Indexing pipeline for building a RAG index from PDF, DOCX, Markdown, and TXT documents.
+Indexing pipeline for building a RAG index from PDF, DOCX, DOC, Markdown, and TXT documents.
 Supports incremental indexing using a local SQLite database to track file states.
 """
 import argparse
@@ -39,6 +39,7 @@ from llama_index.core.node_parser import SentenceSplitter
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
 # Load configuration from config.json
+import cfgload
 from cfgload import load_config
 _config = load_config()
 
@@ -93,7 +94,7 @@ logger = logging.getLogger(__name__)
 
 
 # Default file type patterns
-DEFAULT_INCLUDE_PATTERNS = ["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx"]
+DEFAULT_INCLUDE_PATTERNS = ["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx", "**/*.doc"]
 
 
 @dataclass
@@ -564,6 +565,25 @@ class LocalFileSystemSource(DataSource):
         file_path = Path(file_info.path)
         if file_path.suffix.lower() == ".docx":
             return split_docx_into_heading_documents(file_path)
+        elif file_path.suffix.lower() == ".doc":
+            # Convert .doc to .docx using LibreOffice, then process
+            docx_path = _convert_doc_to_docx(file_path)
+            if docx_path is None:
+                logger.warning(f"Skipping {file_path}: could not convert .doc to .docx")
+                return []
+            try:
+                docs = split_docx_into_heading_documents(docx_path)
+                # Update metadata to point to original .doc file
+                for doc in docs:
+                    doc.metadata["file_path"] = str(file_path)
+                    doc.metadata["file_name"] = file_path.name
+                    if "source" in doc.metadata:
+                        doc.metadata["source"] = str(file_path)
+                return docs
+            finally:
+                # Clean up temp file
+                if docx_path.exists():
+                    docx_path.unlink()
         else:
             reader = SimpleDirectoryReader(
                 input_files=[str(file_path)],
@@ -895,6 +915,70 @@ def _parse_heading_level(style_name: str | None) -> int:
     except (ValueError, AttributeError):
         pass
     return 1
+
+
+def _get_doc_temp_dir() -> Path:
+    """Get the temporary directory for .doc conversion, creating it if needed."""
+    storage_dir = Path(cfgload.get("storage.storage_dir", "./storage"))
+    temp_dir = storage_dir / "doc_temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    return temp_dir
+
+
+def _convert_doc_to_docx(doc_path: Path) -> Path | None:
+    """Convert a .doc file to .docx using LibreOffice.
+
+    Returns path to temporary .docx file, or None if conversion fails.
+    Caller is responsible for cleaning up the temp file.
+    """
+    import subprocess
+    import shutil
+
+    # Find LibreOffice executable
+    soffice_paths = [
+        "/Applications/LibreOffice.app/Contents/MacOS/soffice",  # macOS
+        "/usr/bin/soffice",  # Linux
+        "/usr/bin/libreoffice",  # Linux alternative
+        "soffice",  # Windows (in PATH)
+    ]
+
+    soffice = None
+    for path in soffice_paths:
+        if shutil.which(path):
+            soffice = path
+            break
+
+    if not soffice:
+        logger.warning(f"LibreOffice not found. Cannot convert {doc_path}")
+        return None
+
+    # Use storage directory for temp files (more reliable space than /tmp)
+    temp_dir = _get_doc_temp_dir()
+
+    try:
+        result = subprocess.run(
+            [soffice, "--headless", "--convert-to", "docx",
+             "--outdir", str(temp_dir), str(doc_path)],
+            capture_output=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            logger.warning(f"LibreOffice conversion failed for {doc_path}: {result.stderr}")
+            return None
+
+        # Find the converted file
+        docx_name = doc_path.stem + ".docx"
+        docx_path = temp_dir / docx_name
+        if docx_path.exists():
+            return docx_path
+
+        logger.warning(f"Converted file not found: {docx_path}")
+    except subprocess.TimeoutExpired:
+        logger.warning(f"LibreOffice conversion timed out for {doc_path}")
+    except Exception as e:
+        logger.warning(f"Error converting {doc_path}: {e}")
+
+    return None
 
 
 def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocument]:

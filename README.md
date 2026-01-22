@@ -1,6 +1,6 @@
 # ChunkSilo MCP Server
 
-Local semantic search for PDF, DOCX, Markdown, and TXT files. The MCP server efficiently retrieves chunks of text with sources and the LLM can either answer questions or go to the document and find more information.
+Local semantic search for PDF, DOCX, DOC, Markdown, and TXT files. The MCP server efficiently retrieves chunks of text with sources and the LLM can either answer questions or go to the document and find more information.
 
 ## Features
 
@@ -103,7 +103,7 @@ All settings are optional and have sensible defaults.
 | Option | Default | Description |
 | :--- | :--- | :--- |
 | `path` | (required) | Directory path to index |
-| `include` | `["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx"]` | Glob patterns for files to include |
+| `include` | `["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx", "**/*.doc"]` | Glob patterns for files to include |
 | `exclude` | `[]` | Glob patterns for files to exclude |
 | `recursive` | `true` | Whether to recurse into subdirectories |
 | `enabled` | `true` | Whether to index this directory |
@@ -224,6 +224,7 @@ mcpServers:
 - **Confluence Integration**: Set `confluence.url`, `confluence.username`, and `confluence.api_token` in `config.json` to enable Confluence search.
 - **Custom CA Bundle**: Set `ssl.ca_bundle_path` in `config.json` for custom certificates.
 - **Network mounts**: Unavailable directories are skipped with a warning; indexing continues with available directories.
+- **Legacy .doc files**: Requires LibreOffice to be installed for automatic conversion to .docx. If LibreOffice is not found, .doc files are skipped with a warning. Full heading extraction is supported.
 
 ## Development & Testing
 

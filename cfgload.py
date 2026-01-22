@@ -16,7 +16,7 @@ _DEFAULTS: dict[str, Any] = {
     "indexing": {
         "directories": ["./data"],
         "defaults": {
-            "include": ["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx"],
+            "include": ["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx", "**/*.doc"],
             "exclude": [],
             "recursive": True,
         },
