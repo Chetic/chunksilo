@@ -252,7 +252,7 @@ jobs:
         run: |
           set -eo pipefail
           if [[ "${{ inputs.include_manylinux_2_34 }}" == "true" ]]; then
-            PKG_234=$(find packages -name "opd-mcp-*-manylinux_2_34*.tar.gz" -type f | head -1)
+            PKG_234=$(find packages -name "chunksilo-*-manylinux_2_34*.tar.gz" -type f | head -1)
             if [ -z "$PKG_234" ]; then
               echo "Error: Missing manylinux_2_34 package" >&2
               exit 1
@@ -260,7 +260,7 @@ jobs:
             echo "package_234=$PKG_234" >> "$GITHUB_OUTPUT"
           fi
           if [[ "${{ inputs.include_manylinux_2_28 }}" == "true" ]]; then
-            PKG_228=$(find packages -name "opd-mcp-*-manylinux_2_28*.tar.gz" -type f | head -1)
+            PKG_228=$(find packages -name "chunksilo-*-manylinux_2_28*.tar.gz" -type f | head -1)
             if [ -z "$PKG_228" ]; then
               echo "Error: Missing manylinux_2_28 package" >&2
               exit 1

@@ -1,6 +1,6 @@
 # Test Suite
 
-This directory contains all test-related files for the On-Prem Docs MCP Server.
+This directory contains all test-related files for ChunkSilo.
 
 ## Structure
 

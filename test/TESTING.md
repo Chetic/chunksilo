@@ -1,4 +1,4 @@
-## Testing On-Prem Docs MCP Server
+## Testing ChunkSilo
 
 This guide shows how to test the **retrieval-only MCP server** using the included Python test scripts.
 

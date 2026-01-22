@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for opd-mcp tests."""
+"""Shared pytest fixtures for ChunkSilo tests."""
 import os
 import pytest
 from pathlib import Path

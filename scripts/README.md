@@ -52,7 +52,7 @@ The script will:
 ## Output
 
 The built package is placed in the `build-output/` directory:
-- `opd-mcp-{VERSION}-manylinux_2_34_x86_64.zip`
+- `chunksilo-{VERSION}-manylinux_2_34_x86_64.zip`
 
 ## Cleanup
 

@@ -1,4 +1,4 @@
-# On-Prem Docs MCP Server
+# ChunkSilo
 
 Fully local semantic search for your PDF, DOCX, Markdown, and TXT files. The MCP server only retrieves chunks; your LLM (via Continue, Cline, or Roo Code) does the answering. No data leaves your machine.
 
@@ -13,14 +13,14 @@ Fully local semantic search for your PDF, DOCX, Markdown, and TXT files. The MCP
 
 ## Quick Installation (Recommended)
 
-The easiest way to install is using the self-contained installer script from the [Releases page](https://github.com/Chetic/opd-mcp/releases).
+The easiest way to install is using the self-contained installer script from the [Releases page](https://github.com/Chetic/chunksilo/releases).
 
-1. **Download** the `opd-mcp-vX.Y.Z-installer.sh` file.
+1. **Download** the `chunksilo-vX.Y.Z-installer.sh` file.
 2. **Run** the installer:
 
 ```bash
-chmod +x opd-mcp-installer.sh
-./opd-mcp-installer.sh
+chmod +x chunksilo-installer.sh
+./chunksilo-installer.sh
 ```
 
 All parameters are optional. The installer will ask you for any required information if it is not provided via flags.
@@ -32,7 +32,7 @@ All parameters are optional. The installer will ask you for any required informa
 | `--tool <name>` | Target tool to configure: `cline`, `roo`, `continue`. |
 | `--project [path]` | Configure for a specific project. Defaults to global if omitted. |
 | `--editor <name>` | For global install: `code`, `cursor`, `windsurf`, `antigravity`, `vscodium`, etc. Auto-detects VS Code if it's the only available editor. |
-| `--location <path>` | Install destination (defaults to `/data/opd-mcp`, `/localhome/opd-mcp`, or `~/opd-mcp`). |
+| `--location <path>` | Install destination (defaults to `/data/chunksilo`, `/localhome/chunksilo`, or `~/chunksilo`). |
 | `--overwrite` | Force overwrite of existing files and configs. |
 
 ## Manual / Developer Installation
