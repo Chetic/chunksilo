@@ -349,10 +349,12 @@ done
 
 # Setup venv
 cd "$INSTALL_DIR"
-if [ ! -d ".venv" ]; then
-    echo "Creating virtual environment..."
-    $PYTHON_CMD -m venv .venv
+if [ -d ".venv" ]; then
+    echo "Removing existing virtual environment..."
+    rm -rf .venv
 fi
+echo "Creating virtual environment..."
+$PYTHON_CMD -m venv .venv
 
 echo "Installing dependencies..."
 DEP_DIR="$INSTALL_DIR/dependencies"
