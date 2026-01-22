@@ -5,9 +5,9 @@ set -e
 
 # Create a temporary directory for extraction.
 # Avoid /tmp to support systems where it is not writable.
-BASE_TEMP_DIR=${TMPDIR:-"$HOME/.cache/opd-mcp"}
+BASE_TEMP_DIR=${TMPDIR:-"$HOME/.cache/chunksilo"}
 mkdir -p "$BASE_TEMP_DIR"
-TEMP_DIR=$(mktemp -d "$BASE_TEMP_DIR/opd-mcp-installer.XXXXXXXX")
+TEMP_DIR=$(mktemp -d "$BASE_TEMP_DIR/chunksilo-installer.XXXXXXXX")
 LAUNCH_DIR=$(pwd)
 
 # Function to cleanup temp dir

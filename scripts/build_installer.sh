@@ -7,7 +7,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(dirname "$SCRIPT_DIR")
 BUILD_DIR="$REPO_ROOT/build-output"
 PAYLOAD_ROOT="${1:-}"
-ARTIFACT_NAME="opd-mcp-installer.sh"
+ARTIFACT_NAME="chunksilo-installer.sh"
 
 mkdir -p "$BUILD_DIR"
 
@@ -16,10 +16,10 @@ echo "Building installer..."
 # Pick a payload root that already contains pre-downloaded wheels so the
 # installer remains fully offline.
 if [ -z "$PAYLOAD_ROOT" ]; then
-    if [ -d "$REPO_ROOT/release_package_manylinux_2_34/opd-mcp" ]; then
-        PAYLOAD_ROOT="$REPO_ROOT/release_package_manylinux_2_34/opd-mcp"
-    elif [ -d "$REPO_ROOT/release_package_manylinux_2_28/opd-mcp" ]; then
-        PAYLOAD_ROOT="$REPO_ROOT/release_package_manylinux_2_28/opd-mcp"
+    if [ -d "$REPO_ROOT/release_package_manylinux_2_34/chunksilo" ]; then
+        PAYLOAD_ROOT="$REPO_ROOT/release_package_manylinux_2_34/chunksilo"
+    elif [ -d "$REPO_ROOT/release_package_manylinux_2_28/chunksilo" ]; then
+        PAYLOAD_ROOT="$REPO_ROOT/release_package_manylinux_2_28/chunksilo"
     else
         PAYLOAD_ROOT="$REPO_ROOT"
     fi

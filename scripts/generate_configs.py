@@ -105,24 +105,24 @@ def generate_cline_config(config, output_dir, cwd, force=False):
     }
     
     # Rules
-    # User requested: "write (and overwrite) its own opd-mcp.md file to the global clinerules directory"
+    # User requested: "write (and overwrite) its own chunksilo.md file to the global clinerules directory"
     # The output_dir passed in for Cline global is typically ".../settings".
     # We should look for "prompts" or "rules" directory relative to it?
     # Standard Cline (Claude Dev) separation isn't strictly defined for global rules, BUT
     # recent updates added Custom Instructions which are stored in `globalStorage/saoudrizwan.claude-dev/settings/cline_custom_instructions.json`?
     # OR user likely has a `rules` folder if they are asking for this.
-    # Let's attempt to write to `opd-mcp.md` in the same directory, or if a `rules` subdir exists.
-    
+    # Let's attempt to write to `chunksilo.md` in the same directory, or if a `rules` subdir exists.
+
     os.makedirs(output_dir, exist_ok=True)
-    
+
     safe_write_json(os.path.join(output_dir, "cline_mcp_settings.json"), mcp_settings, force)
 
     # For rules, we write a separate markdown file as requested.
     # We will try to place it in 'rules' subdir if it exists, otherwise in current dir?
-    # Or just `opd-mcp-rules.md` in the settings dir to be safe.
-    
+    # Or just `chunksilo-rules.md` in the settings dir to be safe.
+
     rules_content = config["rules"]["system_prompt"]
-    rules_path = os.path.join(output_dir, "opd-mcp-rules.md")
+    rules_path = os.path.join(output_dir, "chunksilo-rules.md")
     
     # Check if a rules directory is expected?
     # "global clinerules directory".
@@ -157,27 +157,27 @@ def generate_roo_config(config, output_dir, cwd, force=False):
     os.makedirs(rules_dir, exist_ok=True)
     
     # Write separate rule file
-    safe_write_text(os.path.join(rules_dir, "opd-mcp-rules.md"), config["rules"]["system_prompt"], force)
+    safe_write_text(os.path.join(rules_dir, "chunksilo-rules.md"), config["rules"]["system_prompt"], force)
     
     print(f"Generated Roo Code config in {output_dir}")
 
 def generate_continue_config(config, output_dir, cwd, force=False):
-    # mcpServers/opd-mcp.yaml
-    
+    # mcpServers/chunksilo.yaml
+
     servers_dir = os.path.join(output_dir, "mcpServers")
     os.makedirs(servers_dir, exist_ok=True)
-    
+
     # Continue supports multiple config files, so we simply write our own.
-    # This is already "separate" (opd-mcp.yaml).
+    # This is already "separate" (chunksilo.yaml).
     # We still check if it exists and backup.
-    
+
     server_name = config["mcp_server"]["name"]
     command = config["mcp_server"]["command"]
     args = config["mcp_server"]["args"]
     env = config["mcp_server"]["env"]
-    
+
     # Manual YAML construction
-    yaml_content = f"""name: On-Prem Docs MCP
+    yaml_content = f"""name: ChunkSilo
 version: 1.0.0
 schema: v1
 mcpServers:
@@ -195,14 +195,14 @@ mcpServers:
         for k, v in env.items():
             yaml_content += f"\n      {k}: {v}"
             
-    safe_write_text(os.path.join(servers_dir, "opd-mcp.yaml"), yaml_content, force)
-        
+    safe_write_text(os.path.join(servers_dir, "chunksilo.yaml"), yaml_content, force)
+
     # Rules
     # Continue rules can be separate files too.
     rules_dir = os.path.join(output_dir, "rules")
     os.makedirs(rules_dir, exist_ok=True)
-    
-    safe_write_text(os.path.join(rules_dir, "opd-mcp-system-prompt.md"), config["rules"]["system_prompt"], force)
+
+    safe_write_text(os.path.join(rules_dir, "chunksilo-system-prompt.md"), config["rules"]["system_prompt"], force)
         
     print(f"Generated Continue config in {output_dir}")
 
