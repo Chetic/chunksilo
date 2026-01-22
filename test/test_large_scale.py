@@ -36,9 +36,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Force online mode for tests (to download models)
-os.environ["OFFLINE"] = "0"
-
 # Import after logging is set up
 from index import STORAGE_DIR, build_index
 from chunksilo import retrieve_docs

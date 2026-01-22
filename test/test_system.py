@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 """Pytest-based test script for the RAG system."""
-import os
 import sys
 from pathlib import Path
 import pytest
 import asyncio
-
-# Disable offline mode for tests that need to download models
-os.environ["OFFLINE"] = "0"
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))

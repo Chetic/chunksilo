@@ -7,7 +7,6 @@ Verifies that heading_path is correctly populated for:
 - PDF Documents (.pdf) - (Expectation: None, unless specific PDF structure logic exists)
 """
 
-import os
 import shutil
 import pytest
 from pathlib import Path
@@ -27,9 +26,6 @@ except ImportError:
 # Import project modules
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
-
-# Disable offline mode for tests that need to download models
-os.environ["OFFLINE"] = "0"
 
 # We need to import index and chunksilo after setting up sys.path
 # We will patch their globals during tests

@@ -39,8 +39,7 @@ cp install.sh "$COMMON_ROOT/"
 echo "$VERSION" > "$COMMON_ROOT/VERSION"
 
 # Download the embedding + rerank models once (they're the same for all platforms)
-export RETRIEVAL_MODEL_CACHE_DIR="$COMMON_ROOT/models"
-python3.11 index.py --download-models
+python3.11 index.py --download-models --model-cache-dir "$COMMON_ROOT/models"
 
 # Verify models were downloaded
 if [ -d "$COMMON_ROOT/models" ]; then

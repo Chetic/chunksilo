@@ -1233,17 +1233,22 @@ def configure_offline_mode(offline: bool, cache_dir: Path) -> None:
         pass
 
 
-def build_index(download_only: bool = False, offline: bool = False) -> None:
+def build_index(
+    download_only: bool = False,
+    offline: bool = False,
+    model_cache_dir: str | None = None,
+) -> None:
     """Build and persist the vector index incrementally."""
-    configure_offline_mode(offline, RETRIEVAL_MODEL_CACHE_DIR)
+    cache_dir = Path(model_cache_dir) if model_cache_dir else RETRIEVAL_MODEL_CACHE_DIR
+    configure_offline_mode(offline, cache_dir)
 
     # Load configuration
     index_config = load_index_config()
     logger.info(f"Indexing configured with {len(index_config.directories)} directories")
 
-    ensure_embedding_model_cached(RETRIEVAL_MODEL_CACHE_DIR, offline=offline)
+    ensure_embedding_model_cached(cache_dir, offline=offline)
     try:
-        ensure_rerank_model_cached(RETRIEVAL_MODEL_CACHE_DIR, offline=offline)
+        ensure_rerank_model_cached(cache_dir, offline=offline)
     except FileNotFoundError:
         if download_only or offline:
             raise
@@ -1376,10 +1381,19 @@ if __name__ == "__main__":
         action="store_true",
         help="Run entirely offline",
     )
+    parser.add_argument(
+        "--model-cache-dir",
+        type=str,
+        help="Override the model cache directory from config.json",
+    )
     args = parser.parse_args()
 
     try:
-        build_index(download_only=args.download_models, offline=args.offline)
+        build_index(
+            download_only=args.download_models,
+            offline=args.offline,
+            model_cache_dir=args.model_cache_dir,
+        )
     except Exception as e:
         logger.error(f"Indexing failed: {e}", exc_info=True)
         raise

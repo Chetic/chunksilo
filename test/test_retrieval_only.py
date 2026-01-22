@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
 """Test the RAG system in retrieval-only mode (no LLM in the MCP server)."""
-import os
 import sys
 import traceback
 from pathlib import Path
 from dotenv import load_dotenv
 import pytest
-
-# Disable offline mode for tests that need to download models
-os.environ["OFFLINE"] = "0"
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
