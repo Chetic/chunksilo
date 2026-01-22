@@ -31,7 +31,7 @@ jobs:
           DATA_DIR: ./test_data_dummy
           STORAGE_DIR: ./test_storage_dummy
         run: |
-          python ingest.py --download-models
+          python index.py --download-models
 
       - name: Run all functional tests
         env:

@@ -1,7 +1,0 @@
-{
-  "directories": [
-    "./data"
-  ],
-  "chunk_size": 1600,
-  "chunk_overlap": 200
-}

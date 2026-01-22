@@ -194,7 +194,7 @@ You can also run the MCP server directly:
 
 ```bash
 source .venv/bin/activate
-python mcp_server.py
+python chunksilo.py
 ```
 
 The server speaks MCP over stdio and is normally launched by an MCP client (such as Continue). Running it manually is useful for debugging, but you'll need an MCP-aware client to actually send tool calls.

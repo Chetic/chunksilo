@@ -31,10 +31,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Disable offline mode for tests that need to download models
 os.environ["OFFLINE"] = "0"
 
-# We need to import ingest and mcp_server after setting up sys.path
+# We need to import index and chunksilo after setting up sys.path
 # We will patch their globals during tests
-import ingest
-import mcp_server
+import index
+import chunksilo
+import cfgload
 
 @pytest.fixture
 def test_env(tmp_path):
@@ -137,27 +138,38 @@ async def _async_test_heading_path_extraction(test_env):
     # 2. Run Ingestion
     # Create temporary config file for ingestion
     import json
-    config_path = storage_dir.parent / "ingest_config.json"
+    config_path = storage_dir.parent / "config.json"
     config_path.write_text(json.dumps({
-        "directories": [str(data_dir)],
-        "chunk_size": 200,
-        "chunk_overlap": 25
+        "indexing": {
+            "directories": [str(data_dir)],
+            "chunk_size": 200,
+            "chunk_overlap": 25
+        },
+        "storage": {
+            "storage_dir": str(storage_dir),
+            "model_cache_dir": "./models"
+        }
     }))
 
-    # Patch globals in ingest module
-    with patch("ingest.INGEST_CONFIG_PATH", config_path), \
-         patch("ingest.STORAGE_DIR", storage_dir), \
-         patch("ingest.STATE_DB_PATH", storage_dir / "ingestion_state.db"), \
-         patch("ingest.RETRIEVAL_MODEL_CACHE_DIR", Path("./models").resolve()), \
-         patch("mcp_server.STORAGE_DIR", storage_dir), \
-         patch("mcp_server.RETRIEVAL_MODEL_CACHE_DIR", Path("./models").resolve()):
+    # Save and patch config module
+    orig_config_path = cfgload.CONFIG_PATH
+    orig_config_cache = cfgload._config_cache
+    cfgload.CONFIG_PATH = config_path
+    cfgload._config_cache = None
+
+    # Patch globals in index and chunksilo modules
+    with patch("index.STORAGE_DIR", storage_dir), \
+         patch("index.STATE_DB_PATH", storage_dir / "ingestion_state.db"), \
+         patch("index.RETRIEVAL_MODEL_CACHE_DIR", Path("./models").resolve()), \
+         patch("chunksilo.STORAGE_DIR", storage_dir), \
+         patch("chunksilo.RETRIEVAL_MODEL_CACHE_DIR", Path("./models").resolve()):
         
         # Ensure we don't try to download models in tests if not needed, 
         # or assume they are present/mocked.
-        # ingest.build_index() calls ensure_embedding_model_cached.
+        # index.build_index() calls ensure_embedding_model_cached.
         # Use offline mode to avoid network hits, assuming models are cached or we accept failure/skip.
         # For this integration test, we might need the models if the ingestion *uses* them to embed.
-        # ingest.py: build_index -> index.insert(doc) -> uses embed model.
+        # index.py: build_index -> index.insert(doc) -> uses embed model.
         
         # If models are not cached locally, this test might fail or need network.
         # The environment likely has them if previous tests passed.
@@ -165,7 +177,7 @@ async def _async_test_heading_path_extraction(test_env):
         # Given "run or add an automated test", let's try to reuse existing cache.
         
         # To avoid expensive embedding validation in this logic test, we could mock the embedding model,
-        # but ingest.py is tightly coupled.
+        # but index.py is tightly coupled.
         # Let's rely on --offline flag or env vars set by checking existing tests.
         
         # Patching ensure_embedding_model_cached to be a no-op or valid mock might be safer 
@@ -199,23 +211,23 @@ async def _async_test_heading_path_extraction(test_env):
         
         mock_embed = MockEmbedding(model_name="mock")
         
-        with patch("ingest._create_fastembed_embedding", return_value=mock_embed), \
-             patch("ingest.ensure_embedding_model_cached"), \
-             patch("ingest.ensure_rerank_model_cached"):
+        with patch("index._create_fastembed_embedding", return_value=mock_embed), \
+             patch("index.ensure_embedding_model_cached"), \
+             patch("index.ensure_rerank_model_cached"):
                  
-            ingest.build_index(offline=True)
+            index.build_index(offline=True)
 
             # 3. Run Retrieval
             # Reset server cache
-            mcp_server._index_cache = None
+            chunksilo._index_cache = None
             
             # Patch mcp_server globals
             # Mock reranker too
-            mcp_server.RETRIEVAL_EMBED_TOP_K = 100 # Ensure we get our docs
+            chunksilo.RETRIEVAL_EMBED_TOP_K = 100 # Ensure we get our docs
             
-            # We also need to patch the embedding model inside mcp_server._ensure_embed_model
-            with patch("mcp_server.FastEmbedEmbedding", return_value=mock_embed), \
-                 patch("mcp_server.Settings") as mock_settings:
+            # We also need to patch the embedding model inside chunksilo._ensure_embed_model
+            with patch("chunksilo.FastEmbedEmbedding", return_value=mock_embed), \
+                 patch("chunksilo.Settings") as mock_settings:
                 
                 # We need to manually set the embed model because _ensure_embed_model sets it on global Settings
                 mock_settings.embed_model = mock_embed
@@ -228,7 +240,7 @@ async def _async_test_heading_path_extraction(test_env):
                         # Simple score based on term overlap or just passthrough
                         return [{"text": p["text"], "score": 1.0} for p in request.passages]
                 
-                with patch("mcp_server._ensure_reranker", return_value=MockReranker()):
+                with patch("chunksilo._ensure_reranker", return_value=MockReranker()):
                     
                     # Test Markdown
                     print("Querying Markdown...")
@@ -271,30 +283,30 @@ async def _async_test_heading_path_extraction(test_env):
 
         mock_embed = BoWEmbedding(model_name="mock")
 
-        with patch("ingest._create_fastembed_embedding", return_value=mock_embed), \
-             patch("ingest.ensure_embedding_model_cached"), \
-             patch("ingest.ensure_rerank_model_cached"):
+        with patch("index._create_fastembed_embedding", return_value=mock_embed), \
+             patch("index.ensure_embedding_model_cached"), \
+             patch("index.ensure_rerank_model_cached"):
                  
-            ingest.build_index(offline=True)
+            index.build_index(offline=True)
 
             # Reset mcp_server state to ensure mocks are used
-            mcp_server._index_cache = None
-            mcp_server._embed_model_initialized = False
-            mcp_server.RETRIEVAL_EMBED_TOP_K = 100
+            chunksilo._index_cache = None
+            chunksilo._embed_model_initialized = False
+            chunksilo.RETRIEVAL_EMBED_TOP_K = 100
 
             # Set the embedding model directly on the real Settings object
             from llama_index.core import Settings
             Settings.embed_model = mock_embed
 
-            with patch("mcp_server.FastEmbedEmbedding", return_value=mock_embed):
+            with patch("chunksilo.FastEmbedEmbedding", return_value=mock_embed):
                 class MockReranker:
                     def rerank(self, request): return [{"text": p["text"], "score": 1.0} for p in request.passages]
                 
-                with patch("mcp_server._ensure_reranker", return_value=MockReranker()):
+                with patch("chunksilo._ensure_reranker", return_value=MockReranker()):
                     
                     # Test Markdown - find any chunk from .md file with heading_path
                     print("Querying Markdown...")
-                    result_md = await mcp_server.retrieve_docs("Lorem ipsum dolor sit amet consectetur")
+                    result_md = await chunksilo.retrieve_docs("Lorem ipsum dolor sit amet consectetur")
                     chunks_md = result_md["chunks"]
 
                     # Filter for chunks from MD file by URI
@@ -314,7 +326,7 @@ async def _async_test_heading_path_extraction(test_env):
                     # Test DOCX - try to find DOCX chunk with heading_path
                     # Note: With mock BoW embedding, DOCX may not always rank in top results
                     print("Querying DOCX...")
-                    result_docx = await mcp_server.retrieve_docs("Chapter Introduction Architecture Components system design")
+                    result_docx = await chunksilo.retrieve_docs("Chapter Introduction Architecture Components system design")
                     chunks_docx = result_docx["chunks"]
 
                     # Filter for chunks from DOCX file by URI
@@ -337,7 +349,7 @@ async def _async_test_heading_path_extraction(test_env):
                     # Test PDF - try to find PDF chunk
                     # Note: PDFs typically don't have heading_path unless they have a TOC
                     print("Querying PDF...")
-                    result_pdf = await mcp_server.retrieve_docs("PDF Title content Target")
+                    result_pdf = await chunksilo.retrieve_docs("PDF Title content Target")
                     chunks_pdf = result_pdf["chunks"]
 
                     # Filter for chunks from PDF file by URI
@@ -347,7 +359,11 @@ async def _async_test_heading_path_extraction(test_env):
                         print(f"PDF Location: {pdf_chunk['location']}")
                     else:
                         print("⚠ PDF chunk not retrieved by mock embedding (non-critical)")
-                    
+
+    # Restore config module state
+    cfgload.CONFIG_PATH = orig_config_path
+    cfgload._config_cache = orig_config_cache
+
 if __name__ == "__main__":
     # Allow running directly
     sys.exit(pytest.main(["-v", __file__]))

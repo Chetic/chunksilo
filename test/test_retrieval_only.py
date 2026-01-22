@@ -13,8 +13,8 @@ os.environ["OFFLINE"] = "0"
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from ingest import load_ingest_config, build_index
-from mcp_server import STORAGE_DIR, load_llamaindex_index
+from index import load_index_config, build_index
+from chunksilo import STORAGE_DIR, load_llamaindex_index
 
 load_dotenv()
 
@@ -26,11 +26,11 @@ def test_ingestion():
     print("=" * 60)
 
     try:
-        config = load_ingest_config()
+        config = load_index_config()
         if not config.directories:
-            pytest.skip("No directories configured in ingest_config.json")
+            pytest.skip("No directories configured in config.json")
     except FileNotFoundError:
-        pytest.skip("ingest_config.json not found; create config before running ingestion tests.")
+        pytest.skip("config.json not found; create config before running ingestion tests.")
 
     build_index()
     print("✓ Ingestion completed successfully")

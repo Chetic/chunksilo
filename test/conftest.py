@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 
 # Disable offline mode for tests that need to download models
-# This must be set BEFORE any test file imports mcp_server
+# This must be set BEFORE any test file imports chunksilo
 os.environ["OFFLINE"] = "0"
 
 # Add project root to path
@@ -101,47 +101,47 @@ def sample_nodes():
 
 @pytest.fixture
 def patched_ingest_globals(test_env):
-    """Patch ingest module globals for isolated testing.
+    """Patch index module globals for isolated testing.
 
     This fixture patches STORAGE_DIR and STATE_DB_PATH
     to use temporary directories, then restores originals after test.
     Note: DATA_DIR was removed in favor of config-based directories.
     """
-    import ingest
+    import index
 
     original = {
-        "STORAGE_DIR": ingest.STORAGE_DIR,
-        "STATE_DB_PATH": ingest.STATE_DB_PATH,
+        "STORAGE_DIR": index.STORAGE_DIR,
+        "STATE_DB_PATH": index.STATE_DB_PATH,
     }
 
-    ingest.STORAGE_DIR = test_env["storage_dir"]
-    ingest.STATE_DB_PATH = test_env["db_path"]
+    index.STORAGE_DIR = test_env["storage_dir"]
+    index.STATE_DB_PATH = test_env["db_path"]
 
     yield test_env
 
     # Restore originals
-    ingest.STORAGE_DIR = original["STORAGE_DIR"]
-    ingest.STATE_DB_PATH = original["STATE_DB_PATH"]
+    index.STORAGE_DIR = original["STORAGE_DIR"]
+    index.STATE_DB_PATH = original["STATE_DB_PATH"]
 
 
 @pytest.fixture
 def patched_mcp_globals(test_env):
-    """Patch mcp_server module globals for isolated testing.
+    """Patch chunksilo module globals for isolated testing.
 
     This fixture patches STORAGE_DIR and resets caches to ensure
     tests don't interfere with each other.
     """
-    import mcp_server
+    import chunksilo
 
-    original_storage = mcp_server.STORAGE_DIR
-    original_initialized = mcp_server._embed_model_initialized
+    original_storage = chunksilo.STORAGE_DIR
+    original_initialized = chunksilo._embed_model_initialized
 
-    mcp_server.STORAGE_DIR = test_env["storage_dir"]
-    mcp_server._index_cache = None
-    mcp_server._embed_model_initialized = False
+    chunksilo.STORAGE_DIR = test_env["storage_dir"]
+    chunksilo._index_cache = None
+    chunksilo._embed_model_initialized = False
 
     yield test_env
 
-    mcp_server.STORAGE_DIR = original_storage
-    mcp_server._index_cache = None
-    mcp_server._embed_model_initialized = original_initialized
+    chunksilo.STORAGE_DIR = original_storage
+    chunksilo._index_cache = None
+    chunksilo._embed_model_initialized = original_initialized

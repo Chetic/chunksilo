@@ -7,11 +7,11 @@ from pathlib import Path
 from unittest.mock import patch
 import pytest
 
-# Add parent directory to path to import ingest modules
+# Add parent directory to path to import index modules
 sys.path.append(str(Path(__file__).parent.parent))
 
-import ingest
-from ingest import build_index, IngestionState
+import index
+from index import build_index, IngestionState, IndexConfig, DirectoryConfig
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO)
@@ -55,38 +55,34 @@ def test_env(tmp_path):
     storage_dir = tmp_path / "storage"
     db_path = storage_dir / "ingestion_state.db"
 
-    # Create temporary ingest config pointing to test data dir
-    config_path = tmp_path / "ingest_config.json"
-    import json
-    config_path.write_text(json.dumps({
-        "directories": [str(data_dir)],
-        "chunk_size": 512,
-        "chunk_overlap": 100
-    }))
+    # Create test IndexConfig pointing to test data dir
+    test_index_config = IndexConfig(
+        directories=[DirectoryConfig(path=data_dir)],
+        chunk_size=512,
+        chunk_overlap=100
+    )
 
     # Save original globals
-    orig_storage_dir = ingest.STORAGE_DIR
-    orig_db_path = ingest.STATE_DB_PATH
-    orig_config_path = ingest.INGEST_CONFIG_PATH
+    orig_storage_dir = index.STORAGE_DIR
+    orig_db_path = index.STATE_DB_PATH
 
     # Set globals to test paths
-    ingest.STORAGE_DIR = storage_dir
-    ingest.STATE_DB_PATH = db_path
-    ingest.INGEST_CONFIG_PATH = config_path
+    index.STORAGE_DIR = storage_dir
+    index.STATE_DB_PATH = db_path
 
     # Create mock embedding model
     mock_embed = _create_mock_embedding()
 
-    # Patch embedding/rerank functions to use mock instead of real models
-    with patch("ingest._create_fastembed_embedding", return_value=mock_embed), \
-         patch("ingest.ensure_embedding_model_cached"), \
-         patch("ingest.ensure_rerank_model_cached"):
+    # Patch load_index_config to return test config, and mock embedding functions
+    with patch("index.load_index_config", return_value=test_index_config), \
+         patch("index._create_fastembed_embedding", return_value=mock_embed), \
+         patch("index.ensure_embedding_model_cached"), \
+         patch("index.ensure_rerank_model_cached"):
         yield data_dir, storage_dir, db_path
 
     # Restore globals
-    ingest.STORAGE_DIR = orig_storage_dir
-    ingest.STATE_DB_PATH = orig_db_path
-    ingest.INGEST_CONFIG_PATH = orig_config_path
+    index.STORAGE_DIR = orig_storage_dir
+    index.STATE_DB_PATH = orig_db_path
 
 def create_file(data_dir, name, content):
     path = data_dir / name

@@ -17,7 +17,7 @@ from mcp.server.fastmcp import FastMCP, Context
 from llama_index.core import StorageContext, load_index_from_storage, Settings
 from llama_index.core.schema import TextNode, NodeWithScore
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
-from ingest import get_heading_store
+from index import get_heading_store
 try:
     from llama_index.readers.confluence import ConfluenceReader
     import requests  # Available when llama-index-readers-confluence is installed
@@ -39,6 +39,10 @@ if ConfluenceReader is not None:
 import asyncio
 import math
 import logging
+
+# Load configuration from config.json
+from cfgload import load_config
+_config = load_config()
 
 # Log file configuration
 LOG_FILE = "mcp.log"
@@ -70,53 +74,47 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    force=True,  # Override any handlers configured by imported modules (e.g., ingest.py)
+    force=True,  # Override any handlers configured by imported modules (e.g., index.py)
     handlers=[
         logging.FileHandler(LOG_FILE, encoding="utf-8"),  # file
         logging.StreamHandler(sys.stderr),                 # stderr
     ],
 )
 
-# Load environment variables
-
-# Configuration
-STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "./storage"))
+# Configuration from config.json
+STORAGE_DIR = Path(_config["storage"]["storage_dir"])
 
 # Two-stage retrieval configuration
 # Stage 1: vector search over embeddings
 # Higher values provide more candidates for reranking, improving precision
-RETRIEVAL_EMBED_TOP_K = int(os.getenv("RETRIEVAL_EMBED_TOP_K", "20"))
-RETRIEVAL_EMBED_MODEL_NAME = os.getenv(
-    "RETRIEVAL_EMBED_MODEL_NAME", "BAAI/bge-small-en-v1.5"
-)
+RETRIEVAL_EMBED_TOP_K = _config["retrieval"]["embed_top_k"]
+RETRIEVAL_EMBED_MODEL_NAME = _config["retrieval"]["embed_model_name"]
 
 # Stage 2: FlashRank reranking (CPU-only, ONNX-based) of the vector search candidates
-RETRIEVAL_RERANK_TOP_K = int(os.getenv("RETRIEVAL_RERANK_TOP_K", "5"))
-RETRIEVAL_RERANK_MODEL_NAME = os.getenv(
-    "RETRIEVAL_RERANK_MODEL_NAME", "ms-marco-MiniLM-L-12-v2"
-)
+RETRIEVAL_RERANK_TOP_K = _config["retrieval"]["rerank_top_k"]
+RETRIEVAL_RERANK_MODEL_NAME = _config["retrieval"]["rerank_model_name"]
 
 # Shared cache directory for embedding and reranking models
-RETRIEVAL_MODEL_CACHE_DIR = Path(os.getenv("RETRIEVAL_MODEL_CACHE_DIR", "./models"))
+RETRIEVAL_MODEL_CACHE_DIR = Path(_config["storage"]["model_cache_dir"])
 
 # Confluence Configuration
-CONFLUENCE_TIMEOUT = float(os.getenv("CONFLUENCE_TIMEOUT", "10.0"))
-CONFLUENCE_MAX_RESULTS = int(os.getenv("CONFLUENCE_MAX_RESULTS", "30"))
+CONFLUENCE_TIMEOUT = _config["confluence"]["timeout"]
+CONFLUENCE_MAX_RESULTS = _config["confluence"]["max_results"]
 
 # Recency boost configuration
 # Documents are boosted based on their age using exponential decay
-RETRIEVAL_RECENCY_BOOST = float(os.getenv("RETRIEVAL_RECENCY_BOOST", "0.3"))  # 0.0-1.0
-RETRIEVAL_RECENCY_HALF_LIFE_DAYS = int(os.getenv("RETRIEVAL_RECENCY_HALF_LIFE_DAYS", "365"))
+RETRIEVAL_RECENCY_BOOST = _config["retrieval"]["recency_boost"]
+RETRIEVAL_RECENCY_HALF_LIFE_DAYS = _config["retrieval"]["recency_half_life_days"]
 
 # Score threshold for filtering low-relevance results
-RETRIEVAL_SCORE_THRESHOLD = float(os.getenv("RETRIEVAL_SCORE_THRESHOLD", "0.1"))
+RETRIEVAL_SCORE_THRESHOLD = _config["retrieval"]["score_threshold"]
 
 # BM25 file name search configuration
 BM25_INDEX_DIR = STORAGE_DIR / "bm25_index"
-BM25_SIMILARITY_TOP_K = int(os.getenv("BM25_SIMILARITY_TOP_K", "10"))
+BM25_SIMILARITY_TOP_K = _config["retrieval"]["bm25_similarity_top_k"]
 
 # Global cap on candidates sent to reranker (safety net for memory/performance)
-RETRIEVAL_RERANK_CANDIDATES = int(os.getenv("RETRIEVAL_RERANK_CANDIDATES", "100"))
+RETRIEVAL_RERANK_CANDIDATES = _config["retrieval"]["rerank_candidates"]
 
 # Common English stopwords to filter from Confluence CQL queries
 # These words add no search value and can cause overly broad/narrow results
@@ -142,7 +140,7 @@ CONFLUENCE_STOPWORDS = frozenset({
 # SSL/TLS Configuration
 # CA bundle path for HTTPS connections (e.g., Confluence, future HTTP clients)
 # If set, this will be used by requests, urllib3, and other HTTP libraries
-CA_BUNDLE_PATH = os.getenv("CA_BUNDLE_PATH")
+CA_BUNDLE_PATH = _config["ssl"]["ca_bundle_path"] or None
 if CA_BUNDLE_PATH:
     ca_bundle_path = Path(CA_BUNDLE_PATH)
     if ca_bundle_path.exists():
@@ -155,8 +153,7 @@ if CA_BUNDLE_PATH:
 
 # Configure offline mode for HuggingFace libraries to prevent network requests
 # The MCP server is intended to run in offline environments where models are already cached.
-# Set OFFLINE=0 in environment to allow network access if needed.
-_offline_mode = os.getenv("OFFLINE", "1").lower() not in ("0", "false", "no")
+_offline_mode = _config["retrieval"]["offline"]
 if _offline_mode:
     # Enable offline mode to prevent HuggingFace libraries from making network requests
     os.environ["HF_HUB_OFFLINE"] = "1"
@@ -177,9 +174,6 @@ _embed_model_initialized = False
 _reranker_model = None
 _bm25_retriever_cache = None
 
-# Ingest config path for reading directory configuration
-INGEST_CONFIG_PATH = Path(os.getenv("INGEST_CONFIG", "./ingest_config.json"))
-
 # Cache for configured directories (lazy loaded)
 _configured_directories_cache: list[Path] | None = None
 
@@ -187,7 +181,7 @@ _configured_directories_cache: list[Path] | None = None
 def _get_configured_directories() -> list[Path]:
     """Get list of configured data directories for path resolution.
 
-    Reads directories from ingest_config.json. Cached after first load.
+    Reads directories from config.json. Cached after first load.
     """
     global _configured_directories_cache
 
@@ -196,19 +190,13 @@ def _get_configured_directories() -> list[Path]:
 
     dirs: list[Path] = []
 
-    if INGEST_CONFIG_PATH.exists():
-        try:
-            with open(INGEST_CONFIG_PATH, "r", encoding="utf-8") as f:
-                config = json.load(f)
-            for entry in config.get("directories", []):
-                if isinstance(entry, str):
-                    dirs.append(Path(entry))
-                elif isinstance(entry, dict) and entry.get("enabled", True):
-                    path_str = entry.get("path")
-                    if path_str:
-                        dirs.append(Path(path_str))
-        except Exception as e:
-            logger.warning(f"Failed to load ingest config for path resolution: {e}")
+    for entry in _config.get("indexing", {}).get("directories", []):
+        if isinstance(entry, str):
+            dirs.append(Path(entry))
+        elif isinstance(entry, dict) and entry.get("enabled", True):
+            path_str = entry.get("path")
+            if path_str:
+                dirs.append(Path(path_str))
 
     # Cache the result
     _configured_directories_cache = dirs if dirs else []
@@ -301,11 +289,11 @@ def _get_cached_model_path(cache_dir: Path, model_name: str) -> Path | None:
     """
     Get the cached model directory path using huggingface_hub's snapshot_download.
     This works completely offline and bypasses fastembed's download_model API calls.
-    
+
     Args:
         cache_dir: Directory where models are cached
         model_name: FastEmbed model name (e.g., 'BAAI/bge-small-en-v1.5')
-        
+
     Returns:
         Path to the cached model directory, or None if not found or huggingface_hub unavailable
     """
@@ -339,7 +327,7 @@ def _ensure_embed_model():
     If this is not set, LlamaIndex falls back to its default (typically an OpenAI
     embedding model), which would require an OPENAI_API_KEY and cause failures
     inside the MCP server.
-    
+
     Uses cached model path in offline mode to bypass fastembed's download_model API calls.
     """
     global _embed_model_initialized
@@ -389,7 +377,7 @@ def _ensure_reranker():
     # The model name should be a FlashRank-compatible model identifier
     # Default to a lightweight model if the configured one isn't FlashRank-compatible
     model_name = RETRIEVAL_RERANK_MODEL_NAME
-    
+
     # Map cross-encoder model names to FlashRank equivalents if needed
     # FlashRank supports models like 'ms-marco-TinyBERT-L-2-v2', 'ms-marco-MiniLM-L-12-v2', etc.
     # Note: FlashRank doesn't have L-6 models, so we map to L-12 equivalents
@@ -417,7 +405,7 @@ def _ensure_reranker():
                 "Download it before running in offline mode."
             ) from exc
         raise
-    
+
     logger.info(f"Rerank model '{model_name}' loaded successfully")
     return _reranker_model
 
@@ -434,7 +422,7 @@ def _ensure_bm25_retriever():
         return _bm25_retriever_cache
 
     if not BM25_INDEX_DIR.exists():
-        logger.warning(f"BM25 index not found at {BM25_INDEX_DIR}. Run ingest.py to create it.")
+        logger.warning(f"BM25 index not found at {BM25_INDEX_DIR}. Run index.py to create it.")
         return None
 
     try:
@@ -489,25 +477,25 @@ def _format_bm25_matches(bm25_nodes: list[NodeWithScore]) -> list[dict[str, Any]
 def _preprocess_query(query: str) -> str:
     """
     Preprocess queries with basic normalization.
-    
+
     Techniques applied:
     - Normalize whitespace
     - Remove trailing punctuation that might interfere with matching
-    
+
     Returns the original query if preprocessing results in an empty string.
     """
     if not query or not query.strip():
         return query
-    
+
     # Store original query to preserve it if preprocessing results in empty string
     original_query = query
-    
+
     # Normalize whitespace (collapse multiple spaces)
     query = " ".join(query.split())
-    
+
     # Remove trailing punctuation that might interfere with matching
     query = query.rstrip(".,!?;")
-    
+
     # If preprocessing resulted in an empty string, return original query
     processed = query.strip()
     return processed if processed else original_query
@@ -592,27 +580,27 @@ def _search_confluence(query: str) -> list[NodeWithScore]:
     FlashRank reranker to identify the most semantically relevant results.
     Filters out common stopwords to improve search precision.
     """
-    base_url = os.getenv("CONFLUENCE_URL")
+    base_url = _config["confluence"]["url"]
     # If CONFLUENCE_URL is unset or empty, disable search completely
     if not base_url:
         # Keep this as a warning because it can explain "0 entries" quickly.
-        logger.warning("Confluence search skipped: CONFLUENCE_URL not set")
+        logger.warning("Confluence search skipped: confluence.url not set in config")
         return []
 
     if ConfluenceReader is None:
         logger.warning("llama-index-readers-confluence not installed, skipping Confluence search")
         return []
 
-    username = os.getenv("CONFLUENCE_USERNAME")
-    api_token = os.getenv("CONFLUENCE_API_TOKEN")
+    username = _config["confluence"]["username"]
+    api_token = _config["confluence"]["api_token"]
 
     if not (base_url and username and api_token):
         missing = []
         if not username:
-            missing.append("CONFLUENCE_USERNAME")
+            missing.append("confluence.username")
         if not api_token:
-            missing.append("CONFLUENCE_API_TOKEN")
-        logger.warning(f"Confluence search skipped: missing {', '.join(missing)}")
+            missing.append("confluence.api_token")
+        logger.warning(f"Confluence search skipped: missing {', '.join(missing)} in config")
         return []
 
     try:
@@ -677,9 +665,9 @@ def load_llamaindex_index():
     if not STORAGE_DIR.exists():
         raise FileNotFoundError(
             f"Storage directory {STORAGE_DIR} does not exist. "
-            "Please run ingest.py first."
+            "Please run index.py first."
         )
-    
+
     logger.info("Loading LlamaIndex from storage...")
 
     # Make sure the embedding model is configured before using the index so that
@@ -842,13 +830,13 @@ Each matched_file includes:
 - `score`: BM25 relevance score
     """
     start_time = time.time()
-    
+
     try:
         # Never log user queries (may contain secrets).
-        
+
         # Preprocess query to improve retrieval quality
         enhanced_query = _preprocess_query(query)
-        
+
         # Load index
         index = load_llamaindex_index()
 
@@ -875,9 +863,9 @@ Each matched_file includes:
         nodes = vector_nodes
 
         # Search Confluence in parallel (with timeout)
-        # Optimization: Check if CONFLUENCE_URL is set before even attempting it
+        # Optimization: Check if confluence.url is set before even attempting it
         confluence_nodes = []
-        if os.getenv("CONFLUENCE_URL"):
+        if _config["confluence"]["url"]:
             try:
                  # Run blocking generic search in executor
                  # Use enhanced_query (preprocessed) instead of original query for consistency
@@ -934,14 +922,14 @@ Each matched_file includes:
                 reranker = _ensure_reranker()
                 # Prepare documents for reranking - FlashRank expects list of dicts with 'text' key
                 passages = [{"text": node.node.get_content() or ""} for node in nodes]
-                
+
                 # FlashRank requires a RerankRequest object
                 from flashrank import RerankRequest
                 rerank_request = RerankRequest(query=enhanced_query, passages=passages)
-                
+
                 # FlashRank returns reranked documents (list of dicts with 'text' and 'score')
                 reranked_results = reranker.rerank(rerank_request)
-                
+
                 # Create a mapping from document text to (index, node) for reliable matching
                 # Use index as primary key to handle duplicate text correctly
                 text_to_indices = {}
@@ -950,7 +938,7 @@ Each matched_file includes:
                     if node_text not in text_to_indices:
                         text_to_indices[node_text] = []
                     text_to_indices[node_text].append((idx, node))
-                
+
                 # Reorder nodes based on reranking results
                 reranked_nodes = []
                 seen_indices = set()
@@ -958,7 +946,7 @@ Each matched_file includes:
                     # FlashRank returns dicts with 'text' and 'score' keys
                     doc_text = result.get("text", "")
                     score = result.get("score", 0.0)
-                    
+
                     if doc_text in text_to_indices:
                         # Get the first unused (index, node) pair for this text
                         for idx, node in text_to_indices[doc_text]:
@@ -967,12 +955,12 @@ Each matched_file includes:
                                 rerank_scores[id(node)] = float(score)
                                 seen_indices.add(idx)
                                 break
-                
+
                 # Add any nodes that weren't in reranked results (shouldn't happen, but safety)
                 for idx, node in enumerate(nodes):
                     if idx not in seen_indices:
                         reranked_nodes.append(node)
-                
+
                 nodes = reranked_nodes[:rerank_limit]
             except Exception as e:
                 # Fall back to vector search ordering if reranking fails
@@ -1024,7 +1012,7 @@ Each matched_file includes:
             source_uri = None
             if original_source == "Confluence":
                 # Handle Confluence sources
-                confluence_url = os.getenv("CONFLUENCE_URL", "")
+                confluence_url = _config["confluence"]["url"]
                 page_id = metadata.get("page_id")
                 if confluence_url and page_id:
                     source_uri = f"{confluence_url.rstrip('/')}/pages/viewpage.action?pageId={page_id}"
@@ -1078,9 +1066,9 @@ Each matched_file includes:
             "query": query,
             "retrieval_time": f"{elapsed:.2f}s",
         }
-        
+
         return structured_response
-        
+
     except Exception as e:
         logger.error(f"Error in retrieve_docs: {e}", exc_info=True)
         error_response = {
@@ -1094,4 +1082,3 @@ Each matched_file includes:
 
 if __name__ == "__main__":
     mcp.run()
-

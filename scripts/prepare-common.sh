@@ -28,22 +28,19 @@ python3.11 -m pip install -r requirements.txt
 python3.11 -m pip freeze > "$COMMON_ROOT/minimal-constraints.txt"
 
 # Copy common files that are the same for all platforms
-cp mcp_server.py "$COMMON_ROOT/"
-cp ingest.py "$COMMON_ROOT/"
+cp chunksilo.py "$COMMON_ROOT/"
+cp cfgload.py "$COMMON_ROOT/"
+cp index.py "$COMMON_ROOT/"
 cp requirements.txt "$COMMON_ROOT/"
 cp README.md "$COMMON_ROOT/"
-cp universal_config.json "$COMMON_ROOT/"
-# The installer runs setup.sh and needs generate_configs.py; include them so the
-# packaged artifacts remain fully offline and self-contained.
-cp setup.sh "$COMMON_ROOT/"
-mkdir -p "$COMMON_ROOT/scripts"
-cp scripts/generate_configs.py "$COMMON_ROOT/scripts/"
+cp config.json "$COMMON_ROOT/"
+cp install.sh "$COMMON_ROOT/"
 
 echo "$VERSION" > "$COMMON_ROOT/VERSION"
 
 # Download the embedding + rerank models once (they're the same for all platforms)
 export RETRIEVAL_MODEL_CACHE_DIR="$COMMON_ROOT/models"
-python3.11 ingest.py --download-models
+python3.11 index.py --download-models
 
 # Verify models were downloaded
 if [ -d "$COMMON_ROOT/models" ]; then

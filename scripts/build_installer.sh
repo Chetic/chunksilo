@@ -41,7 +41,7 @@ cd "$PAYLOAD_ROOT"
 rm -f "$BUILD_DIR/payload.zip"
 
 echo "Creating payload zip..."
-zip -r -q "$BUILD_DIR/payload.zip" . -x "*.git*" "venv*" "build-output*" "__pycache__*" ".DS_Store" "test*" ".pytest_cache*" "config*"
+zip -r -q "$BUILD_DIR/payload.zip" . -x "*.git*" "venv*" "build-output*" "__pycache__*" ".DS_Store" "test*" ".pytest_cache*"
 
 # Determine path to stub
 STUB_PATH="$SCRIPT_DIR/stub.sh"

@@ -40,8 +40,8 @@ logger = logging.getLogger(__name__)
 os.environ["OFFLINE"] = "0"
 
 # Import after logging is set up
-from ingest import STORAGE_DIR, build_index
-from mcp_server import retrieve_docs
+from index import STORAGE_DIR, build_index
+from chunksilo import retrieve_docs
 
 # Test corpus configuration
 TEST_DATA_DIR = Path(os.getenv("TEST_DATA_DIR", "./test_data"))
@@ -704,11 +704,11 @@ async def run_large_scale_tests() -> Dict[str, Any]:
         return {"error": "No documents downloaded"}
     
     # Step 2: Create test config and set environment variables
-    original_ingest_config = os.environ.get("INGEST_CONFIG")
+    original_ingest_config = os.environ.get("CHUNKSILO_CONFIG")
     original_storage_dir = os.environ.get("STORAGE_DIR")
 
     # Create temporary ingest config for test data directory
-    test_config_path = TEST_STORAGE_DIR / "test_ingest_config.json"
+    test_config_path = TEST_STORAGE_DIR / "test_config.json"
     TEST_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     with open(test_config_path, "w") as f:
         json.dump({
@@ -718,19 +718,19 @@ async def run_large_scale_tests() -> Dict[str, Any]:
         }, f)
 
     try:
-        os.environ["INGEST_CONFIG"] = str(test_config_path)
+        os.environ["CHUNKSILO_CONFIG"] = str(test_config_path)
         os.environ["STORAGE_DIR"] = str(TEST_STORAGE_DIR)
         
         # Re-import to get updated paths
         import importlib
-        import ingest
-        import mcp_server
+        import index
+        import chunksilo
         importlib.reload(ingest)
         importlib.reload(mcp_server)
         
         # Re-import after reload
-        from ingest import build_index as build_test_index
-        from mcp_server import load_llamaindex_index, retrieve_docs as retrieve_docs_reloaded
+        from index import build_index as build_test_index
+        from chunksilo import load_llamaindex_index, retrieve_docs as retrieve_docs_reloaded
         
         # Step 3: Build index
         logger.info("\n" + "=" * 80)
@@ -849,9 +849,9 @@ async def run_large_scale_tests() -> Dict[str, Any]:
     finally:
         # Restore original environment variables
         if original_ingest_config:
-            os.environ["INGEST_CONFIG"] = original_ingest_config
-        elif "INGEST_CONFIG" in os.environ:
-            del os.environ["INGEST_CONFIG"]
+            os.environ["CHUNKSILO_CONFIG"] = original_ingest_config
+        elif "CHUNKSILO_CONFIG" in os.environ:
+            del os.environ["CHUNKSILO_CONFIG"]
 
         if original_storage_dir:
             os.environ["STORAGE_DIR"] = original_storage_dir

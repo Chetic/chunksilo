@@ -1,17 +1,15 @@
-# ChunkSilo
+# ChunkSilo MCP Server
 
-Fully local semantic search for your PDF, DOCX, Markdown, and TXT files. The MCP server only retrieves chunks; your LLM (via Continue, Cline, or Roo Code) does the answering. No data leaves your machine.
+Local semantic search for PDF, DOCX, Markdown, and TXT files. The MCP server efficiently retrieves chunks of text with sources and the LLM can either answer questions or go to the document and find more information.
 
 ## Features
 
 - **Privacy First**: Fully local retrieval (FastEmbed + lightweight reranker).
-- **Universal Installer**: Single self-contained script for installation and configuration.
-- **Multi-Tool Support**: Auto-configuration for Cline, Roo Code, and Continue.
 - **Smart Indexing**: Persistent local index with incremental updates.
-- **Source Links**: MCP `retrieve_docs` tool returns resource links for each source document, displayed as clickable links in supported MCP clients like Roo Code.
+- **Source Links**: MCP `retrieve_docs` tool returns resource links for each source document, displayed as clickable links in supported MCP clients.
 - **Dual Retrieval**: Returns both semantically relevant chunks and BM25 filename matches separately, so filename lookups don't get buried by semantic reranking.
 
-## Quick Installation (Recommended)
+## Quick Installation
 
 The easiest way to install is using the self-contained installer script from the [Releases page](https://github.com/Chetic/chunksilo/releases).
 
@@ -23,70 +21,84 @@ chmod +x chunksilo-installer.sh
 ./chunksilo-installer.sh
 ```
 
-All parameters are optional. The installer will ask you for any required information if it is not provided via flags.
-
-### Installer Options
-
-| Option | Description |
-| :--- | :--- |
-| `--tool <name>` | Target tool to configure: `cline`, `roo`, `continue`. |
-| `--project [path]` | Configure for a specific project. Defaults to global if omitted. |
-| `--editor <name>` | For global install: `code`, `cursor`, `windsurf`, `antigravity`, `vscodium`, etc. Auto-detects VS Code if it's the only available editor. |
-| `--location <path>` | Install destination (defaults to `/data/chunksilo`, `/localhome/chunksilo`, or `~/chunksilo`). |
-| `--overwrite` | Force overwrite of existing files and configs. |
+3. **Edit** `config.json` to set your document directories
+4. **Build** the index: `./venv/bin/python index.py`
+5. **Configure** your MCP client (see [MCP Client Configuration](#mcp-client-configuration))
 
 ## Manual / Developer Installation
 
 If you prefer to run from source:
 
 1. Clone the repository.
-2. Run `setup.sh` (which the installer wraps):
+2. Run the installer:
    ```bash
-   ./setup.sh --tool <tool>
+   ./install.sh
    ```
+3. Edit `config.json` to configure your directories
+4. Build the index: `./venv/bin/python index.py`
+5. Configure your MCP client manually
 
 ## Configuration
 
-The installer generates tool-specific configurations from a single source of truth: `universal_config.json`.
+ChunkSilo uses a single configuration file: `config.json`
 
-- **Settings**: Adjust environment variables directly in the generated config if needed, or modify `universal_config.json` before running the installer.
-- **Documents**: Configure directories to index in `ingest_config.json` (see [Ingestion Configuration](#ingestion-configuration)).
-- **Indexing**: The server runs `ingest.py` automatically, or you can run it manually:
-  ```bash
-  cd <install_dir>
-  source .venv/bin/activate
-  python ingest.py
-  ```
+### Configuration File
 
-### Ingestion Configuration
+Edit `config.json` to configure your settings:
 
-Create `ingest_config.json` to configure which directories to index:
-
-```json
+```jsonc
 {
-  "directories": [
-    "./data",
-    "/mnt/nfs/shared-docs",
-    {
-      "path": "/mnt/samba/engineering",
-      "include": ["**/*.pdf", "**/*.md"],
-      "exclude": ["**/archive/**"]
-    }
-  ],
-  "chunk_size": 1600,
-  "chunk_overlap": 200
+  // Indexing settings - used by index.py when building the search index
+  "indexing": {
+    "directories": [
+      "./data",
+      "/mnt/nfs/shared-docs",
+      {
+        "path": "/mnt/samba/engineering",
+        "include": ["**/*.pdf", "**/*.md"],
+        "exclude": ["**/archive/**"]
+      }
+    ],
+    "chunk_size": 1600,
+    "chunk_overlap": 200
+  },
+
+  // Retrieval settings - used by chunksilo.py when searching
+  "retrieval": {
+    "embed_top_k": 20,
+    "rerank_top_k": 5,
+    "score_threshold": 0.1,
+    "offline": true
+  },
+
+  // Confluence integration (optional)
+  "confluence": {
+    "url": "https://confluence.example.com",
+    "username": "your-username",
+    "api_token": "your-api-token"
+  },
+
+  // Storage paths (usually don't need to change)
+  "storage": {
+    "storage_dir": "./storage",
+    "model_cache_dir": "./models"
+  }
 }
 ```
 
-**Top-level options:**
+All settings are optional and have sensible defaults.
 
-| Option | Default | Description |
+### Configuration Reference
+
+#### Indexing Settings (used by index.py)
+
+| Setting | Default | Description |
 | :--- | :--- | :--- |
-| `directories` | (required) | List of directory paths or directory config objects |
-| `chunk_size` | `1600` | Maximum size of text chunks for indexing |
-| `chunk_overlap` | `200` | Overlap between adjacent chunks |
+| `indexing.directories` | `["./data"]` | List of directories to index (strings or objects) |
+| `indexing.chunk_size` | `1600` | Maximum size of text chunks |
+| `indexing.chunk_overlap` | `200` | Overlap between adjacent chunks |
 
-**Per-directory options:**
+**Per-directory options** (when using object format):
 
 | Option | Default | Description |
 | :--- | :--- | :--- |
@@ -96,57 +108,122 @@ Create `ingest_config.json` to configure which directories to index:
 | `recursive` | `true` | Whether to recurse into subdirectories |
 | `enabled` | `true` | Whether to index this directory |
 
-**Network mounts (NFS/Samba):** Unavailable directories are skipped with a warning; indexing continues with available directories.
+#### Retrieval Settings (used by chunksilo.py)
 
-### Environment Variables
-
-Configure the MCP server by setting environment variables in your MCP client configuration (e.g., `cline_mcp_settings.json`, `config.json` for Continue, etc.).
-
-#### Core Settings
-
-| Variable | Default | Description |
+| Setting | Default | Description |
 | :--- | :--- | :--- |
-| `STORAGE_DIR` | `./storage` | Directory for storing the LlamaIndex vector index and ingestion state |
-| `RETRIEVAL_MODEL_CACHE_DIR` | `./models` | Cache directory for embedding and reranking models |
-| `OFFLINE` | `1` | Offline mode (1=enabled, 0=disabled). Prevents all network requests by ML libraries |
+| `retrieval.embed_model_name` | `BAAI/bge-small-en-v1.5` | Embedding model for vector search |
+| `retrieval.embed_top_k` | `20` | Candidates from vector search before reranking |
+| `retrieval.rerank_model_name` | `ms-marco-MiniLM-L-12-v2` | Reranker model |
+| `retrieval.rerank_top_k` | `5` | Final results after reranking |
+| `retrieval.rerank_candidates` | `100` | Maximum candidates sent to reranker |
+| `retrieval.score_threshold` | `0.1` | Minimum score (0.0-1.0) for results |
+| `retrieval.recency_boost` | `0.3` | Recency boost weight (0.0-1.0) |
+| `retrieval.recency_half_life_days` | `365` | Days until recency boost halves |
+| `retrieval.bm25_similarity_top_k` | `10` | Files returned by BM25 filename search |
+| `retrieval.offline` | `true` | Prevent ML library network requests |
 
-#### Retrieval Settings
+#### Confluence Settings (optional)
 
-| Variable | Default | Description |
+| Setting | Default | Description |
 | :--- | :--- | :--- |
-| `RETRIEVAL_EMBED_MODEL_NAME` | `BAAI/bge-small-en-v1.5` | Hugging Face embedding model for vector search (stage 1) |
-| `RETRIEVAL_EMBED_TOP_K` | `20` | Number of candidates retrieved from vector search before reranking |
-| `RETRIEVAL_RERANK_MODEL_NAME` | `ms-marco-MiniLM-L-12-v2` | FlashRank reranker model for semantic reranking (stage 2) |
-| `RETRIEVAL_RERANK_TOP_K` | `5` | Final number of results returned after reranking |
-| `RETRIEVAL_SCORE_THRESHOLD` | `0.1` | Minimum reranker score (0.0-1.0) for results. Set to 0.0 to disable filtering |
-| `RETRIEVAL_RECENCY_BOOST` | `0.3` | Weight for recency boost (0.0=disabled, 1.0=recency dominates relevance) |
-| `RETRIEVAL_RECENCY_HALF_LIFE_DAYS` | `365` | Days until a document's recency boost is halved (exponential decay) |
-| `BM25_SIMILARITY_TOP_K` | `10` | Number of files returned by BM25 filename search (returned separately in `matched_files`) |
-| `RETRIEVAL_RERANK_CANDIDATES` | `100` | Maximum candidates sent to reranker (safety cap) |
+| `confluence.url` | `""` | Confluence base URL (empty = disabled) |
+| `confluence.username` | `""` | Confluence username |
+| `confluence.api_token` | `""` | Confluence API token |
+| `confluence.timeout` | `10.0` | Request timeout in seconds |
+| `confluence.max_results` | `30` | Maximum results per search |
 
-#### Confluence Integration (Optional)
+#### SSL Settings (optional)
 
-| Variable | Default | Description |
+| Setting | Default | Description |
 | :--- | :--- | :--- |
-| `CONFLUENCE_URL` | None | Confluence base URL (e.g., `https://confluence.example.com`). If unset, Confluence search is disabled |
-| `CONFLUENCE_USERNAME` | None | Confluence username for authentication |
-| `CONFLUENCE_API_TOKEN` | None | Confluence API token for authentication |
-| `CONFLUENCE_TIMEOUT` | `10.0` | Timeout in seconds for Confluence search requests |
-| `CONFLUENCE_MAX_RESULTS` | `30` | Maximum number of results to retrieve from Confluence |
+| `ssl.ca_bundle_path` | `""` | Path to custom CA bundle file |
 
-#### SSL/TLS Settings (Optional)
+#### Storage Settings
 
-| Variable | Default | Description |
+| Setting | Default | Description |
 | :--- | :--- | :--- |
-| `CA_BUNDLE_PATH` | None | Path to CA bundle file for custom certificates (e.g., self-signed or internal CA). Used for HTTPS connections to Confluence and other endpoints. Example: `/path/to/ca-bundle.crt` |
+| `storage.storage_dir` | `./storage` | Directory for vector index and state |
+| `storage.model_cache_dir` | `./models` | Directory for model cache |
+
+## MCP Client Configuration
+
+Configure your MCP client to run ChunkSilo. Below are examples for common clients.
+
+### Claude Desktop / Generic MCP Client
+
+Add to your MCP client's configuration file:
+
+```json
+{
+  "mcpServers": {
+    "chunksilo": {
+      "command": "/path/to/chunksilo/venv/bin/python",
+      "args": ["chunksilo.py"],
+      "cwd": "/path/to/chunksilo"
+    }
+  }
+}
+```
+
+### Cline (VS Code Extension)
+
+Add to `cline_mcp_settings.json` (typically in `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/` on Linux or `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/` on macOS):
+
+```json
+{
+  "mcpServers": {
+    "chunksilo": {
+      "command": "/path/to/chunksilo/venv/bin/python",
+      "args": ["chunksilo.py"],
+      "cwd": "/path/to/chunksilo",
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}
+```
+
+### Roo Code (VS Code Extension)
+
+Add to `mcp_settings.json` (typically in `~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/` on Linux or `~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/` on macOS):
+
+```json
+{
+  "mcpServers": {
+    "chunksilo": {
+      "command": "/path/to/chunksilo/venv/bin/python",
+      "args": ["chunksilo.py"],
+      "cwd": "/path/to/chunksilo"
+    }
+  }
+}
+```
+
+### Continue (VS Code Extension)
+
+Create `~/.continue/mcpServers/chunksilo.yaml`:
+
+```yaml
+name: ChunkSilo
+version: 1.0.0
+schema: v1
+mcpServers:
+  - name: chunksilo
+    command: /path/to/chunksilo/venv/bin/python
+    args:
+      - chunksilo.py
+    cwd: /path/to/chunksilo
+```
 
 ## Troubleshooting
 
-- **Index missing**: Run `python ingest.py` in the install directory.
-- **Retrieval errors**: Check paths in your tool's MCP config file.
-- **Offline mode**: The installer includes models and sets `OFFLINE=1` automatically. If you need network access, set `OFFLINE=0` in your MCP client configuration.
-- **Confluence Integration**: Set `CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, and `CONFLUENCE_API_TOKEN` in your MCP client configuration to enable Confluence search.
-- **Custom CA Bundle**: Set `CA_BUNDLE_PATH` to point to your CA bundle file if using custom certificates for HTTPS endpoints.
+- **Index missing**: Run `./venv/bin/python index.py` in the install directory.
+- **Retrieval errors**: Check paths in your MCP client configuration.
+- **Offline mode**: The installer includes models and sets `offline: true` by default. Set `retrieval.offline: false` in `config.json` if you need network access.
+- **Confluence Integration**: Set `confluence.url`, `confluence.username`, and `confluence.api_token` in `config.json` to enable Confluence search.
+- **Custom CA Bundle**: Set `ssl.ca_bundle_path` in `config.json` for custom certificates.
+- **Network mounts**: Unavailable directories are skipped with a warning; indexing continues with available directories.
 
 ## Development & Testing
 
@@ -154,8 +231,8 @@ Configure the MCP server by setting environment variables in your MCP client con
 
 ```bash
 # Set up development environment
-python3.11 -m venv .venv
-source .venv/bin/activate
+python3.11 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 pip install -r test/requirements.txt
 

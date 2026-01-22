@@ -6,7 +6,7 @@ with markdownify. Remove this file when the upstream issue is fixed.
 
 To remove this workaround:
 1. Delete this file
-2. Remove the import and patch_confluence_reader() call from mcp_server.py
+2. Remove the import and patch_confluence_reader() call from chunksilo.py
 """
 
 from bs4 import BeautifulSoup

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for error handling and edge cases in mcp_server.py and ingest.py.
+"""Tests for error handling and edge cases in chunksilo.py and index.py.
 
 These tests verify that the system handles malformed inputs, missing data,
 and error conditions gracefully without crashing.
@@ -24,7 +24,7 @@ class TestEmptyQueries:
 
     def test_preprocess_empty_query(self):
         """Empty query returns empty or original."""
-        from mcp_server import _preprocess_query
+        from chunksilo import _preprocess_query
 
         result = _preprocess_query("")
         # Should not crash, return empty or stripped
@@ -32,7 +32,7 @@ class TestEmptyQueries:
 
     def test_preprocess_whitespace_query(self):
         """Whitespace-only query is handled."""
-        from mcp_server import _preprocess_query
+        from chunksilo import _preprocess_query
 
         result = _preprocess_query("   ")
         # Should strip whitespace
@@ -48,7 +48,7 @@ class TestInvalidDates:
 
     def test_parse_date_malformed(self):
         """Malformed date string returns None."""
-        from mcp_server import _parse_date
+        from chunksilo import _parse_date
 
         # Various malformed formats
         assert _parse_date("not-a-date") is None
@@ -58,14 +58,14 @@ class TestInvalidDates:
 
     def test_parse_date_partial(self):
         """Partial date string returns None."""
-        from mcp_server import _parse_date
+        from chunksilo import _parse_date
 
         assert _parse_date("2024-01") is None  # Missing day
         assert _parse_date("2024") is None  # Just year
 
     def test_filter_nodes_invalid_dates(self):
         """Filter with invalid date strings doesn't crash."""
-        from mcp_server import _filter_nodes_by_date
+        from chunksilo import _filter_nodes_by_date
         from llama_index.core.schema import TextNode, NodeWithScore
 
         node = TextNode(
@@ -92,7 +92,7 @@ class TestMissingMetadata:
 
     def test_build_heading_path_missing_position(self):
         """Heading without position is handled."""
-        from mcp_server import _build_heading_path
+        from chunksilo import _build_heading_path
 
         # Heading missing 'position' key
         headings = [{"text": "Chapter 1"}]  # No 'position'
@@ -103,14 +103,14 @@ class TestMissingMetadata:
 
     def test_char_offset_to_line_missing_offsets(self):
         """Missing line_offsets returns None."""
-        from mcp_server import _char_offset_to_line
+        from chunksilo import _char_offset_to_line
 
         assert _char_offset_to_line(100, None) is None
         assert _char_offset_to_line(100, []) is None
 
     def test_recency_boost_missing_date(self):
         """Node without date metadata gets base score."""
-        from mcp_server import _apply_recency_boost
+        from chunksilo import _apply_recency_boost
         from llama_index.core.schema import TextNode, NodeWithScore
 
         # Node with no date metadata
@@ -132,7 +132,7 @@ class TestTokenizeFilenameEdgeCases:
 
     def test_empty_filename(self):
         """Empty filename returns empty or minimal tokens."""
-        from ingest import tokenize_filename
+        from index import tokenize_filename
 
         result = tokenize_filename("")
         # Should not crash
@@ -140,7 +140,7 @@ class TestTokenizeFilenameEdgeCases:
 
     def test_only_extension(self):
         """Filename that is just an extension."""
-        from ingest import tokenize_filename
+        from index import tokenize_filename
 
         result = tokenize_filename(".gitignore")
         # Should return something reasonable
@@ -149,7 +149,7 @@ class TestTokenizeFilenameEdgeCases:
 
     def test_unicode_filename(self):
         """Unicode characters in filename are handled."""
-        from ingest import tokenize_filename
+        from index import tokenize_filename
 
         result = tokenize_filename("文档.pdf")
         # Should not crash
@@ -157,7 +157,7 @@ class TestTokenizeFilenameEdgeCases:
 
     def test_very_long_filename(self):
         """Very long filename is handled."""
-        from ingest import tokenize_filename
+        from index import tokenize_filename
 
         long_name = "a" * 500 + ".txt"
         result = tokenize_filename(long_name)
@@ -174,7 +174,7 @@ class TestComputeLineOffsetsEdgeCases:
 
     def test_binary_content(self):
         """Text with binary-like content doesn't crash."""
-        from ingest import _compute_line_offsets
+        from index import _compute_line_offsets
 
         # Text with null bytes and other binary chars (as string)
         text = "Line1\nLine2\x00Line3\n"
@@ -186,7 +186,7 @@ class TestComputeLineOffsetsEdgeCases:
 
     def test_only_newlines(self):
         """Text that is only newlines."""
-        from ingest import _compute_line_offsets
+        from index import _compute_line_offsets
 
         text = "\n\n\n"
         result = _compute_line_offsets(text)
@@ -205,7 +205,7 @@ class TestIngestionStateEdgeCases:
 
     def test_state_creates_directory(self, tmp_path):
         """IngestionState creates parent directories if needed."""
-        from ingest import IngestionState
+        from index import IngestionState
 
         # Path in non-existent subdirectory
         db_path = tmp_path / "subdir" / "deeper" / "state.db"

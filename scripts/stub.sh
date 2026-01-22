@@ -25,11 +25,11 @@ tail -n +$PAYLOAD_START "$0" > "$TEMP_DIR/payload.zip"
 # Unzip the payload
 unzip -q "$TEMP_DIR/payload.zip" -d "$TEMP_DIR"
 
-# Make setup executable and run it, passing on arguments
-chmod +x "$TEMP_DIR/setup.sh"
+# Make installer executable and run it
+chmod +x "$TEMP_DIR/install.sh"
 
-# Run setup.sh with --launch-dir prepended to handle relative paths correctly
-"$TEMP_DIR/setup.sh" --launch-dir "$LAUNCH_DIR" "$@"
+# Run install.sh
+"$TEMP_DIR/install.sh"
 
 exit 0
 

@@ -25,7 +25,7 @@ python3 -m pytest test/ -v --ignore=test/test_large_scale.py
 **Test Files:**
 - `test_chunk_location.py` - Unit tests for location field generation
 - `test_heading_path_integration.py` - Integration tests for heading extraction
-- `test_incremental_ingest.py` - Tests for incremental indexing
+- `test_incremental_index.py` - Tests for incremental indexing
 - `test_retrieval_only.py` - Tests for index loading and retrieval
 - `test_system.py` - End-to-end system tests
 - `test_large_scale.py` - RAG metrics evaluation (runs separately in CI)

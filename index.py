@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Ingestion pipeline for building a RAG index from PDF, DOCX, Markdown, and TXT documents.
+Indexing pipeline for building a RAG index from PDF, DOCX, Markdown, and TXT documents.
 Supports incremental indexing using a local SQLite database to track file states.
 """
 import argparse
@@ -38,23 +38,22 @@ from llama_index.core import (
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
-# Configuration paths
-STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "./storage"))
+# Load configuration from config.json
+from cfgload import load_config
+_config = load_config()
+
+# Configuration from config.json
+STORAGE_DIR = Path(_config["storage"]["storage_dir"])
 STATE_DB_PATH = STORAGE_DIR / "ingestion_state.db"
-INGEST_CONFIG_PATH = Path(os.getenv("INGEST_CONFIG", "./ingest_config.json"))
 
 # Stage 1 (embedding/vector search) configuration
-RETRIEVAL_EMBED_MODEL_NAME = os.getenv(
-    "RETRIEVAL_EMBED_MODEL_NAME", "BAAI/bge-small-en-v1.5"
-)
+RETRIEVAL_EMBED_MODEL_NAME = _config["retrieval"]["embed_model_name"]
 
 # Stage 2 (FlashRank reranking, CPU-only, ONNX-based) configuration
-RETRIEVAL_RERANK_MODEL_NAME = os.getenv(
-    "RETRIEVAL_RERANK_MODEL_NAME", "ms-marco-MiniLM-L-12-v2"
-)
+RETRIEVAL_RERANK_MODEL_NAME = _config["retrieval"]["rerank_model_name"]
 
 # Shared cache directory for embedding and reranking models
-RETRIEVAL_MODEL_CACHE_DIR = Path(os.getenv("RETRIEVAL_MODEL_CACHE_DIR", "./models"))
+RETRIEVAL_MODEL_CACHE_DIR = Path(_config["storage"]["model_cache_dir"])
 
 # BM25 index directory for file name matching
 BM25_INDEX_DIR = STORAGE_DIR / "bm25_index"
@@ -108,41 +107,41 @@ class DirectoryConfig:
 
 
 @dataclass
-class IngestConfig:
-    """Complete ingestion configuration."""
+class IndexConfig:
+    """Complete indexing configuration."""
     directories: List[DirectoryConfig]
     chunk_size: int = 1600
     chunk_overlap: int = 200
 
 
-def load_ingest_config() -> IngestConfig:
-    """Load ingestion configuration from JSON file.
+def load_index_config() -> IndexConfig:
+    """Load indexing configuration from config.json.
 
     Raises:
-        FileNotFoundError: If config file doesn't exist
         ValueError: If config is invalid
     """
-    if not INGEST_CONFIG_PATH.exists():
-        raise FileNotFoundError(
-            f"Ingest configuration file not found: {INGEST_CONFIG_PATH}\n"
-            f"Please create {INGEST_CONFIG_PATH} with your directory configuration.\n"
-            f"Example:\n"
-            f'{{\n'
-            f'  "directories": ["./data"],\n'
-            f'  "chunk_size": 512,\n'
-            f'  "chunk_overlap": 100\n'
-            f'}}'
+    indexing_config = _config.get("indexing", {})
+
+    if not indexing_config.get("directories"):
+        raise ValueError(
+            "Config must have at least one directory in 'indexing.directories'.\n"
+            "Please update config.json with your directory configuration.\n"
+            "Example:\n"
+            '{\n'
+            '  "indexing": {\n'
+            '    "directories": ["./data"],\n'
+            '    "chunk_size": 1600,\n'
+            '    "chunk_overlap": 200\n'
+            '  }\n'
+            '}'
         )
 
-    logger.info(f"Loading ingest config from {INGEST_CONFIG_PATH}")
-    with open(INGEST_CONFIG_PATH, "r", encoding="utf-8") as f:
-        config_data = json.load(f)
-
-    return _parse_ingest_config(config_data)
+    logger.info("Loading indexing config from config.json")
+    return _parse_index_config(indexing_config)
 
 
-def _parse_ingest_config(config_data: dict) -> IngestConfig:
-    """Parse raw config dict into IngestConfig."""
+def _parse_index_config(config_data: dict) -> IndexConfig:
+    """Parse raw config dict into IndexConfig."""
     # Get defaults section
     defaults = config_data.get("defaults", {})
     default_include = defaults.get("include", DEFAULT_INCLUDE_PATTERNS.copy())
@@ -183,7 +182,7 @@ def _parse_ingest_config(config_data: dict) -> IngestConfig:
 
         directories.append(dir_config)
 
-    return IngestConfig(
+    return IndexConfig(
         directories=directories,
         chunk_size=config_data.get("chunk_size", 1600),
         chunk_overlap=config_data.get("chunk_overlap", 200),
@@ -607,7 +606,7 @@ class LocalFileSystemSource(DataSource):
 class MultiDirectoryDataSource(DataSource):
     """Aggregates multiple LocalFileSystemSource instances."""
 
-    def __init__(self, config: IngestConfig):
+    def __init__(self, config: IndexConfig):
         self.config = config
         self.sources: List[LocalFileSystemSource] = []
         self.unavailable_dirs: List[DirectoryConfig] = []
@@ -733,33 +732,33 @@ def _verify_model_cache_exists(cache_dir: Path) -> bool:
     Verify that the cached model directory exists and contains the expected model files.
     """
     from fastembed import TextEmbedding
-    
+
     try:
         models = TextEmbedding.list_supported_models()
         model_info = [m for m in models if m.get("model") == RETRIEVAL_EMBED_MODEL_NAME]
         if not model_info:
             return False
-        
+
         model_info = model_info[0]
         hf_source = model_info.get("sources", {}).get("hf")
         if not hf_source:
             return False
-        
+
         expected_dir = cache_dir / f"models--{hf_source.replace('/', '--')}"
         if not expected_dir.exists():
             return False
-        
+
         snapshots_dir = expected_dir / "snapshots"
         if not snapshots_dir.exists():
             return False
-        
+
         model_file = model_info.get("model_file", "model_optimized.onnx")
         for snapshot in snapshots_dir.iterdir():
             if snapshot.is_dir():
                 model_path = snapshot / model_file
                 if model_path.exists() or model_path.is_symlink():
                     return True
-        
+
         return False
     except Exception:
         return False
@@ -804,7 +803,7 @@ def _create_fastembed_embedding(cache_dir: Path, offline: bool = False):
             logger.warning(
                 "Could not find cached model path, falling back to normal initialization"
             )
-    
+
     return FastEmbedEmbedding(
         model_name=RETRIEVAL_EMBED_MODEL_NAME, cache_dir=str(cache_dir)
     )
@@ -824,13 +823,13 @@ def ensure_embedding_model_cached(cache_dir: Path, offline: bool = False) -> Non
             raise FileNotFoundError(
                 f"Embedding model '{RETRIEVAL_EMBED_MODEL_NAME}' not found in cache directory '{cache_dir}'. "
             )
-    
+
     try:
         logger.info("Initializing embedding model from cache...")
         cache_dir_abs = cache_dir.resolve()
         if offline:
             os.environ["HF_HUB_CACHE"] = str(cache_dir_abs)
-        
+
         _create_fastembed_embedding(cache_dir, offline=offline)
         logger.info("Embedding model initialized successfully")
         return
@@ -1155,8 +1154,8 @@ def build_index(download_only: bool = False, offline: bool = False) -> None:
     configure_offline_mode(offline, RETRIEVAL_MODEL_CACHE_DIR)
 
     # Load configuration
-    ingest_config = load_ingest_config()
-    logger.info(f"Ingestion configured with {len(ingest_config.directories)} directories")
+    index_config = load_index_config()
+    logger.info(f"Indexing configured with {len(index_config.directories)} directories")
 
     ensure_embedding_model_cached(RETRIEVAL_MODEL_CACHE_DIR, offline=offline)
     try:
@@ -1172,7 +1171,7 @@ def build_index(download_only: bool = False, offline: bool = False) -> None:
 
     # Initialize State and Multi-Directory Data Source
     ingestion_state = IngestionState(STATE_DB_PATH)
-    data_source = MultiDirectoryDataSource(ingest_config)
+    data_source = MultiDirectoryDataSource(index_config)
 
     # Log directory summary
     summary = data_source.get_summary()
@@ -1181,7 +1180,7 @@ def build_index(download_only: bool = False, offline: bool = False) -> None:
         logger.warning(f"Unavailable directories (skipped): {summary['unavailable']}")
 
     if not data_source.sources:
-        logger.error("No available directories to index. Check your ingest_config.json.")
+        logger.error("No available directories to index. Check your config.json indexing.directories.")
         return
 
     # Initialize Embedding Model
@@ -1192,8 +1191,8 @@ def build_index(download_only: bool = False, offline: bool = False) -> None:
 
     # Configure Text Splitter using config values
     text_splitter = SentenceSplitter(
-        chunk_size=ingest_config.chunk_size,
-        chunk_overlap=ingest_config.chunk_overlap,
+        chunk_size=index_config.chunk_size,
+        chunk_overlap=index_config.chunk_overlap,
         separator=" ",
     )
     Settings.text_splitter = text_splitter
@@ -1217,7 +1216,7 @@ def build_index(download_only: bool = False, offline: bool = False) -> None:
     for file_info in data_source.iter_files():
         found_files.add(file_info.path)
         existing_state = tracked_files.get(file_info.path)
-        
+
         if existing_state:
             # Check if modified
             if existing_state["hash"] != file_info.hash:
@@ -1265,7 +1264,7 @@ def build_index(download_only: bool = False, offline: bool = False) -> None:
             for doc in docs:
                 index.insert(doc)
                 doc_ids.append(doc.doc_id)
-            
+
             # Update State
             ingestion_state.update_file_state(file_info, doc_ids)
             progress.update()
@@ -1278,7 +1277,7 @@ def build_index(download_only: bool = False, offline: bool = False) -> None:
     # Build BM25 index for file name matching
     build_bm25_index(index, STORAGE_DIR)
 
-    logger.info("Ingestion complete.")
+    logger.info("Indexing complete.")
 
 
 if __name__ == "__main__":
@@ -1298,7 +1297,5 @@ if __name__ == "__main__":
     try:
         build_index(download_only=args.download_models, offline=args.offline)
     except Exception as e:
-        logger.error(f"Ingestion failed: {e}", exc_info=True)
+        logger.error(f"Indexing failed: {e}", exc_info=True)
         raise
-
-
