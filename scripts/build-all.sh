@@ -5,12 +5,10 @@
 set -eo pipefail
 
 VERSION="${1:-dev}"
-PLATFORM="${2:-all}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-echo "Building manylinux packages for version: $VERSION"
-echo "Platform: $PLATFORM (options: all, 2_28, 2_34)"
+echo "Building manylinux_2_34 package for version: $VERSION"
 echo ""
 
 # Step 1: Prepare common files
@@ -19,18 +17,10 @@ cd "$PROJECT_ROOT"
 "$SCRIPT_DIR/prepare-common.sh" "$VERSION"
 echo ""
 
-# Step 2: Build packages
-if [ "$PLATFORM" = "all" ] || [ "$PLATFORM" = "2_34" ]; then
-  echo "Step 2a: Building manylinux_2_34 package..."
-  "$SCRIPT_DIR/package-manylinux-2_34.sh" "$VERSION"
-  echo ""
-fi
-
-if [ "$PLATFORM" = "all" ] || [ "$PLATFORM" = "2_28" ]; then
-  echo "Step 2b: Building manylinux_2_28 package..."
-  "$SCRIPT_DIR/package-manylinux-2_28.sh" "$VERSION"
-  echo ""
-fi
+# Step 2: Build package
+echo "Step 2: Building manylinux_2_34 package..."
+"$SCRIPT_DIR/package-manylinux-2_34.sh" "$VERSION"
+echo ""
 
 echo "Package(s) built successfully!"
 echo "Output files:"

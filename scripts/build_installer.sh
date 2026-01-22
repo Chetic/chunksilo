@@ -18,8 +18,6 @@ echo "Building installer..."
 if [ -z "$PAYLOAD_ROOT" ]; then
     if [ -d "$REPO_ROOT/release_package_manylinux_2_34/chunksilo" ]; then
         PAYLOAD_ROOT="$REPO_ROOT/release_package_manylinux_2_34/chunksilo"
-    elif [ -d "$REPO_ROOT/release_package_manylinux_2_28/chunksilo" ]; then
-        PAYLOAD_ROOT="$REPO_ROOT/release_package_manylinux_2_28/chunksilo"
     else
         PAYLOAD_ROOT="$REPO_ROOT"
     fi
@@ -27,7 +25,7 @@ fi
 
 if [ ! -d "$PAYLOAD_ROOT/dependencies" ] || [ -z "$(ls -A "$PAYLOAD_ROOT/dependencies" 2>/dev/null)" ]; then
     echo "Error: no packaged dependencies found at $PAYLOAD_ROOT/dependencies."
-    echo "Run the manylinux packaging scripts first (build-all.sh/package-manylinux-2_34.sh or 2_28.sh) so wheels are included."
+    echo "Run the manylinux packaging scripts first (build-all.sh or package-manylinux-2_34.sh) so wheels are included."
     exit 1
 fi
 

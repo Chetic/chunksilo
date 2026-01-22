@@ -12,11 +12,6 @@ on:
           - major
           - minor
           - patch
-      include_manylinux_2_28:
-        description: "Include manylinux_2_28 build"
-        required: true
-        default: true
-        type: boolean
       include_manylinux_2_34:
         description: "Include manylinux_2_34 build"
         required: true
@@ -139,45 +134,6 @@ jobs:
           path: ${{ steps.notes.outputs.file }}
           retention-days: 1
 
-  package_manylinux_2_28:
-    needs: prepare
-    runs-on: ubuntu-latest
-    container: registry.access.redhat.com/ubi8/ubi:8.10
-    steps:
-      - name: include_manylinux_2_28 flag
-        run: echo "include_manylinux_2_28=${{ inputs.include_manylinux_2_28 }}"
-
-      - name: Check out repository
-        if: ${{ inputs.include_manylinux_2_28 }}
-        uses: actions/checkout@v4
-
-      - name: Download common files artifact
-        if: ${{ inputs.include_manylinux_2_28 }}
-        uses: actions/download-artifact@v4
-        with:
-          name: release-common-${{ needs.prepare.outputs.version }}
-
-      - name: Extract common files (preserves file permissions)
-        if: ${{ inputs.include_manylinux_2_28 }}
-        run: |
-          mkdir -p release_common
-          tar -xvf release_common.tar -C release_common
-
-      - name: Build manylinux package
-        id: build_package
-        if: ${{ inputs.include_manylinux_2_28 }}
-        run: |
-          chmod +x scripts/package-manylinux-2_28.sh
-          scripts/package-manylinux-2_28.sh "${{ needs.prepare.outputs.version }}"
-
-      - name: Upload manylinux package artifact
-        if: ${{ inputs.include_manylinux_2_28 }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: package-manylinux-2_28-${{ needs.prepare.outputs.version }}
-          path: ${{ steps.build_package.outputs.asset_path }}
-          retention-days: 1
-
   package_manylinux_2_34:
     needs: prepare
     runs-on: ubuntu-latest
@@ -218,7 +174,7 @@ jobs:
           retention-days: 1
 
   release:
-    needs: [prepare, package_manylinux_2_28, package_manylinux_2_34]
+    needs: [prepare, package_manylinux_2_34]
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -226,13 +182,6 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
-
-      - name: Download manylinux_2_28 package
-        uses: actions/download-artifact@v4
-        if: ${{ inputs.include_manylinux_2_28 }}
-        with:
-          name: package-manylinux-2_28-${{ needs.prepare.outputs.version }}
-          path: packages
 
       - name: Download manylinux_2_34 package
         uses: actions/download-artifact@v4
@@ -259,14 +208,6 @@ jobs:
             fi
             echo "package_234=$PKG_234" >> "$GITHUB_OUTPUT"
           fi
-          if [[ "${{ inputs.include_manylinux_2_28 }}" == "true" ]]; then
-            PKG_228=$(find packages -name "chunksilo-*-manylinux_2_28*.tar.gz" -type f | head -1)
-            if [ -z "$PKG_228" ]; then
-              echo "Error: Missing manylinux_2_28 package" >&2
-              exit 1
-            fi
-            echo "package_228=$PKG_228" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Create and push tag
         env:
@@ -283,15 +224,6 @@ jobs:
         uses: willo32/google-drive-upload-action@v1
         with:
           target: ${{ steps.find_artifacts.outputs.package_234 }}
-          credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
-          parent_folder_id: ${{ secrets.GDRIVE_FOLDER_ID }}
-          child_folder: v${{ needs.prepare.outputs.version }}
-
-      - name: Upload manylinux_2_28 to Google Drive
-        if: ${{ inputs.include_manylinux_2_28 }}
-        uses: willo32/google-drive-upload-action@v1
-        with:
-          target: ${{ steps.find_artifacts.outputs.package_228 }}
           credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
           parent_folder_id: ${{ secrets.GDRIVE_FOLDER_ID }}
           child_folder: v${{ needs.prepare.outputs.version }}
