@@ -11,32 +11,20 @@ Local semantic search for PDF, DOCX, DOC, Markdown, and TXT files. The MCP serve
 
 ## Quick Installation
 
-The easiest way to install is using the self-contained installer script from the [Releases page](https://github.com/Chetic/chunksilo/releases).
+Download the latest release package from the [Releases page](https://github.com/Chetic/chunksilo/releases).
 
-1. **Download** the `chunksilo-vX.Y.Z-installer.sh` file.
-2. **Run** the installer:
+1. **Download** the `chunksilo-vX.Y.Z-manylinux_2_34_x86_64.tar.gz` file
+2. **Extract** and install:
 
 ```bash
-chmod +x chunksilo-installer.sh
-./chunksilo-installer.sh
+tar -xzf chunksilo-vX.Y.Z-manylinux_2_34_x86_64.tar.gz
+cd chunksilo
+./install.sh
 ```
 
 3. **Edit** `config.json` to set your document directories
 4. **Build** the index: `./venv/bin/python index.py`
 5. **Configure** your MCP client (see [MCP Client Configuration](#mcp-client-configuration))
-
-## Manual / Developer Installation
-
-If you prefer to run from source:
-
-1. Clone the repository.
-2. Run the installer:
-   ```bash
-   ./install.sh
-   ```
-3. Edit `config.json` to configure your directories
-4. Build the index: `./venv/bin/python index.py`
-5. Configure your MCP client manually
 
 ## Configuration
 
@@ -168,7 +156,7 @@ Add to your MCP client's configuration file:
 
 ### Cline (VS Code Extension)
 
-Add to `cline_mcp_settings.json` (typically in `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/` on Linux or `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/` on macOS):
+Add to `cline_mcp_settings.json` (typically in `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/`):
 
 ```json
 {
@@ -186,7 +174,7 @@ Add to `cline_mcp_settings.json` (typically in `~/.config/Code/User/globalStorag
 
 ### Roo Code (VS Code Extension)
 
-Add to `mcp_settings.json` (typically in `~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/` on Linux or `~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/` on macOS):
+Add to `mcp_settings.json` (typically in `~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/`):
 
 ```json
 {
@@ -200,48 +188,15 @@ Add to `mcp_settings.json` (typically in `~/.config/Code/User/globalStorage/roov
 }
 ```
 
-### Continue (VS Code Extension)
-
-Create `~/.continue/mcpServers/chunksilo.yaml`:
-
-```yaml
-name: ChunkSilo
-version: 1.0.0
-schema: v1
-mcpServers:
-  - name: chunksilo
-    command: /path/to/chunksilo/venv/bin/python
-    args:
-      - chunksilo.py
-    cwd: /path/to/chunksilo
-```
-
 ## Troubleshooting
 
 - **Index missing**: Run `./venv/bin/python index.py` in the install directory.
 - **Retrieval errors**: Check paths in your MCP client configuration.
-- **Offline mode**: The installer includes models and sets `offline: true` by default. Set `retrieval.offline: false` in `config.json` if you need network access.
+- **Offline mode**: The release package includes models and sets `offline: true` by default. Set `retrieval.offline: false` in `config.json` if you need network access.
 - **Confluence Integration**: Set `confluence.url`, `confluence.username`, and `confluence.api_token` in `config.json` to enable Confluence search.
 - **Custom CA Bundle**: Set `ssl.ca_bundle_path` in `config.json` for custom certificates.
 - **Network mounts**: Unavailable directories are skipped with a warning; indexing continues with available directories.
 - **Legacy .doc files**: Requires LibreOffice to be installed for automatic conversion to .docx. If LibreOffice is not found, .doc files are skipped with a warning. Full heading extraction is supported.
-
-## Development & Testing
-
-**Requirements**: Python 3.11 (matches CI environment)
-
-```bash
-# Set up development environment
-python3.11 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-pip install -r test/requirements.txt
-
-# Run tests
-pytest test/ -v --ignore=test/test_large_scale.py
-```
-
-For comprehensive testing documentation, see [test/TESTING.md](test/TESTING.md).
 
 ## License
 
