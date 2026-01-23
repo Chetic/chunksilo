@@ -1,13 +1,24 @@
 # ChunkSilo MCP Server
 
-Local semantic search for PDF, DOCX, DOC, Markdown, and TXT files. The MCP server efficiently retrieves chunks of text with sources and the LLM can either answer questions or go to the document and find more information.
+ChunkSilo is like a local Google for your documents. It uses semantic search — matching by meaning rather than exact keywords — so your LLM can find relevant information across all your files even when the wording differs from your query. Point it at your PDFs, Word docs, Markdown, and text files, and it builds a fully searchable index locally on your machine.
+
+## Overview
+
+- **No permissions headache**: Each user indexes only the files they already have access to. No centralized access-control system to build or maintain — document permissions stay exactly where they are.
+- **No infrastructure required**: Runs entirely on the user's own machine as an MCP server. Nothing to deploy, no servers to manage.
+- **Easy to set up**: Any user with an MCP-compatible LLM client can install, point at their document directories, and have everything indexed and searchable.
+- **Works with what you have**: Supports PDF, DOCX, DOC, Markdown, and TXT from local folders, network drives, or shared mounts.
 
 ## Features
 
-- **Privacy First**: Fully local retrieval (FastEmbed + lightweight reranker).
-- **Smart Indexing**: Persistent local index with incremental updates.
-- **Source Links**: MCP `search_docs` tool returns resource links for each source document, displayed as clickable links in supported MCP clients.
-- **Dual Retrieval**: Returns both semantically relevant chunks and BM25 filename matches separately, so filename lookups don't get buried by semantic reranking.
+- **Fully local and private**: All search runs on your machine — no data leaves your network. Models are bundled and work offline.
+- **Incremental indexing**: Only reindexes new or changed files, so re-runs are fast even on large document collections.
+- **Heading-aware navigation**: Extracts headings from PDFs, Word docs, and Markdown so results include the full heading path (e.g. "Chapter 3 > Setup > Prerequisites").
+- **Date filtering and recency boost**: Search within a date range or let recent documents rank higher automatically.
+- **Dual retrieval**: Returns both meaning-based chunk matches and keyword-based filename matches separately, so file lookups don't get buried by unrelated content.
+- **Multi-directory with per-folder rules**: Index multiple directories with individual include/exclude glob patterns — useful for shared drives with mixed content.
+- **Confluence integration**: Optionally searches your Confluence instance alongside local files, with results returned in the same format.
+- **Source links**: Each result includes a clickable link back to the source file or Confluence page in supported MCP clients.
 
 ## Quick Installation
 
