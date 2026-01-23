@@ -700,32 +700,40 @@ async def run_rag_metrics_tests() -> Dict[str, Any]:
         logger.error("No documents downloaded. Cannot proceed with tests.")
         return {"error": "No documents downloaded"}
     
-    # Step 2: Create test config and set environment variables
-    original_ingest_config = os.environ.get("CHUNKSILO_CONFIG")
-    original_storage_dir = os.environ.get("STORAGE_DIR")
-
-    # Create temporary ingest config for test data directory
-    test_config_path = TEST_STORAGE_DIR / "test_config.json"
+    # Step 2: Patch module globals for test isolation
     TEST_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-    with open(test_config_path, "w") as f:
-        json.dump({
-            "directories": [str(TEST_DATA_DIR)],
-            "chunk_size": 1600,
-            "chunk_overlap": 200
-        }, f)
+
+    import index
+    import chunksilo
+
+    # Save originals for restoration
+    orig_index_storage = index.STORAGE_DIR
+    orig_index_state_db = index.STATE_DB_PATH
+    orig_index_bm25 = index.BM25_INDEX_DIR
+    orig_index_heading = index.HEADING_STORE_PATH
+    orig_index_config = index._config
+    orig_chunksilo_storage = chunksilo.STORAGE_DIR
+    orig_chunksilo_bm25 = chunksilo.BM25_INDEX_DIR
 
     try:
-        os.environ["CHUNKSILO_CONFIG"] = str(test_config_path)
-        os.environ["STORAGE_DIR"] = str(TEST_STORAGE_DIR)
-        
-        # Re-import to get updated paths
-        import importlib
-        import index
-        import chunksilo
-        importlib.reload(ingest)
-        importlib.reload(mcp_server)
-        
-        # Re-import after reload
+        # Patch index module globals
+        index.STORAGE_DIR = TEST_STORAGE_DIR
+        index.STATE_DB_PATH = TEST_STORAGE_DIR / "ingestion_state.db"
+        index.BM25_INDEX_DIR = TEST_STORAGE_DIR / "bm25_index"
+        index.HEADING_STORE_PATH = TEST_STORAGE_DIR / "heading_store.json"
+        index._config = {
+            **index._config,
+            "indexing": {
+                "directories": [str(TEST_DATA_DIR)],
+                "chunk_size": 1600,
+                "chunk_overlap": 200,
+            },
+        }
+
+        # Patch chunksilo module globals
+        chunksilo.STORAGE_DIR = TEST_STORAGE_DIR
+        chunksilo.BM25_INDEX_DIR = TEST_STORAGE_DIR / "bm25_index"
+
         from index import build_index as build_test_index
         from chunksilo import load_llamaindex_index, search_docs as search_docs_reloaded
         
@@ -844,16 +852,14 @@ async def run_rag_metrics_tests() -> Dict[str, Any]:
         return results
         
     finally:
-        # Restore original environment variables
-        if original_ingest_config:
-            os.environ["CHUNKSILO_CONFIG"] = original_ingest_config
-        elif "CHUNKSILO_CONFIG" in os.environ:
-            del os.environ["CHUNKSILO_CONFIG"]
-
-        if original_storage_dir:
-            os.environ["STORAGE_DIR"] = original_storage_dir
-        elif "STORAGE_DIR" in os.environ:
-            del os.environ["STORAGE_DIR"]
+        # Restore original module globals
+        index.STORAGE_DIR = orig_index_storage
+        index.STATE_DB_PATH = orig_index_state_db
+        index.BM25_INDEX_DIR = orig_index_bm25
+        index.HEADING_STORE_PATH = orig_index_heading
+        index._config = orig_index_config
+        chunksilo.STORAGE_DIR = orig_chunksilo_storage
+        chunksilo.BM25_INDEX_DIR = orig_chunksilo_bm25
 
 
 def main():
