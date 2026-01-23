@@ -43,7 +43,7 @@ def test_query():
         "What are the key points?",
     ]
 
-    from chunksilo import retrieve_docs
+    from chunksilo import search_docs
 
     async def _run_queries():
         if not STORAGE_DIR.exists():
@@ -57,7 +57,7 @@ def test_query():
             print(f"\nQuery: {query}")
             print("-" * 60)
 
-            result = await retrieve_docs(query)
+            result = await search_docs(query)
             chunks = result.get("chunks", [])
             print(f"Retrieved {len(chunks)} chunks")
 

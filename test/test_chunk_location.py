@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for chunk location field generation in retrieve_docs response.
+"""Tests for chunk location field generation in search_docs response.
 
 Tests the following location fields:
 - uri: file:// URI for local files, full URL for Confluence

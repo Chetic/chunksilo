@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 # Import after logging is set up
 from index import STORAGE_DIR, build_index
-from chunksilo import retrieve_docs
+from chunksilo import search_docs
 
 # Test corpus configuration
 TEST_DATA_DIR = Path(os.getenv("TEST_DATA_DIR", "./test_data"))
@@ -681,9 +681,9 @@ async def evaluate_query(
     expected_file_patterns: List[str],
     difficulty: str,
 ) -> Dict[str, Any]:
-    """Evaluate a single query against the RAG system (uses global retrieve_docs)."""
+    """Evaluate a single query against the RAG system (uses global search_docs)."""
     return await evaluate_query_with_retriever(
-        query, expected_keywords, expected_file_patterns, difficulty, retrieve_docs
+        query, expected_keywords, expected_file_patterns, difficulty, search_docs
     )
 
 
@@ -727,7 +727,7 @@ async def run_large_scale_tests() -> Dict[str, Any]:
         
         # Re-import after reload
         from index import build_index as build_test_index
-        from chunksilo import load_llamaindex_index, retrieve_docs as retrieve_docs_reloaded
+        from chunksilo import load_llamaindex_index, search_docs as search_docs_reloaded
         
         # Step 3: Build index
         logger.info("\n" + "=" * 80)
@@ -752,9 +752,9 @@ async def run_large_scale_tests() -> Dict[str, Any]:
         evaluations = []
         for query, keywords, patterns, difficulty in TEST_QUERIES:
             try:
-                # Use the reloaded retrieve_docs function
+                # Use the reloaded search_docs function
                 eval_result = await evaluate_query_with_retriever(
-                    query, keywords, patterns, difficulty, retrieve_docs_reloaded
+                    query, keywords, patterns, difficulty, search_docs_reloaded
                 )
                 evaluations.append(eval_result)
             except Exception as e:

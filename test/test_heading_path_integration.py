@@ -295,7 +295,7 @@ async def _async_test_heading_path_extraction(test_env):
                     
                     # Test Markdown - find any chunk from .md file with heading_path
                     print("Querying Markdown...")
-                    result_md = await chunksilo.retrieve_docs("Lorem ipsum dolor sit amet consectetur")
+                    result_md = await chunksilo.search_docs("Lorem ipsum dolor sit amet consectetur")
                     chunks_md = result_md["chunks"]
 
                     # Filter for chunks from MD file by URI
@@ -315,7 +315,7 @@ async def _async_test_heading_path_extraction(test_env):
                     # Test DOCX - try to find DOCX chunk with heading_path
                     # Note: With mock BoW embedding, DOCX may not always rank in top results
                     print("Querying DOCX...")
-                    result_docx = await chunksilo.retrieve_docs("Chapter Introduction Architecture Components system design")
+                    result_docx = await chunksilo.search_docs("Chapter Introduction Architecture Components system design")
                     chunks_docx = result_docx["chunks"]
 
                     # Filter for chunks from DOCX file by URI
@@ -338,7 +338,7 @@ async def _async_test_heading_path_extraction(test_env):
                     # Test PDF - try to find PDF chunk
                     # Note: PDFs typically don't have heading_path unless they have a TOC
                     print("Querying PDF...")
-                    result_pdf = await chunksilo.retrieve_docs("PDF Title content Target")
+                    result_pdf = await chunksilo.search_docs("PDF Title content Target")
                     chunks_pdf = result_pdf["chunks"]
 
                     # Filter for chunks from PDF file by URI

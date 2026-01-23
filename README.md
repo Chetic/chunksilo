@@ -6,7 +6,7 @@ Local semantic search for PDF, DOCX, DOC, Markdown, and TXT files. The MCP serve
 
 - **Privacy First**: Fully local retrieval (FastEmbed + lightweight reranker).
 - **Smart Indexing**: Persistent local index with incremental updates.
-- **Source Links**: MCP `retrieve_docs` tool returns resource links for each source document, displayed as clickable links in supported MCP clients.
+- **Source Links**: MCP `search_docs` tool returns resource links for each source document, displayed as clickable links in supported MCP clients.
 - **Dual Retrieval**: Returns both semantically relevant chunks and BM25 filename matches separately, so filename lookups don't get buried by semantic reranking.
 
 ## Quick Installation

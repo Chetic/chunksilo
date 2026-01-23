@@ -798,38 +798,12 @@ def _apply_recency_boost(
 
 
 @mcp.tool()
-async def retrieve_docs(
+async def search_docs(
     query: Annotated[str, Field(description="Search query text")],
     date_from: Annotated[str | None, Field(description="Optional start date filter (YYYY-MM-DD format, inclusive)")] = None,
     date_to: Annotated[str | None, Field(description="Optional end date filter (YYYY-MM-DD format, inclusive)")] = None,
 ) -> dict[str, Any]:
-    """
-Search the local documentation corpus and return the most relevant chunks.
-
-Args:
-    query: Search query text
-    date_from: Optional start date filter (YYYY-MM-DD format, inclusive)
-    date_to: Optional end date filter (YYYY-MM-DD format, inclusive)
-
-The tool returns a structured response with:
-- `chunks`: Array of retrieved document chunks (semantically ranked)
-- `matched_files`: Array of files whose names match the query (BM25 ranked)
-- `query`: The search query used
-- `num_chunks`: Number of chunks returned
-- `num_matched_files`: Number of files matched by name
-- `retrieval_time`: Time taken for retrieval
-
-Each chunk includes:
-- `text`: Full chunk text content
-- `location`: Structured location details (uri, page, line, heading_path)
-- `score`: Relevance score (from reranker)
-
-Each matched_file includes:
-- `file_name`: Name of the matched file
-- `file_path`: Path to the file
-- `uri`: file:// URI for the file
-- `score`: BM25 relevance score
-    """
+    """Search across all your indexed documentation using a natural language query."""
     start_time = time.time()
 
     try:
@@ -1071,7 +1045,7 @@ Each matched_file includes:
         return structured_response
 
     except Exception as e:
-        logger.error(f"Error in retrieve_docs: {e}", exc_info=True)
+        logger.error(f"Error in search_docs: {e}", exc_info=True)
         error_response = {
             "matched_files": [],
             "chunks": [],
