@@ -50,7 +50,7 @@ fi
 dnf install -y python3.11 python3.11-pip git which gcc gcc-c++ make
 
 # Prepare manylinux_2_34 release package
-PACKAGE_ROOT="release_package_manylinux_2_34/chunksilo"
+PACKAGE_ROOT="release_package_manylinux_2_34/chunksilo-${VERSION}"
 mkdir -p "$PACKAGE_ROOT"
 
 # Copy common files and models (including hidden files/directories)
