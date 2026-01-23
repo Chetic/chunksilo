@@ -1,0 +1,8 @@
+[project]
+name = "chunksilo"
+description = "RAG-based document retrieval system with MCP interface"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+authors = [
+    {name = "Fredrik Reveny"}
+]

@@ -3,16 +3,16 @@ Copyright 2026 Fredrik Reveny
 
 This product includes software developed by third parties.
 
-The following components are distributed under the Apache License 2.0:
+The following bundled components are distributed under the Apache License 2.0:
 
 - fastembed: Copyright 2024 Qdrant
 - huggingface-hub: Copyright Hugging Face
 - tokenizers: Copyright Hugging Face
 - flashrank: Copyright Prithivi Da
 - nltk: Copyright NLTK Project
-- requests: Copyright Kenneth Reitz
 - aiohttp: Copyright aio-libs contributors
 - cryptography: Copyright The Python Cryptographic Authority developers
+- tenacity: Copyright Julien Danjou
 
 Bundled models:
 

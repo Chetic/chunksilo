@@ -103,16 +103,28 @@ echo "✓ Dependencies downloaded successfully to $PACKAGE_ROOT/dependencies"
 echo "Generating third-party license report..."
 python3.11 -m venv /tmp/license-venv
 /tmp/license-venv/bin/pip install --quiet --no-index --find-links "$PACKAGE_ROOT/dependencies" \
-  -r "$PACKAGE_ROOT/requirements.txt" 2>/dev/null || true
+  -r "$PACKAGE_ROOT/requirements.txt"
 /tmp/license-venv/bin/pip install --quiet pip-licenses
-/tmp/license-venv/bin/pip-licenses --format=plain-vertical --with-license-file --no-license-path \
-  --output-file="$PACKAGE_ROOT/THIRD-PARTY-LICENSES.txt" || true
-rm -rf /tmp/license-venv
-if [ -f "$PACKAGE_ROOT/THIRD-PARTY-LICENSES.txt" ]; then
-  echo "✓ Third-party license report generated"
-else
-  echo "Warning: Could not generate third-party license report" >&2
+
+# Validate that installed package count is reasonable vs downloaded wheels
+INSTALLED_COUNT=$(/tmp/license-venv/bin/pip list --format=columns | tail -n +3 | wc -l)
+WHEEL_COUNT=$(find "$PACKAGE_ROOT/dependencies" -type f \( -name "*.whl" -o -name "*.tar.gz" \) | wc -l)
+echo "Installed packages: $INSTALLED_COUNT, Downloaded wheels: $WHEEL_COUNT"
+if [ "$INSTALLED_COUNT" -lt "$((WHEEL_COUNT / 2))" ]; then
+  echo "Error: Only $INSTALLED_COUNT of $WHEEL_COUNT packages installed -- license report would be incomplete" >&2
+  rm -rf /tmp/license-venv
+  exit 1
 fi
+
+/tmp/license-venv/bin/pip-licenses --format=plain-vertical --with-license-file --no-license-path \
+  --output-file="$PACKAGE_ROOT/THIRD-PARTY-LICENSES.txt"
+rm -rf /tmp/license-venv
+
+if [ ! -s "$PACKAGE_ROOT/THIRD-PARTY-LICENSES.txt" ]; then
+  echo "Error: THIRD-PARTY-LICENSES.txt is empty or missing" >&2
+  exit 1
+fi
+echo "✓ Third-party license report generated"
 
 # Determine output path based on context
 WORK_DIR="/workspace"

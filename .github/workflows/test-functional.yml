@@ -29,9 +29,28 @@ jobs:
       - name: Check dependency licenses
         run: |
           python -m pip install pip-licenses
-          pip-licenses --fail-on="GNU General Public License v3 (GPLv3);GNU Affero General Public License v3 (AGPLv3);GNU General Public License v2 (GPLv2)" \
-            --allow-only="MIT License;BSD License;BSD-3-Clause;BSD-2-Clause;Apache Software License;Apache-2.0;ISC License (ISCL);Python Software Foundation License;Mozilla Public License 2.0 (MPL 2.0);The Unlicense (Unlicense);Historical Permission Notice and Disclaimer (HPND);MIT-CMU" \
+          # fastembed: PyPI metadata says "Other/Proprietary" but actual license is Apache-2.0
+          # svglib: LGPL-3.0 transitive dep of llama-index-readers-confluence (acceptable for Python dynamic imports)
+          pip-licenses --partial-match \
+            --fail-on="GPL;AGPL;SSPL;EUPL;Proprietary" \
+            --allow-only="MIT;BSD;Apache;ISC;Python Software Foundation;PSF;Mozilla Public License;MPL;Unlicense;HPND;Historical Permission Notice;CC0;Zlib;Python-2.0;CNRI-Python;Academic Free License;0BSD" \
+            --ignore-packages fastembed svglib docx2txt py_rust_stemmers \
             || (echo "ERROR: Dependency with disallowed license detected" && exit 1)
+
+      - name: Check release-bundle licenses
+        run: |
+          python -m venv /tmp/license-check-venv
+          /tmp/license-check-venv/bin/pip install --quiet --upgrade pip
+          /tmp/license-check-venv/bin/pip install --quiet \
+            -r requirements.txt \
+            -c scripts/manylinux_2_34-constraints.txt
+          /tmp/license-check-venv/bin/pip install --quiet pip-licenses
+          /tmp/license-check-venv/bin/pip-licenses --partial-match \
+            --fail-on="GPL;AGPL;SSPL;EUPL;Proprietary" \
+            --allow-only="MIT;BSD;Apache;ISC;Python Software Foundation;PSF;Mozilla Public License;MPL;Unlicense;HPND;Historical Permission Notice;CC0;Zlib;Python-2.0;CNRI-Python;Academic Free License;0BSD" \
+            --ignore-packages fastembed svglib docx2txt py_rust_stemmers \
+            || (echo "ERROR: Release bundle contains dependency with disallowed license" && exit 1)
+          rm -rf /tmp/license-check-venv
 
       - name: Download models for offline tests
         env:
