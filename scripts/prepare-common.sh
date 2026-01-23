@@ -25,6 +25,7 @@ python3.11 -m pip install -r requirements.txt
 # Copy common files that are the same for all platforms
 cp chunksilo.py "$COMMON_ROOT/"
 cp cfgload.py "$COMMON_ROOT/"
+cp confluence_html_formatter.py "$COMMON_ROOT/"
 cp index.py "$COMMON_ROOT/"
 cp requirements.txt "$COMMON_ROOT/"
 cp README.md "$COMMON_ROOT/"
@@ -37,6 +38,22 @@ echo "$VERSION" > "$COMMON_ROOT/VERSION"
 
 # Download the embedding + rerank models once (they're the same for all platforms)
 python3.11 index.py --download-models --model-cache-dir "$COMMON_ROOT/models"
+
+# Write model license information
+cat > "$COMMON_ROOT/models/MODEL-LICENSES.txt" << 'MODLICEOF'
+Bundled Model Licenses
+======================
+
+BAAI/bge-small-en-v1.5
+  License: MIT
+  Copyright: Beijing Academy of Artificial Intelligence (BAAI)
+  Source: https://huggingface.co/BAAI/bge-small-en-v1.5
+
+cross-encoder/ms-marco-MiniLM-L-12-v2
+  License: Apache-2.0
+  Copyright: Nils Reimers
+  Source: https://huggingface.co/cross-encoder/ms-marco-MiniLM-L12-v2
+MODLICEOF
 
 # Verify models were downloaded
 if [ -d "$COMMON_ROOT/models" ]; then

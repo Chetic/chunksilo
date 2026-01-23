@@ -99,6 +99,21 @@ fi
 
 echo "✓ Dependencies downloaded successfully to $PACKAGE_ROOT/dependencies"
 
+# Generate third-party license report from bundled dependencies
+echo "Generating third-party license report..."
+python3.11 -m venv /tmp/license-venv
+/tmp/license-venv/bin/pip install --quiet --no-index --find-links "$PACKAGE_ROOT/dependencies" \
+  -r "$PACKAGE_ROOT/requirements.txt" 2>/dev/null || true
+/tmp/license-venv/bin/pip install --quiet pip-licenses
+/tmp/license-venv/bin/pip-licenses --format=plain-vertical --with-license-file --no-license-path \
+  --output-file="$PACKAGE_ROOT/THIRD-PARTY-LICENSES.txt" || true
+rm -rf /tmp/license-venv
+if [ -f "$PACKAGE_ROOT/THIRD-PARTY-LICENSES.txt" ]; then
+  echo "✓ Third-party license report generated"
+else
+  echo "Warning: Could not generate third-party license report" >&2
+fi
+
 # Determine output path based on context
 WORK_DIR="/workspace"
 [ ! -d "$WORK_DIR" ] && WORK_DIR="$PROJECT_ROOT"

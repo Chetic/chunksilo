@@ -2,15 +2,22 @@ ChunkSilo
 Copyright 2026 Fredrik Reveny
 
 This product includes software developed by third parties.
+
 The following components are distributed under the Apache License 2.0:
 
-- fastembed: Copyright Qdrant
+- fastembed: Copyright 2024 Qdrant
 - huggingface-hub: Copyright Hugging Face
 - tokenizers: Copyright Hugging Face
 - flashrank: Copyright Prithivi Da
+- nltk: Copyright NLTK Project
 - requests: Copyright Kenneth Reitz
 - aiohttp: Copyright aio-libs contributors
 - cryptography: Copyright The Python Cryptographic Authority developers
+
+Bundled models:
+
+- BAAI/bge-small-en-v1.5: Copyright Beijing Academy of Artificial Intelligence (MIT License)
+- cross-encoder/ms-marco-MiniLM-L-12-v2: Copyright Nils Reimers (Apache License 2.0)
 
 Full license texts for these dependencies are available in their
 respective source distributions or at:
