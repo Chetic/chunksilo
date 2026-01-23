@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """
 MCP server for querying documentation using RAG.
 Returns raw document chunks for the calling LLM to synthesize.

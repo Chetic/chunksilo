@@ -19,9 +19,9 @@ except ImportError:
     Document = None
 
 try:
-    import fitz  # pymupdf
+    from pypdf import PdfWriter
 except ImportError:
-    fitz = None
+    PdfWriter = None
 
 # Import project modules
 import sys
@@ -101,20 +101,13 @@ def create_docx_file(path):
 
 def create_pdf_file(path):
     """Create a PDF file."""
-    if not fitz:
-        pytest.skip("pymupdf not installed")
-        
-    doc = fitz.open()
-    page = doc.new_page()
-    
-    # We write text. PDF layout extraction is tricky.
-    # Standard pypdf/llama-index ingestion might not infer semantic headings 
-    # unless using a smart model. We just want to verify behavior (likely None).
-    text = "PDF Title\n\nTarget content for pdf.\n"
-    page.insert_text((50, 50), text)
-    
-    doc.save(path)
-    doc.close()
+    if not PdfWriter:
+        pytest.skip("pypdf not installed")
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    with open(path, "wb") as f:
+        writer.write(f)
 
 import asyncio
 

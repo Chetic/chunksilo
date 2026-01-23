@@ -28,6 +28,8 @@ cp cfgload.py "$COMMON_ROOT/"
 cp index.py "$COMMON_ROOT/"
 cp requirements.txt "$COMMON_ROOT/"
 cp README.md "$COMMON_ROOT/"
+cp LICENSE "$COMMON_ROOT/"
+cp NOTICE "$COMMON_ROOT/"
 cp config.yaml "$COMMON_ROOT/"
 cp setup.sh "$COMMON_ROOT/"
 

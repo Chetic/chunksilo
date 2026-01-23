@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """
 Indexing pipeline for building a RAG index from PDF, DOCX, DOC, Markdown, and TXT documents.
 Supports incremental indexing using a local SQLite database to track file states.
@@ -418,28 +419,37 @@ def _extract_pdf_headings_from_outline(pdf_path: Path) -> List[dict]:
         List of dicts with keys: text (str), position (int), level (int)
     """
     try:
-        import fitz  # pymupdf
+        from pypdf import PdfReader
     except ImportError:
-        logger.warning("PyMuPDF not available, skipping PDF heading extraction")
+        logger.warning("pypdf not available, skipping PDF heading extraction")
         return []
 
     try:
-        doc = fitz.open(pdf_path)
-        toc = doc.get_toc()  # Returns [[level, title, page_num], ...]
+        reader = PdfReader(pdf_path)
+        outline = reader.outline
 
-        if not toc:
+        if not outline:
             return []
 
-        headings = []
-        for item in toc:
-            level, title, page_num = item[0], item[1], item[2]
+        def flatten_outline(items, level=1):
+            """Flatten nested outline into list of (title, page_num, level)."""
+            results = []
+            for item in items:
+                if isinstance(item, list):
+                    results.extend(flatten_outline(item, level + 1))
+                else:
+                    page_num = reader.get_destination_page_number(item)
+                    results.append((item.title, page_num, level))
+            return results
 
+        flat = flatten_outline(outline)
+        headings = []
+        for title, page_num, level in flat:
             # Estimate position by accumulating text from previous pages
             position = 0
-            for page_idx in range(page_num - 1):
-                if page_idx < len(doc):
-                    page = doc[page_idx]
-                    position += len(page.get_text())
+            for page_idx in range(page_num):
+                if page_idx < len(reader.pages):
+                    position += len(reader.pages[page_idx].extract_text() or "")
 
             headings.append({
                 "text": title.strip(),
@@ -447,7 +457,6 @@ def _extract_pdf_headings_from_outline(pdf_path: Path) -> List[dict]:
                 "level": level
             })
 
-        doc.close()
         return headings
 
     except Exception as e:

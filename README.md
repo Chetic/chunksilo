@@ -191,4 +191,4 @@ Add to `mcp_settings.json` (typically in `~/.config/Code/User/globalStorage/roov
 
 ## License
 
-MIT
+Apache-2.0. See [LICENSE](LICENSE) for details.
