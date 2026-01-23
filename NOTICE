@@ -14,6 +14,15 @@ The following bundled components are distributed under the Apache License 2.0:
 - cryptography: Copyright The Python Cryptographic Authority developers
 - tenacity: Copyright Julien Danjou
 
+The following transitive dependency is distributed under the
+GNU Lesser General Public License v3.0 (LGPL-3.0):
+
+- svglib: Copyright Dinu Gherman
+  Source: https://github.com/deeplook/svglib
+  License: https://www.gnu.org/licenses/lgpl-3.0.html
+  (Transitive dependency of llama-index-readers-confluence.
+   Not modified. Users may replace this library freely via pip.)
+
 Bundled models:
 
 - BAAI/bge-small-en-v1.5: Copyright Beijing Academy of Artificial Intelligence (MIT License)
