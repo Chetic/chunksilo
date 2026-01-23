@@ -30,8 +30,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # We need to import index and chunksilo after setting up sys.path
 # We will patch their globals during tests
 import index
+from index import IndexConfig, DirectoryConfig
 import chunksilo
-import cfgload
 
 @pytest.fixture
 def test_env(tmp_path):
@@ -125,29 +125,15 @@ async def _async_test_heading_path_extraction(test_env):
     create_pdf_file(data_dir / "test.pdf")
     
     # 2. Run Ingestion
-    # Create temporary config file for ingestion
-    import yaml
-    config_path = storage_dir.parent / "config.yaml"
-    config_path.write_text(yaml.dump({
-        "indexing": {
-            "directories": [str(data_dir)],
-            "chunk_size": 200,
-            "chunk_overlap": 25
-        },
-        "storage": {
-            "storage_dir": str(storage_dir),
-            "model_cache_dir": "./models"
-        }
-    }))
-
-    # Save and patch config module
-    orig_config_path = cfgload.CONFIG_PATH
-    orig_config_cache = cfgload._config_cache
-    cfgload.CONFIG_PATH = config_path
-    cfgload._config_cache = None
+    test_index_config = IndexConfig(
+        directories=[DirectoryConfig(path=data_dir)],
+        chunk_size=200,
+        chunk_overlap=25
+    )
 
     # Patch globals in index and chunksilo modules
-    with patch("index.STORAGE_DIR", storage_dir), \
+    with patch("index.load_index_config", return_value=test_index_config), \
+         patch("index.STORAGE_DIR", storage_dir), \
          patch("index.STATE_DB_PATH", storage_dir / "ingestion_state.db"), \
          patch("index.RETRIEVAL_MODEL_CACHE_DIR", Path("./models").resolve()), \
          patch("chunksilo.STORAGE_DIR", storage_dir), \
@@ -348,10 +334,6 @@ async def _async_test_heading_path_extraction(test_env):
                         print(f"PDF Location: {pdf_chunk['location']}")
                     else:
                         print("⚠ PDF chunk not retrieved by mock embedding (non-critical)")
-
-    # Restore config module state
-    cfgload.CONFIG_PATH = orig_config_path
-    cfgload._config_cache = orig_config_cache
 
 if __name__ == "__main__":
     # Allow running directly

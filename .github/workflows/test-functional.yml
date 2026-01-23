@@ -30,7 +30,7 @@ jobs:
         run: |
           python -m pip install pip-licenses
           pip-licenses --fail-on="GNU General Public License v3 (GPLv3);GNU Affero General Public License v3 (AGPLv3);GNU General Public License v2 (GPLv2)" \
-            --allow-only="MIT License;BSD License;BSD-3-Clause;BSD-2-Clause;Apache Software License;ISC License (ISCL);Python Software Foundation License;Mozilla Public License 2.0 (MPL 2.0);The Unlicense (Unlicense);Historical Permission Notice and Disclaimer (HPND);MIT-CMU" \
+            --allow-only="MIT License;BSD License;BSD-3-Clause;BSD-2-Clause;Apache Software License;Apache-2.0;ISC License (ISCL);Python Software Foundation License;Mozilla Public License 2.0 (MPL 2.0);The Unlicense (Unlicense);Historical Permission Notice and Disclaimer (HPND);MIT-CMU" \
             || (echo "ERROR: Dependency with disallowed license detected" && exit 1)
 
       - name: Download models for offline tests

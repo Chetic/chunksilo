@@ -38,8 +38,8 @@ def test_index_loading():
     print("Testing Index Loading")
     print("=" * 60)
 
-    if not STORAGE_DIR.exists():
-        pytest.skip("STORAGE_DIR is missing; run ingestion before index loading tests.")
+    if not (STORAGE_DIR / "docstore.json").exists():
+        pytest.skip("Index not built (docstore.json missing); run ingestion before index loading tests.")
 
     index = load_llamaindex_index()
     print("✓ Index loaded successfully")

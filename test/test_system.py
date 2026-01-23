@@ -46,8 +46,8 @@ def test_query():
     from chunksilo import search_docs
 
     async def _run_queries():
-        if not STORAGE_DIR.exists():
-            pytest.skip("STORAGE_DIR is missing; run ingestion before query tests.")
+        if not (STORAGE_DIR / "docstore.json").exists():
+            pytest.skip("Index not built (docstore.json missing); run ingestion before query tests.")
 
         # Load index to verify it exists
         index = load_llamaindex_index()
