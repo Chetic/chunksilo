@@ -11,7 +11,7 @@ ChunkSilo is like a local Google for your documents. It uses semantic search —
 
 ## Features
 
-- **Fully local and private**: All search runs on your machine — no data leaves your network. Models are bundled and work offline.
+- **Local indexing and search**: All indexing and search runs on your machine with bundled models — ChunkSilo itself makes no external network calls when `offline: true` (default). Note: search results are passed to your MCP client's LLM, which may be cloud-hosted.
 - **Incremental indexing**: Only reindexes new or changed files, so re-runs are fast even on large document collections.
 - **Heading-aware navigation**: Extracts headings from PDFs, Word docs, and Markdown so results include the full heading path (e.g. "Chapter 3 > Setup > Prerequisites").
 - **Date filtering and recency boost**: Search within a date range or let recent documents rank higher automatically.
