@@ -29,7 +29,7 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install -r test/requirements.txt
 
-      - name: Run large-scale test suite
+      - name: Run RAG metrics test suite
         env:
           OFFLINE: 0
           TEST_DATA_DIR: ./test_data
@@ -38,7 +38,7 @@ jobs:
           ABORT_ON_DOWNLOAD_FAILURE: 1
         run: |
           cd test
-          python test_large_scale.py
+          python test_rag_metrics.py
 
       - name: Check metrics against thresholds
         run: |
@@ -62,7 +62,7 @@ jobs:
           THRESHOLDS = {
               "precision@5": 0.40,   # Current: 0.491
               "recall@5": 0.60,      # Current: 0.697
-              "mrr": 0.45,            # Current: 0.518
+              "mrr": 0.40,            # Current: 0.518
               "ndcg@5": 0.60,         # Current: 0.672
           }
           

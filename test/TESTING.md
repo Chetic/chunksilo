@@ -90,9 +90,9 @@ cd test
 pytest
 ```
 
-### 3. Large-Scale Automated Test Suite ⭐
+### 3. RAG Metrics Test Suite ⭐
 
-The comprehensive large-scale test suite downloads a diverse corpus of documents from the web, ingests them, and evaluates retrieval performance using standard RAG metrics.
+The comprehensive RAG metrics test suite downloads a diverse corpus of documents from the web, ingests them, and evaluates retrieval performance using standard RAG metrics.
 
 **Features:**
 - Automatically downloads documents in all supported formats (PDF, DOCX, Markdown, TXT)
@@ -101,14 +101,14 @@ The comprehensive large-scale test suite downloads a diverse corpus of documents
 - Evaluates performance by difficulty level
 - Generates detailed JSON reports
 
-**Run the large-scale test suite:**
+**Run the RAG metrics test suite:**
 
-**Important**: The large-scale test suite requires online access to download test documents. Run it with `OFFLINE=0`:
+**Important**: The RAG metrics test suite requires online access to download test documents. Run it with `OFFLINE=0`:
 
 ```bash
 source .venv/bin/activate
 cd test
-OFFLINE=0 python test_large_scale.py
+OFFLINE=0 python test_rag_metrics.py
 ```
 
 **Note**: All tests must be run with `OFFLINE=0` to allow downloading test documents and models if needed. The test suite will download documents from the web, so an internet connection is required.
@@ -201,11 +201,11 @@ The server speaks MCP over stdio and is normally launched by an MCP client (such
 
 ## Continuous Testing
 
-For CI/CD pipelines, run the large-scale test suite and check that metrics meet minimum thresholds:
+For CI/CD pipelines, run the RAG metrics test suite and check that metrics meet minimum thresholds:
 
 ```bash
 cd test
-OFFLINE=0 python test_large_scale.py
+OFFLINE=0 python test_rag_metrics.py
 # Check that aggregate Precision@5 > 0.6, Recall@5 > 0.7, MRR > 0.7
 ```
 

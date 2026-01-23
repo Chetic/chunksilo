@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Large-scale automated test suite for RAG system evaluation.
+RAG metrics test suite for system evaluation.
 
 This test suite:
 1. Downloads a diverse corpus of documents from the web (PDF, DOCX, Markdown, TXT)
@@ -687,10 +687,10 @@ async def evaluate_query(
     )
 
 
-async def run_large_scale_tests() -> Dict[str, Any]:
-    """Run the complete large-scale test suite."""
+async def run_rag_metrics_tests() -> Dict[str, Any]:
+    """Run the complete RAG metrics test suite."""
     logger.info("=" * 80)
-    logger.info("Large-Scale RAG System Test Suite")
+    logger.info("RAG Metrics Test Suite")
     logger.info("=" * 80)
     
     # Step 1: Download test corpus
@@ -858,7 +858,7 @@ async def run_large_scale_tests() -> Dict[str, Any]:
 
 def main():
     """Main entry point."""
-    results = asyncio.run(run_large_scale_tests())
+    results = asyncio.run(run_rag_metrics_tests())
     
     if "error" in results:
         logger.error(f"Test suite failed: {results['error']}")

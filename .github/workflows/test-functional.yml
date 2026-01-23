@@ -45,6 +45,6 @@ jobs:
           DATA_DIR: ./test_data_dummy
           STORAGE_DIR: ./test_storage_dummy
         run: |
-          # Run all tests except large_scale (which has its own workflow)
+          # Run all tests except rag_metrics (which has its own workflow)
           # This automatically discovers new test files
-          pytest test/ -v --ignore=test/test_large_scale.py
+          pytest test/ -v --ignore=test/test_rag_metrics.py
