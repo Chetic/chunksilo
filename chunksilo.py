@@ -81,6 +81,8 @@ logging.basicConfig(
         logging.StreamHandler(sys.stderr),                 # stderr
     ],
 )
+# Suppress spammy INFO logs from llama-index Confluence reader ("Processing <url>...")
+logging.getLogger("llama_index.readers.confluence").setLevel(logging.WARNING)
 
 # Configuration from config.yaml
 STORAGE_DIR = Path(_config["storage"]["storage_dir"])
@@ -568,7 +570,7 @@ def _get_confluence_page_dates(
                     pass
             return result
     except Exception as e:
-        logger.debug(f"Failed to fetch Confluence page dates for {page_id}: {e}")
+        logger.debug(f"Failed to fetch Confluence page dates: {e}")
     return {}
 
 
@@ -627,7 +629,6 @@ def _search_confluence(query: str) -> list[NodeWithScore]:
             text_conditions = ' OR '.join([f'text ~ "{term}"' for term in query_terms])
             cql = f'({text_conditions}) AND type = "page"'
 
-        logger.debug(f"Confluence CQL query: {cql}")
         documents = reader.load_data(cql=cql, max_num_results=CONFLUENCE_MAX_RESULTS)
 
         nodes: list[NodeWithScore] = []
