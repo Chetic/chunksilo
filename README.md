@@ -19,7 +19,7 @@ Download the latest release package from the [Releases page](https://github.com/
 ```bash
 tar -xzf chunksilo-vX.Y.Z-manylinux_2_34_x86_64.tar.gz
 cd chunksilo
-./install.sh
+./setup.sh
 ```
 
 3. **Edit** `config.json` to set your document directories

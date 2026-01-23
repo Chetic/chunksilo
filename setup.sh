@@ -4,29 +4,12 @@ set -e
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$SCRIPT_DIR"
 
-echo "=== ChunkSilo Installer ==="
+echo "=== ChunkSilo Setup ==="
 
-# Find Python
-find_python() {
-    for ver in "3.12" "3.11" "3.10"; do
-        if command -v "python$ver" &> /dev/null; then
-            echo "python$ver"
-            return
-        fi
-    done
-    if command -v python3 &> /dev/null; then
-        echo "python3"
-        return
-    fi
-}
-
-PYTHON_CMD=$(find_python)
-
-if [ -z "$PYTHON_CMD" ]; then
-    echo "Error: Python 3.10+ is required but not found." >&2
+if ! command -v python3.11 &> /dev/null; then
+    echo "Error: python3.11 is required but not found." >&2
     exit 1
 fi
-echo "Using Python: $PYTHON_CMD"
 
 # Setup venv
 if [ -d "venv" ]; then
@@ -34,7 +17,7 @@ if [ -d "venv" ]; then
     rm -rf venv
 fi
 echo "Creating virtual environment..."
-$PYTHON_CMD -m venv venv
+python3.11 -m venv venv
 
 echo "Installing dependencies..."
 DEP_DIR="$SCRIPT_DIR/dependencies"
@@ -52,7 +35,7 @@ else
 fi
 
 echo ""
-echo "=== Installation Complete ==="
+echo "=== Setup Complete ==="
 echo ""
 echo "Next steps:"
 echo "1. Edit config.json to configure your directories and settings"
@@ -63,10 +46,6 @@ echo ""
 echo "=== MCP Client Configuration ==="
 echo ""
 echo "Add this to your MCP client settings:"
-echo ""
-echo "  Claude Desktop: ~/Library/Application Support/Claude/claude_desktop_config.json"
-echo "  Cline:          VS Code settings > Cline > MCP Servers"
-echo "  Roo Code:       .roo/mcp.json in your project"
 echo ""
 cat << EOF
 {

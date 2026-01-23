@@ -26,10 +26,10 @@ tail -n +$PAYLOAD_START "$0" > "$TEMP_DIR/payload.zip"
 unzip -q "$TEMP_DIR/payload.zip" -d "$TEMP_DIR"
 
 # Make installer executable and run it
-chmod +x "$TEMP_DIR/install.sh"
+chmod +x "$TEMP_DIR/setup.sh"
 
-# Run install.sh
-"$TEMP_DIR/install.sh"
+# Run setup.sh
+"$TEMP_DIR/setup.sh"
 
 exit 0
 
