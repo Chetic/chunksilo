@@ -133,9 +133,9 @@ async def _async_test_heading_path_extraction(test_env):
     
     # 2. Run Ingestion
     # Create temporary config file for ingestion
-    import json
-    config_path = storage_dir.parent / "config.json"
-    config_path.write_text(json.dumps({
+    import yaml
+    config_path = storage_dir.parent / "config.yaml"
+    config_path.write_text(yaml.dump({
         "indexing": {
             "directories": [str(data_dir)],
             "chunk_size": 200,

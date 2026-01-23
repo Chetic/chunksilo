@@ -22,56 +22,47 @@ cd chunksilo
 ./setup.sh
 ```
 
-3. **Edit** `config.json` to set your document directories
+3. **Edit** `config.yaml` to set your document directories
 4. **Build** the index: `./venv/bin/python index.py`
 5. **Configure** your MCP client (see [MCP Client Configuration](#mcp-client-configuration))
 
 ## Configuration
 
-ChunkSilo uses a single configuration file: `config.json`
+ChunkSilo uses a single configuration file: `config.yaml`
 
 ### Configuration File
 
-Edit `config.json` to configure your settings:
+Edit `config.yaml` to configure your settings:
 
-```jsonc
-{
-  // Indexing settings - used by index.py when building the search index
-  "indexing": {
-    "directories": [
-      "./data",
-      "/mnt/nfs/shared-docs",
-      {
-        "path": "/mnt/samba/engineering",
-        "include": ["**/*.pdf", "**/*.md"],
-        "exclude": ["**/archive/**"]
-      }
-    ],
-    "chunk_size": 1600,
-    "chunk_overlap": 200
-  },
+```yaml
+# Indexing settings - used by index.py when building the search index
+indexing:
+  directories:
+    - "./data"
+    - "/mnt/nfs/shared-docs"
+    - path: "/mnt/samba/engineering"
+      include: ["**/*.pdf", "**/*.md"]
+      exclude: ["**/archive/**"]
+  chunk_size: 1600
+  chunk_overlap: 200
 
-  // Retrieval settings - used by chunksilo.py when searching
-  "retrieval": {
-    "embed_top_k": 20,
-    "rerank_top_k": 5,
-    "score_threshold": 0.1,
-    "offline": true
-  },
+# Retrieval settings - used by chunksilo.py when searching
+retrieval:
+  embed_top_k: 20
+  rerank_top_k: 5
+  score_threshold: 0.1
+  offline: true
 
-  // Confluence integration (optional)
-  "confluence": {
-    "url": "https://confluence.example.com",
-    "username": "your-username",
-    "api_token": "your-api-token"
-  },
+# Confluence integration (optional)
+confluence:
+  url: "https://confluence.example.com"
+  username: "your-username"
+  api_token: "your-api-token"
 
-  // Storage paths (usually don't need to change)
-  "storage": {
-    "storage_dir": "./storage",
-    "model_cache_dir": "./models"
-  }
-}
+# Storage paths (usually don't need to change)
+storage:
+  storage_dir: "./storage"
+  model_cache_dir: "./models"
 ```
 
 All settings are optional and have sensible defaults.
@@ -192,9 +183,9 @@ Add to `mcp_settings.json` (typically in `~/.config/Code/User/globalStorage/roov
 
 - **Index missing**: Run `./venv/bin/python index.py` in the install directory.
 - **Retrieval errors**: Check paths in your MCP client configuration.
-- **Offline mode**: The release package includes models and sets `offline: true` by default. Set `retrieval.offline: false` in `config.json` if you need network access.
-- **Confluence Integration**: Set `confluence.url`, `confluence.username`, and `confluence.api_token` in `config.json` to enable Confluence search.
-- **Custom CA Bundle**: Set `ssl.ca_bundle_path` in `config.json` for custom certificates.
+- **Offline mode**: The release package includes models and sets `offline: true` by default. Set `retrieval.offline: false` in `config.yaml` if you need network access.
+- **Confluence Integration**: Set `confluence.url`, `confluence.username`, and `confluence.api_token` in `config.yaml` to enable Confluence search.
+- **Custom CA Bundle**: Set `ssl.ca_bundle_path` in `config.yaml` for custom certificates.
 - **Network mounts**: Unavailable directories are skipped with a warning; indexing continues with available directories.
 - **Legacy .doc files**: Requires LibreOffice to be installed for automatic conversion to .docx. If LibreOffice is not found, .doc files are skipped with a warning. Full heading extraction is supported.
 

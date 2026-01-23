@@ -22,9 +22,9 @@ def test_ingestion():
     try:
         config = load_index_config()
         if not config.directories:
-            pytest.skip("No directories configured in config.json")
+            pytest.skip("No directories configured in config.yaml")
     except FileNotFoundError:
-        pytest.skip("config.json not found; create config before running ingestion tests.")
+        pytest.skip("config.yaml not found; create config before running ingestion tests.")
 
     build_index()
     print("✓ Ingestion completed successfully")

@@ -38,12 +38,12 @@ from llama_index.core import (
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
-# Load configuration from config.json
+# Load configuration from config.yaml
 import cfgload
 from cfgload import load_config
 _config = load_config()
 
-# Configuration from config.json
+# Configuration from config.yaml
 STORAGE_DIR = Path(_config["storage"]["storage_dir"])
 STATE_DB_PATH = STORAGE_DIR / "ingestion_state.db"
 
@@ -116,7 +116,7 @@ class IndexConfig:
 
 
 def load_index_config() -> IndexConfig:
-    """Load indexing configuration from config.json.
+    """Load indexing configuration from config.yaml.
 
     Raises:
         ValueError: If config is invalid
@@ -126,18 +126,16 @@ def load_index_config() -> IndexConfig:
     if not indexing_config.get("directories"):
         raise ValueError(
             "Config must have at least one directory in 'indexing.directories'.\n"
-            "Please update config.json with your directory configuration.\n"
+            "Please update config.yaml with your directory configuration.\n"
             "Example:\n"
-            '{\n'
-            '  "indexing": {\n'
-            '    "directories": ["./data"],\n'
-            '    "chunk_size": 1600,\n'
-            '    "chunk_overlap": 200\n'
-            '  }\n'
-            '}'
+            "indexing:\n"
+            "  directories:\n"
+            '    - "./data"\n'
+            "  chunk_size: 1600\n"
+            "  chunk_overlap: 200\n"
         )
 
-    logger.info("Loading indexing config from config.json")
+    logger.info("Loading indexing config from config.yaml")
     return _parse_index_config(indexing_config)
 
 
@@ -1269,7 +1267,7 @@ def build_index(
         logger.warning(f"Unavailable directories (skipped): {summary['unavailable']}")
 
     if not data_source.sources:
-        logger.error("No available directories to index. Check your config.json indexing.directories.")
+        logger.error("No available directories to index. Check your config.yaml indexing.directories.")
         return
 
     # Initialize Embedding Model
@@ -1384,7 +1382,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model-cache-dir",
         type=str,
-        help="Override the model cache directory from config.json",
+        help="Override the model cache directory from config.yaml",
     )
     args = parser.parse_args()
 

@@ -40,7 +40,7 @@ import asyncio
 import math
 import logging
 
-# Load configuration from config.json
+# Load configuration from config.yaml
 from cfgload import load_config
 _config = load_config()
 
@@ -81,7 +81,7 @@ logging.basicConfig(
     ],
 )
 
-# Configuration from config.json
+# Configuration from config.yaml
 STORAGE_DIR = Path(_config["storage"]["storage_dir"])
 
 # Two-stage retrieval configuration
@@ -181,7 +181,7 @@ _configured_directories_cache: list[Path] | None = None
 def _get_configured_directories() -> list[Path]:
     """Get list of configured data directories for path resolution.
 
-    Reads directories from config.json. Cached after first load.
+    Reads directories from config.yaml. Cached after first load.
     """
     global _configured_directories_cache
 

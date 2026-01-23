@@ -2,15 +2,14 @@
 """
 Shared configuration loading for ChunkSilo.
 
-Loads configuration from config.json with support for JSONC (JSON with comments).
+Loads configuration from config.yaml.
 """
-import json
-import re
+import yaml
 from pathlib import Path
 from typing import Any
 
 
-CONFIG_PATH = Path(__file__).parent / "config.json"
+CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
 _DEFAULTS: dict[str, Any] = {
     "indexing": {
@@ -54,57 +53,6 @@ _DEFAULTS: dict[str, Any] = {
 _config_cache: dict[str, Any] | None = None
 
 
-def _strip_jsonc_comments(text: str) -> str:
-    """Remove // and /* */ comments from JSON text (JSONC format)."""
-    # Remove single-line comments (// ...)
-    # Be careful not to remove // inside strings
-    result = []
-    in_string = False
-    escape_next = False
-    i = 0
-    while i < len(text):
-        char = text[i]
-
-        if escape_next:
-            result.append(char)
-            escape_next = False
-            i += 1
-            continue
-
-        if char == '\\' and in_string:
-            result.append(char)
-            escape_next = True
-            i += 1
-            continue
-
-        if char == '"' and not escape_next:
-            in_string = not in_string
-            result.append(char)
-            i += 1
-            continue
-
-        if not in_string:
-            # Check for single-line comment
-            if i + 1 < len(text) and text[i:i+2] == '//':
-                # Skip to end of line
-                while i < len(text) and text[i] != '\n':
-                    i += 1
-                continue
-            # Check for multi-line comment
-            if i + 1 < len(text) and text[i:i+2] == '/*':
-                # Skip to */
-                i += 2
-                while i + 1 < len(text) and text[i:i+2] != '*/':
-                    i += 1
-                i += 2  # Skip */
-                continue
-
-        result.append(char)
-        i += 1
-
-    return ''.join(result)
-
-
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """Deep merge override into base, returning a new dict."""
     result = base.copy()
@@ -117,7 +65,7 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 
 def load_config(config_path: Path | None = None) -> dict[str, Any]:
-    """Load configuration from JSON file with defaults.
+    """Load configuration from YAML file with defaults.
 
     Args:
         config_path: Optional path to config file. If None, uses default CONFIG_PATH.
@@ -139,11 +87,7 @@ def load_config(config_path: Path | None = None) -> dict[str, Any]:
         return _DEFAULTS.copy()
 
     with open(path, "r", encoding="utf-8") as f:
-        text = f.read()
-
-    # Strip JSONC comments before parsing
-    clean_json = _strip_jsonc_comments(text)
-    user_config = json.loads(clean_json)
+        user_config = yaml.safe_load(f) or {}
 
     result = _deep_merge(_DEFAULTS, user_config)
 
