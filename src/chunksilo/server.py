@@ -5,6 +5,9 @@ MCP server for querying documentation using RAG.
 Returns raw document chunks for the calling LLM to synthesize.
 """
 import os
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import sys
 import asyncio
 import logging

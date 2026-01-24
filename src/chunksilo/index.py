@@ -20,12 +20,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Dict, Optional, Iterator, Set, Any
 
-# Check for --offline flag early and set environment variables BEFORE any imports
-if "--offline" in sys.argv:
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
-    os.environ["HF_DATASETS_OFFLINE"] = "1"
-
 from docx import Document
 
 from llama_index.core import (
@@ -1242,11 +1236,26 @@ def configure_offline_mode(offline: bool, cache_dir: Path) -> None:
 
 def build_index(
     download_only: bool = False,
-    offline: bool = False,
-    model_cache_dir: str | None = None,
+    config_path: Path | None = None,
 ) -> None:
     """Build and persist the vector index incrementally."""
-    cache_dir = Path(model_cache_dir) if model_cache_dir else RETRIEVAL_MODEL_CACHE_DIR
+    global _config, STORAGE_DIR, STATE_DB_PATH, RETRIEVAL_MODEL_CACHE_DIR, BM25_INDEX_DIR, HEADING_STORE_PATH
+    global RETRIEVAL_EMBED_MODEL_NAME, RETRIEVAL_RERANK_MODEL_NAME
+
+    if config_path:
+        cfg = load_config(config_path)
+        _config = cfg
+        STORAGE_DIR = Path(cfg["storage"]["storage_dir"])
+        STATE_DB_PATH = STORAGE_DIR / "ingestion_state.db"
+        RETRIEVAL_MODEL_CACHE_DIR = Path(cfg["storage"]["model_cache_dir"])
+        BM25_INDEX_DIR = STORAGE_DIR / "bm25_index"
+        HEADING_STORE_PATH = STORAGE_DIR / "heading_store.json"
+        RETRIEVAL_EMBED_MODEL_NAME = cfg["retrieval"]["embed_model_name"]
+        RETRIEVAL_RERANK_MODEL_NAME = cfg["retrieval"]["rerank_model_name"]
+
+    # Read offline setting from config; force online when downloading models
+    offline = False if download_only else _config["retrieval"].get("offline", False)
+    cache_dir = RETRIEVAL_MODEL_CACHE_DIR
     configure_offline_mode(offline, cache_dir)
 
     # Load configuration
@@ -1384,22 +1393,16 @@ if __name__ == "__main__":
         help="Download the retrieval models and exit",
     )
     parser.add_argument(
-        "--offline",
-        action="store_true",
-        help="Run entirely offline",
-    )
-    parser.add_argument(
-        "--model-cache-dir",
+        "--config",
         type=str,
-        help="Override the model cache directory from config.yaml",
+        help="Path to config.yaml (overrides auto-discovery)",
     )
     args = parser.parse_args()
 
     try:
         build_index(
             download_only=args.download_models,
-            offline=args.offline,
-            model_cache_dir=args.model_cache_dir,
+            config_path=Path(args.config) if args.config else None,
         )
     except Exception as e:
         logger.error(f"Indexing failed: {e}", exc_info=True)
