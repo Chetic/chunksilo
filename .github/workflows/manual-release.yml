@@ -250,19 +250,9 @@ jobs:
             --notes-file release-notes.md \
             packages/*.tar.gz
 
-      - name: Delete workflow artifacts
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -eo pipefail
-          echo "Deleting Actions Artifacts..."
-          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts" --paginate -q '.artifacts[].id' | while read -r ARTIFACT_ID; do
-            echo "Deleting artifact $ARTIFACT_ID"
-            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID" -X DELETE
-          done
 
   publish_pypi:
-    needs: release
+    needs: [prepare, release]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -273,6 +263,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Set package version
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          sed -i "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
+          sed -i "s/^__version__ = .*/__version__ = \"$VERSION\"/" src/chunksilo/__init__.py
 
       - name: Build package
         run: |
