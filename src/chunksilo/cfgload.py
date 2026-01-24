@@ -5,10 +5,13 @@ Shared configuration loading for ChunkSilo.
 
 Loads configuration from config.yaml, searching in standard locations.
 """
+import logging
 import os
 import yaml
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def _find_config() -> Path:
@@ -109,8 +112,10 @@ def load_config(config_path: Path | None = None) -> dict[str, Any]:
     path = config_path or CONFIG_PATH
 
     if not path.exists():
-        # Return defaults if config file doesn't exist
+        logger.info("Config file not found at %s; using built-in defaults", path)
         return _DEFAULTS.copy()
+
+    logger.info("Using config: %s", path)
 
     with open(path, "r", encoding="utf-8") as f:
         user_config = yaml.safe_load(f) or {}

@@ -1,27 +1,39 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 """
-CLI entry point for the search_docs command.
+CLI entry point for the chunksilo command.
 
 Usage:
-    search_docs "query text" [--date-from YYYY-MM-DD] [--date-to YYYY-MM-DD] [--config PATH] [--json]
+    chunksilo "query text" [--date-from YYYY-MM-DD] [--date-to YYYY-MM-DD] [--config PATH] [--json]
 """
 import argparse
 import json
+import logging
 import sys
 from pathlib import Path
 
 
 def main():
-    """Entry point for the `search_docs` command."""
+    """Entry point for the `chunksilo` command."""
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     parser = argparse.ArgumentParser(
-        prog="search_docs",
+        prog="chunksilo",
         description="Search indexed documents using ChunkSilo",
+        epilog=(
+            "config file search order (first found wins):\n"
+            "  1. --config PATH argument\n"
+            "  2. CHUNKSILO_CONFIG environment variable\n"
+            "  3. ./config.yaml\n"
+            "  4. ~/.config/chunksilo/config.yaml\n"
+            "  If none found, built-in defaults are used."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("query", help="Search query text")
     parser.add_argument("--date-from", help="Start date filter (YYYY-MM-DD, inclusive)")
     parser.add_argument("--date-to", help="End date filter (YYYY-MM-DD, inclusive)")
-    parser.add_argument("--config", help="Path to config.yaml")
+    parser.add_argument("--config", help="Path to config.yaml (overrides auto-discovery)")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
 
     args = parser.parse_args()

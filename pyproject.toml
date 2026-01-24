@@ -29,7 +29,7 @@ confluence = ["llama-index-readers-confluence>=0.6.0,<1"]
 test = ["pytest>=7.4.0,<9", "requests>=2.31.0,<3"]
 
 [project.scripts]
-search_docs = "chunksilo.cli:main"
+chunksilo = "chunksilo.cli:main"
 
 [project.urls]
 Repository = "https://github.com/Chetic/chunksilo"
