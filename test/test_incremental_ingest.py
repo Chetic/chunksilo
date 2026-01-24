@@ -2,16 +2,12 @@ import os
 import shutil
 import sqlite3
 import logging
-import sys
 from pathlib import Path
 from unittest.mock import patch
 import pytest
 
-# Add parent directory to path to import index modules
-sys.path.append(str(Path(__file__).parent.parent))
-
-import index
-from index import build_index, IngestionState, IndexConfig, DirectoryConfig
+from chunksilo import index
+from chunksilo.index import build_index, IngestionState, IndexConfig, DirectoryConfig
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO)
@@ -74,10 +70,10 @@ def test_env(tmp_path):
     mock_embed = _create_mock_embedding()
 
     # Patch load_index_config to return test config, and mock embedding functions
-    with patch("index.load_index_config", return_value=test_index_config), \
-         patch("index._create_fastembed_embedding", return_value=mock_embed), \
-         patch("index.ensure_embedding_model_cached"), \
-         patch("index.ensure_rerank_model_cached"):
+    with patch("chunksilo.index.load_index_config", return_value=test_index_config), \
+         patch("chunksilo.index._create_fastembed_embedding", return_value=mock_embed), \
+         patch("chunksilo.index.ensure_embedding_model_cached"), \
+         patch("chunksilo.index.ensure_rerank_model_cached"):
         yield data_dir, storage_dir, db_path
 
     # Restore globals

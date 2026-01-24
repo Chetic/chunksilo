@@ -2,7 +2,7 @@
 
 import pytest
 
-from confluence_html_formatter import CleanHtmlTextParser, clean_confluence_html
+from chunksilo.confluence_html_formatter import CleanHtmlTextParser, clean_confluence_html
 
 
 class TestCleanConfluenceHtml:

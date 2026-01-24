@@ -4,16 +4,39 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chunksilo"
-description = "RAG-based document retrieval system with MCP interface"
+version = "1.1.0"
+description = "Local RAG-based semantic document search with MCP server interface"
 license = "Apache-2.0"
 requires-python = ">=3.11"
 authors = [
     {name = "Fredrik Reveny"}
 ]
-dynamic = ["dependencies", "optional-dependencies"]
+readme = "README.md"
+keywords = ["rag", "mcp", "semantic-search", "document-search", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Text Processing :: Indexing",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dynamic = ["dependencies"]
+
+[project.optional-dependencies]
+confluence = ["llama-index-readers-confluence>=0.6.0,<1"]
+test = ["pytest>=7.4.0,<9", "requests>=2.31.0,<3"]
+
+[project.scripts]
+search_docs = "chunksilo.cli:main"
+
+[project.urls]
+Repository = "https://github.com/Chetic/chunksilo"
+Issues = "https://github.com/Chetic/chunksilo/issues"
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
 
-[tool.setuptools.dynamic.optional-dependencies]
-test = {file = ["test/requirements.txt"]}
+[tool.setuptools.packages.find]
+where = ["src"]

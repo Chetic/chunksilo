@@ -20,13 +20,11 @@ mkdir -p "$COMMON_ROOT"
 
 # Install dependencies so we can download the retrieval models
 python3.11 -m pip install --upgrade pip
-python3.11 -m pip install -r requirements.txt
+python3.11 -m pip install -r requirements.txt llama-index-readers-confluence
 
-# Copy common files that are the same for all platforms
-cp chunksilo.py "$COMMON_ROOT/"
-cp cfgload.py "$COMMON_ROOT/"
-cp confluence_html_formatter.py "$COMMON_ROOT/"
-cp index.py "$COMMON_ROOT/"
+# Copy package source and project files
+cp -r src "$COMMON_ROOT/"
+cp pyproject.toml "$COMMON_ROOT/"
 cp requirements.txt "$COMMON_ROOT/"
 cp README.md "$COMMON_ROOT/"
 cp LICENSE "$COMMON_ROOT/"
@@ -37,7 +35,7 @@ cp setup.sh "$COMMON_ROOT/"
 echo "$VERSION" > "$COMMON_ROOT/VERSION"
 
 # Download the embedding + rerank models once (they're the same for all platforms)
-python3.11 index.py --download-models --model-cache-dir "$COMMON_ROOT/models"
+PYTHONPATH=src python3.11 -m chunksilo.index --download-models --model-cache-dir "$COMMON_ROOT/models"
 
 # Write model license information
 cat > "$COMMON_ROOT/models/MODEL-LICENSES.txt" << 'MODLICEOF'

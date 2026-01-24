@@ -6,13 +6,10 @@ without mocking external dependencies.
 """
 
 import sys
-from pathlib import Path
 from datetime import datetime
 
 import pytest
 
-# Add parent directory to path to import project modules
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from llama_index.core.schema import TextNode, NodeWithScore
 
@@ -26,7 +23,7 @@ class TestTokenizeFilename:
 
     def test_underscore_delimiter(self):
         """Underscore separates tokens."""
-        from index import tokenize_filename
+        from chunksilo.index import tokenize_filename
 
         result = tokenize_filename("cpp_styleguide.md")
         assert "cpp" in result
@@ -35,7 +32,7 @@ class TestTokenizeFilename:
 
     def test_hyphen_delimiter(self):
         """Hyphen separates tokens."""
-        from index import tokenize_filename
+        from chunksilo.index import tokenize_filename
 
         result = tokenize_filename("API-Reference-v2.pdf")
         # Should be lowercase
@@ -46,7 +43,7 @@ class TestTokenizeFilename:
 
     def test_camel_case(self):
         """CamelCase is split into tokens."""
-        from index import tokenize_filename
+        from chunksilo.index import tokenize_filename
 
         result = tokenize_filename("CamelCaseDoc.docx")
         assert "camel" in result
@@ -56,7 +53,7 @@ class TestTokenizeFilename:
 
     def test_mixed_delimiters(self):
         """Mixed delimiters all separate tokens."""
-        from index import tokenize_filename
+        from chunksilo.index import tokenize_filename
 
         result = tokenize_filename("Mixed_Case-File.Name.md")
         assert "mixed" in result
@@ -67,14 +64,14 @@ class TestTokenizeFilename:
 
     def test_no_extension(self):
         """Files without extension are tokenized."""
-        from index import tokenize_filename
+        from chunksilo.index import tokenize_filename
 
         result = tokenize_filename("README")
         assert "readme" in result
 
     def test_multiple_dots(self):
         """Multiple dots in filename are handled."""
-        from index import tokenize_filename
+        from chunksilo.index import tokenize_filename
 
         result = tokenize_filename("file.tar.gz")
         # Extension handling may vary - just ensure no crash
@@ -99,7 +96,7 @@ class TestFilterNodesByDate:
 
     def test_no_filters_returns_all(self):
         """No date filters returns all nodes."""
-        from chunksilo import _filter_nodes_by_date
+        from chunksilo.search import _filter_nodes_by_date
 
         nodes = [
             self._create_node_with_date("a", "2024-01-15"),
@@ -111,7 +108,7 @@ class TestFilterNodesByDate:
 
     def test_date_from_filter(self):
         """Filters out documents before date_from."""
-        from chunksilo import _filter_nodes_by_date
+        from chunksilo.search import _filter_nodes_by_date
 
         nodes = [
             self._create_node_with_date("old", "2024-01-15"),
@@ -125,7 +122,7 @@ class TestFilterNodesByDate:
 
     def test_date_to_filter(self):
         """Filters out documents after date_to."""
-        from chunksilo import _filter_nodes_by_date
+        from chunksilo.search import _filter_nodes_by_date
 
         nodes = [
             self._create_node_with_date("old", "2024-01-15"),
@@ -139,7 +136,7 @@ class TestFilterNodesByDate:
 
     def test_date_range_filter(self):
         """Both filters work together."""
-        from chunksilo import _filter_nodes_by_date
+        from chunksilo.search import _filter_nodes_by_date
 
         nodes = [
             self._create_node_with_date("jan", "2024-01-15"),
@@ -154,7 +151,7 @@ class TestFilterNodesByDate:
 
     def test_no_date_metadata_passes(self):
         """Documents without dates pass through (backward compatibility)."""
-        from chunksilo import _filter_nodes_by_date
+        from chunksilo.search import _filter_nodes_by_date
 
         node_no_date = TextNode(text="No date", id_="no_date", metadata={})
         nodes = [NodeWithScore(node=node_no_date, score=0.5)]
@@ -182,7 +179,7 @@ class TestApplyRecencyBoost:
 
     def test_zero_boost_weight(self):
         """boost_weight=0 returns original scores."""
-        from chunksilo import _apply_recency_boost
+        from chunksilo.search import _apply_recency_boost
 
         nodes = [
             self._create_node_with_date("a", "2024-01-15", 0.9),
@@ -197,7 +194,7 @@ class TestApplyRecencyBoost:
 
     def test_no_date_unchanged(self):
         """Documents without dates use base score only."""
-        from chunksilo import _apply_recency_boost
+        from chunksilo.search import _apply_recency_boost
 
         node_no_date = TextNode(text="No date", id_="no_date", metadata={})
         nodes = [NodeWithScore(node=node_no_date, score=0.5)]
@@ -209,7 +206,7 @@ class TestApplyRecencyBoost:
 
     def test_empty_list(self):
         """Empty list returns empty list."""
-        from chunksilo import _apply_recency_boost
+        from chunksilo.search import _apply_recency_boost
 
         result = _apply_recency_boost([], boost_weight=0.5)
         assert result == []
@@ -224,7 +221,7 @@ class TestParseDate:
 
     def test_valid_date_format(self):
         """Valid YYYY-MM-DD parses correctly."""
-        from chunksilo import _parse_date
+        from chunksilo.search import _parse_date
 
         result = _parse_date("2024-01-15")
         assert result is not None
@@ -234,21 +231,21 @@ class TestParseDate:
 
     def test_invalid_format(self):
         """Invalid format returns None."""
-        from chunksilo import _parse_date
+        from chunksilo.search import _parse_date
 
         result = _parse_date("01/15/2024")
         assert result is None
 
     def test_empty_string(self):
         """Empty string returns None."""
-        from chunksilo import _parse_date
+        from chunksilo.search import _parse_date
 
         result = _parse_date("")
         assert result is None
 
     def test_none_input(self):
         """None input returns None."""
-        from chunksilo import _parse_date
+        from chunksilo.search import _parse_date
 
         result = _parse_date(None)
         assert result is None

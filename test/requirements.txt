@@ -1,4 +1,0 @@
-# Test-only dependencies
-# These are not included in the release package
-requests>=2.31.0,<3
-pytest>=7.4.0,<8

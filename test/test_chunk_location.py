@@ -9,14 +9,11 @@ Tests the following location fields:
 """
 
 import os
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-# Add parent directory to path to import project modules
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 # =============================================================================
@@ -27,31 +24,31 @@ class TestComputeLineOffsets:
     """Tests for _compute_line_offsets in index.py"""
 
     def test_empty_text(self):
-        from index import _compute_line_offsets
+        from chunksilo.index import _compute_line_offsets
         result = _compute_line_offsets("")
         assert result == [0]
 
     def test_single_line(self):
-        from index import _compute_line_offsets
+        from chunksilo.index import _compute_line_offsets
         result = _compute_line_offsets("Hello world")
         assert result == [0]
 
     def test_multiple_lines(self):
-        from index import _compute_line_offsets
+        from chunksilo.index import _compute_line_offsets
         text = "Line 1\nLine 2\nLine 3"
         result = _compute_line_offsets(text)
         # Line 1 starts at 0, Line 2 starts at 7, Line 3 starts at 14
         assert result == [0, 7, 14]
 
     def test_trailing_newline(self):
-        from index import _compute_line_offsets
+        from chunksilo.index import _compute_line_offsets
         text = "Line 1\nLine 2\n"
         result = _compute_line_offsets(text)
         # Line 1 at 0, Line 2 at 7, empty line 3 at 14
         assert result == [0, 7, 14]
 
     def test_empty_lines(self):
-        from index import _compute_line_offsets
+        from chunksilo.index import _compute_line_offsets
         text = "Line 1\n\nLine 3"
         result = _compute_line_offsets(text)
         # Line 1 at 0, empty line 2 at 7, Line 3 at 8
@@ -66,41 +63,41 @@ class TestCharOffsetToLine:
     """Tests for _char_offset_to_line in chunksilo.py"""
 
     def test_none_offset(self):
-        from chunksilo import _char_offset_to_line
+        from chunksilo.search import _char_offset_to_line
         result = _char_offset_to_line(None, [0, 10, 20])
         assert result is None
 
     def test_none_offsets_list(self):
-        from chunksilo import _char_offset_to_line
+        from chunksilo.search import _char_offset_to_line
         result = _char_offset_to_line(5, None)
         assert result is None
 
     def test_empty_offsets_list(self):
-        from chunksilo import _char_offset_to_line
+        from chunksilo.search import _char_offset_to_line
         result = _char_offset_to_line(5, [])
         assert result is None
 
     def test_first_line(self):
-        from chunksilo import _char_offset_to_line
+        from chunksilo.search import _char_offset_to_line
         offsets = [0, 10, 20, 30]
         assert _char_offset_to_line(0, offsets) == 1
         assert _char_offset_to_line(5, offsets) == 1
         assert _char_offset_to_line(9, offsets) == 1
 
     def test_second_line(self):
-        from chunksilo import _char_offset_to_line
+        from chunksilo.search import _char_offset_to_line
         offsets = [0, 10, 20, 30]
         assert _char_offset_to_line(10, offsets) == 2
         assert _char_offset_to_line(15, offsets) == 2
 
     def test_last_line(self):
-        from chunksilo import _char_offset_to_line
+        from chunksilo.search import _char_offset_to_line
         offsets = [0, 10, 20, 30]
         assert _char_offset_to_line(30, offsets) == 4
         assert _char_offset_to_line(35, offsets) == 4
 
     def test_boundary_cases(self):
-        from chunksilo import _char_offset_to_line
+        from chunksilo.search import _char_offset_to_line
         offsets = [0, 7, 14, 21]  # "Line 1\nLine 2\nLine 3\nLine 4"
         # Exactly at line starts
         assert _char_offset_to_line(0, offsets) == 1
@@ -117,27 +114,27 @@ class TestBuildHeadingPath:
     """Tests for _build_heading_path in chunksilo.py"""
 
     def test_empty_headings(self):
-        from chunksilo import _build_heading_path
+        from chunksilo.search import _build_heading_path
         heading_text, path = _build_heading_path([], 100)
         assert heading_text is None
         assert path == []
 
     def test_none_char_start(self):
-        from chunksilo import _build_heading_path
+        from chunksilo.search import _build_heading_path
         headings = [{"text": "Intro", "position": 0}]
         heading_text, path = _build_heading_path(headings, None)
         assert heading_text is None
         assert path == []
 
     def test_single_heading(self):
-        from chunksilo import _build_heading_path
+        from chunksilo.search import _build_heading_path
         headings = [{"text": "Introduction", "position": 0}]
         heading_text, path = _build_heading_path(headings, 50)
         assert heading_text == "Introduction"
         assert path == ["Introduction"]
 
     def test_multiple_headings_first(self):
-        from chunksilo import _build_heading_path
+        from chunksilo.search import _build_heading_path
         headings = [
             {"text": "Chapter 1", "position": 0},
             {"text": "Chapter 2", "position": 100},
@@ -148,7 +145,7 @@ class TestBuildHeadingPath:
         assert path == ["Chapter 1"]
 
     def test_multiple_headings_middle(self):
-        from chunksilo import _build_heading_path
+        from chunksilo.search import _build_heading_path
         headings = [
             {"text": "Chapter 1", "position": 0},
             {"text": "Chapter 2", "position": 100},
@@ -159,7 +156,7 @@ class TestBuildHeadingPath:
         assert path == ["Chapter 1", "Chapter 2"]
 
     def test_multiple_headings_last(self):
-        from chunksilo import _build_heading_path
+        from chunksilo.search import _build_heading_path
         headings = [
             {"text": "Chapter 1", "position": 0},
             {"text": "Chapter 2", "position": 100},
@@ -170,7 +167,7 @@ class TestBuildHeadingPath:
         assert path == ["Chapter 1", "Chapter 2", "Chapter 3"]
 
     def test_char_start_before_first_heading(self):
-        from chunksilo import _build_heading_path
+        from chunksilo.search import _build_heading_path
         headings = [{"text": "Chapter 1", "position": 100}]
         heading_text, path = _build_heading_path(headings, 50)
         assert heading_text is None
@@ -286,7 +283,7 @@ class TestLocationIntegration:
 
     def test_pdf_chunk_location(self):
         """Test location fields for a PDF chunk"""
-        from chunksilo import _build_heading_path
+        from chunksilo.search import _build_heading_path
 
         metadata = {
             "file_path": "/Users/test/data/manual.pdf",
@@ -330,7 +327,7 @@ class TestLocationIntegration:
 
     def test_markdown_chunk_location(self):
         """Test location fields for a markdown chunk"""
-        from chunksilo import _char_offset_to_line
+        from chunksilo.search import _char_offset_to_line
 
         metadata = {
             "file_path": "/Users/test/data/readme.md",

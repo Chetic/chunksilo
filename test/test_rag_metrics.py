@@ -24,9 +24,6 @@ from urllib.parse import urlparse
 import requests
 from dotenv import load_dotenv
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 load_dotenv()
 
 # Set up logging
@@ -37,8 +34,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import after logging is set up
-from index import STORAGE_DIR, build_index
-from chunksilo import search_docs
+from chunksilo.index import STORAGE_DIR, build_index
+from chunksilo.server import search_docs
 
 # Test corpus configuration
 TEST_DATA_DIR = Path(os.getenv("TEST_DATA_DIR", "./test_data"))
@@ -703,26 +700,25 @@ async def run_rag_metrics_tests() -> Dict[str, Any]:
     # Step 2: Patch module globals for test isolation
     TEST_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-    import index
-    import chunksilo
+    from chunksilo import index as index_mod
+    from chunksilo import search as search_mod
 
     # Save originals for restoration
-    orig_index_storage = index.STORAGE_DIR
-    orig_index_state_db = index.STATE_DB_PATH
-    orig_index_bm25 = index.BM25_INDEX_DIR
-    orig_index_heading = index.HEADING_STORE_PATH
-    orig_index_config = index._config
-    orig_chunksilo_storage = chunksilo.STORAGE_DIR
-    orig_chunksilo_bm25 = chunksilo.BM25_INDEX_DIR
+    orig_index_storage = index_mod.STORAGE_DIR
+    orig_index_state_db = index_mod.STATE_DB_PATH
+    orig_index_bm25 = index_mod.BM25_INDEX_DIR
+    orig_index_heading = index_mod.HEADING_STORE_PATH
+    orig_index_config = index_mod._config
+    orig_search_config = search_mod._config
 
     try:
         # Patch index module globals
-        index.STORAGE_DIR = TEST_STORAGE_DIR
-        index.STATE_DB_PATH = TEST_STORAGE_DIR / "ingestion_state.db"
-        index.BM25_INDEX_DIR = TEST_STORAGE_DIR / "bm25_index"
-        index.HEADING_STORE_PATH = TEST_STORAGE_DIR / "heading_store.json"
-        index._config = {
-            **index._config,
+        index_mod.STORAGE_DIR = TEST_STORAGE_DIR
+        index_mod.STATE_DB_PATH = TEST_STORAGE_DIR / "ingestion_state.db"
+        index_mod.BM25_INDEX_DIR = TEST_STORAGE_DIR / "bm25_index"
+        index_mod.HEADING_STORE_PATH = TEST_STORAGE_DIR / "heading_store.json"
+        index_mod._config = {
+            **index_mod._config,
             "indexing": {
                 "directories": [str(TEST_DATA_DIR)],
                 "chunk_size": 1600,
@@ -730,12 +726,16 @@ async def run_rag_metrics_tests() -> Dict[str, Any]:
             },
         }
 
-        # Patch chunksilo module globals
-        chunksilo.STORAGE_DIR = TEST_STORAGE_DIR
-        chunksilo.BM25_INDEX_DIR = TEST_STORAGE_DIR / "bm25_index"
+        # Patch search module config
+        test_search_config = search_mod._init_config()
+        test_search_config["storage"]["storage_dir"] = str(TEST_STORAGE_DIR)
+        search_mod._config = test_search_config
+        search_mod._index_cache = None
+        search_mod._bm25_retriever_cache = None
 
-        from index import build_index as build_test_index
-        from chunksilo import load_llamaindex_index, search_docs as search_docs_reloaded
+        from chunksilo.index import build_index as build_test_index
+        from chunksilo.search import load_llamaindex_index
+        from chunksilo.server import search_docs as search_docs_reloaded
         
         # Step 3: Build index
         logger.info("\n" + "=" * 80)
@@ -853,13 +853,14 @@ async def run_rag_metrics_tests() -> Dict[str, Any]:
         
     finally:
         # Restore original module globals
-        index.STORAGE_DIR = orig_index_storage
-        index.STATE_DB_PATH = orig_index_state_db
-        index.BM25_INDEX_DIR = orig_index_bm25
-        index.HEADING_STORE_PATH = orig_index_heading
-        index._config = orig_index_config
-        chunksilo.STORAGE_DIR = orig_chunksilo_storage
-        chunksilo.BM25_INDEX_DIR = orig_chunksilo_bm25
+        index_mod.STORAGE_DIR = orig_index_storage
+        index_mod.STATE_DB_PATH = orig_index_state_db
+        index_mod.BM25_INDEX_DIR = orig_index_bm25
+        index_mod.HEADING_STORE_PATH = orig_index_heading
+        index_mod._config = orig_index_config
+        search_mod._config = orig_search_config
+        search_mod._index_cache = None
+        search_mod._bm25_retriever_cache = None
 
 
 def main():

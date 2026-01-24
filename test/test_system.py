@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Pytest-based test script for the RAG system."""
-import sys
 from pathlib import Path
 import pytest
 import asyncio
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from chunksilo.index import load_index_config, build_index
+from chunksilo.search import load_llamaindex_index
+from chunksilo.cfgload import load_config
 
-from index import load_index_config, build_index
-from chunksilo import STORAGE_DIR, load_llamaindex_index
+STORAGE_DIR = Path(load_config()["storage"]["storage_dir"])
 
 
 
@@ -43,7 +42,7 @@ def test_query():
         "What are the key points?",
     ]
 
-    from chunksilo import search_docs
+    from chunksilo.server import search_docs
 
     async def _run_queries():
         if not (STORAGE_DIR / "docstore.json").exists():

@@ -40,8 +40,8 @@ from llama_index.core.node_parser import SentenceSplitter
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
 # Load configuration from config.yaml
-import cfgload
-from cfgload import load_config
+from . import cfgload
+from .cfgload import load_config
 _config = load_config()
 
 # Configuration from config.yaml
