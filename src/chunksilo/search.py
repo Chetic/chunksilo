@@ -600,7 +600,7 @@ def run_search(
                 bm25_matches = bm25_retriever.retrieve(enhanced_query)
                 if bm25_matches:
                     matched_files = _format_bm25_matches(bm25_matches, config)
-                    logger.info(f"BM25 matched {len(bm25_matches)} files")
+                    logger.info(f"BM25 matched {len(matched_files)} files (from {len(bm25_matches)} candidates)")
             except Exception as e:
                 logger.error(f"BM25 search failed: {e}")
 

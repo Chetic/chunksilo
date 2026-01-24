@@ -15,8 +15,6 @@ from pathlib import Path
 
 def main():
     """Entry point for the `chunksilo` command."""
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-
     parser = argparse.ArgumentParser(
         prog="chunksilo",
         description="Search indexed documents using ChunkSilo",
@@ -35,8 +33,13 @@ def main():
     parser.add_argument("--date-to", help="End date filter (YYYY-MM-DD, inclusive)")
     parser.add_argument("--config", help="Path to config.yaml (overrides auto-discovery)")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Show diagnostic messages (model loading, search stats)")
 
     args = parser.parse_args()
+
+    log_level = logging.INFO if args.verbose else logging.WARNING
+    logging.basicConfig(level=log_level, format="%(message)s")
 
     from .search import run_search
 
@@ -59,14 +62,18 @@ def main():
 
     # Human-readable output
     matched_files = result.get("matched_files", [])
+    chunks = result.get("chunks", [])
+
     if matched_files:
-        print(f"\n--- Matched Files ({len(matched_files)}) ---")
+        print(f"\nMatched files ({len(matched_files)}):")
         for f in matched_files:
             print(f"  {f.get('uri', 'unknown')}  (score: {f.get('score', 0):.4f})")
 
-    chunks = result.get("chunks", [])
-    retrieval_time = result.get("retrieval_time", "")
-    print(f"\n--- Results ({len(chunks)}) --- [{retrieval_time}]\n")
+    if not chunks:
+        print("\nNo results found.")
+        return
+
+    print(f"\nResults ({len(chunks)}):\n")
 
     for i, chunk in enumerate(chunks, 1):
         loc = chunk.get("location", {})
@@ -84,9 +91,12 @@ def main():
         print(f"    Score: {score:.3f}")
 
         text = chunk.get("text", "")
-        # Show first 200 chars of text, truncated
         preview = text[:200].replace("\n", " ")
         if len(text) > 200:
             preview += "..."
         print(f"    {preview}")
         print()
+
+    retrieval_time = result.get("retrieval_time", "")
+    if retrieval_time:
+        print(f"({retrieval_time})")
