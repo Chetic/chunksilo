@@ -17,6 +17,8 @@ from mcp.server.fastmcp import FastMCP
 
 from .search import run_search
 
+_server_config_path: Path | None = None
+
 # Log file configuration
 LOG_FILE = "mcp.log"
 LOG_MAX_SIZE_MB = 10
@@ -64,13 +66,15 @@ async def search_docs(
     """Search across all your indexed documentation using a natural language query."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
-        None, run_search, query, date_from, date_to
+        None, lambda: run_search(query, date_from, date_to, config_path=_server_config_path)
     )
 
 
 def run_server(config_path: Path | None = None):
     """Start the MCP server."""
+    global _server_config_path
     if config_path:
+        _server_config_path = config_path
         os.environ["CHUNKSILO_CONFIG"] = str(config_path)
     mcp.run()
 
