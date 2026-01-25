@@ -34,7 +34,7 @@ cd chunksilo
 ```
 
 3. **Edit** `config.yaml` to set your document directories
-4. **Build** the index: `./venv/bin/python index.py`
+4. **Build** the index: `./venv/bin/chunksilo --build-index`
 5. **Configure** your MCP client (see [MCP Client Configuration](#mcp-client-configuration))
 
 ## Configuration
@@ -46,7 +46,7 @@ ChunkSilo uses a single configuration file: `config.yaml`
 Edit `config.yaml` to configure your settings:
 
 ```yaml
-# Indexing settings - used by index.py when building the search index
+# Indexing settings - used by chunksilo --build-index
 indexing:
   directories:
     - "./data"
@@ -57,7 +57,7 @@ indexing:
   chunk_size: 1600
   chunk_overlap: 200
 
-# Retrieval settings - used by chunksilo.py when searching
+# Retrieval settings - used when searching
 retrieval:
   embed_top_k: 20
   rerank_top_k: 5
@@ -80,7 +80,7 @@ All settings are optional and have sensible defaults.
 
 ### Configuration Reference
 
-#### Indexing Settings (used by index.py)
+#### Indexing Settings
 
 | Setting | Default | Description |
 | :--- | :--- | :--- |
@@ -98,7 +98,7 @@ All settings are optional and have sensible defaults.
 | `recursive` | `true` | Whether to recurse into subdirectories |
 | `enabled` | `true` | Whether to index this directory |
 
-#### Retrieval Settings (used by chunksilo.py)
+#### Retrieval Settings
 
 | Setting | Default | Description |
 | :--- | :--- | :--- |
@@ -140,17 +140,30 @@ All settings are optional and have sensible defaults.
 
 Configure your MCP client to run ChunkSilo. Below are examples for common clients.
 
-### Claude Desktop / Generic MCP Client
+### Claude Code
 
-Add to your MCP client's configuration file:
+Add chunksilo as an MCP server using the CLI:
+
+```bash
+claude mcp add chunksilo --scope user -- /path/to/venv/bin/chunksilo-mcp --config /path/to/config.yaml
+```
+
+Verify it's connected:
+
+```bash
+claude mcp list
+```
+
+### Claude Desktop
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 
 ```json
 {
   "mcpServers": {
     "chunksilo": {
-      "command": "/path/to/chunksilo/venv/bin/python",
-      "args": ["chunksilo.py"],
-      "cwd": "/path/to/chunksilo"
+      "command": "/path/to/chunksilo/venv/bin/chunksilo-mcp",
+      "args": ["--config", "/path/to/chunksilo/config.yaml"]
     }
   }
 }
@@ -164,9 +177,8 @@ Add to `cline_mcp_settings.json` (typically in `~/.config/Code/User/globalStorag
 {
   "mcpServers": {
     "chunksilo": {
-      "command": "/path/to/chunksilo/venv/bin/python",
-      "args": ["chunksilo.py"],
-      "cwd": "/path/to/chunksilo",
+      "command": "/path/to/chunksilo/venv/bin/chunksilo-mcp",
+      "args": ["--config", "/path/to/chunksilo/config.yaml"],
       "disabled": false,
       "autoApprove": []
     }
@@ -182,9 +194,8 @@ Add to `mcp_settings.json` (typically in `~/.config/Code/User/globalStorage/roov
 {
   "mcpServers": {
     "chunksilo": {
-      "command": "/path/to/chunksilo/venv/bin/python",
-      "args": ["chunksilo.py"],
-      "cwd": "/path/to/chunksilo"
+      "command": "/path/to/chunksilo/venv/bin/chunksilo-mcp",
+      "args": ["--config", "/path/to/chunksilo/config.yaml"]
     }
   }
 }
@@ -192,7 +203,7 @@ Add to `mcp_settings.json` (typically in `~/.config/Code/User/globalStorage/roov
 
 ## Troubleshooting
 
-- **Index missing**: Run `./venv/bin/python index.py` in the install directory.
+- **Index missing**: Run `chunksilo --build-index` (or `./venv/bin/chunksilo --build-index` in the install directory).
 - **Retrieval errors**: Check paths in your MCP client configuration.
 - **Offline mode**: The release package includes models and sets `offline: true` by default. Set `retrieval.offline: false` in `config.yaml` if you need network access.
 - **Confluence Integration**: Set `confluence.url`, `confluence.username`, and `confluence.api_token` in `config.yaml` to enable Confluence search.

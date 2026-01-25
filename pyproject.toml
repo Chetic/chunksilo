@@ -30,6 +30,7 @@ test = ["pytest>=7.4.0,<9", "requests>=2.31.0,<3"]
 
 [project.scripts]
 chunksilo = "chunksilo.cli:main"
+chunksilo-mcp = "chunksilo.server:main"
 
 [project.urls]
 Repository = "https://github.com/Chetic/chunksilo"

@@ -48,7 +48,7 @@ def main():
     args = parser.parse_args()
 
     log_level = logging.INFO if args.verbose or args.build_index or args.download_models else logging.WARNING
-    logging.basicConfig(level=log_level, format="%(message)s")
+    logging.basicConfig(level=log_level, format="%(message)s", stream=sys.stderr)
 
     config_path = Path(args.config) if args.config else None
 
