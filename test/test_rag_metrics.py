@@ -9,7 +9,6 @@ This test suite:
 4. Evaluates using standard RAG metrics (Precision@k, Recall@k, MRR, NDCG)
 5. Challenges the models with various query types and edge cases
 """
-import asyncio
 import json
 import logging
 import math
@@ -35,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # Import after logging is set up
 from chunksilo.index import STORAGE_DIR, build_index
-from chunksilo.server import search_docs
+from chunksilo.search import run_search
 
 # Test corpus configuration
 TEST_DATA_DIR = Path(os.getenv("TEST_DATA_DIR", "./test_data"))
@@ -577,7 +576,7 @@ def ndcg_at_k(retrieved: List[Dict], relevant_file_patterns: List[str], k: int) 
     return max(0.0, min(1.0, ndcg))
 
 
-async def evaluate_query_with_retriever(
+def evaluate_query_with_retriever(
     query: str,
     expected_keywords: List[str],
     expected_file_patterns: List[str],
@@ -587,9 +586,9 @@ async def evaluate_query_with_retriever(
     """Evaluate a single query against the RAG system."""
     logger.info(f"\nEvaluating query: {query}")
     logger.info(f"Expected patterns: {expected_file_patterns}")
-    
+
     start_time = time.time()
-    result = await retriever_func(query)
+    result = retriever_func(query)
     elapsed = time.time() - start_time
     
     chunks = result.get("chunks", [])
@@ -672,19 +671,19 @@ async def evaluate_query_with_retriever(
     return evaluation
 
 
-async def evaluate_query(
+def evaluate_query(
     query: str,
     expected_keywords: List[str],
     expected_file_patterns: List[str],
     difficulty: str,
 ) -> Dict[str, Any]:
-    """Evaluate a single query against the RAG system (uses global search_docs)."""
-    return await evaluate_query_with_retriever(
-        query, expected_keywords, expected_file_patterns, difficulty, search_docs
+    """Evaluate a single query against the RAG system (uses global run_search)."""
+    return evaluate_query_with_retriever(
+        query, expected_keywords, expected_file_patterns, difficulty, run_search
     )
 
 
-async def run_rag_metrics_tests() -> Dict[str, Any]:
+def run_rag_metrics_tests() -> Dict[str, Any]:
     """Run the complete RAG metrics test suite."""
     logger.info("=" * 80)
     logger.info("RAG Metrics Test Suite")
@@ -734,8 +733,7 @@ async def run_rag_metrics_tests() -> Dict[str, Any]:
         search_mod._bm25_retriever_cache = None
 
         from chunksilo.index import build_index as build_test_index
-        from chunksilo.search import load_llamaindex_index
-        from chunksilo.server import search_docs as search_docs_reloaded
+        from chunksilo.search import load_llamaindex_index, run_search as run_search_reloaded
         
         # Step 3: Build index
         logger.info("\n" + "=" * 80)
@@ -760,9 +758,9 @@ async def run_rag_metrics_tests() -> Dict[str, Any]:
         evaluations = []
         for query, keywords, patterns, difficulty in TEST_QUERIES:
             try:
-                # Use the reloaded search_docs function
-                eval_result = await evaluate_query_with_retriever(
-                    query, keywords, patterns, difficulty, search_docs_reloaded
+                # Use the reloaded run_search function
+                eval_result = evaluate_query_with_retriever(
+                    query, keywords, patterns, difficulty, run_search_reloaded
                 )
                 evaluations.append(eval_result)
             except Exception as e:
@@ -865,7 +863,7 @@ async def run_rag_metrics_tests() -> Dict[str, Any]:
 
 def main():
     """Main entry point."""
-    results = asyncio.run(run_rag_metrics_tests())
+    results = run_rag_metrics_tests()
     
     if "error" in results:
         logger.error(f"Test suite failed: {results['error']}")
