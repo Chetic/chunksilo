@@ -20,9 +20,29 @@ ChunkSilo is like a local Google for your documents. It uses semantic search —
 - **Confluence integration**: Optionally searches your Confluence instance alongside local files, with results returned in the same format.
 - **Source links**: Each result includes a clickable link back to the source file or Confluence page in supported MCP clients.
 
-## Quick Installation
+## Installation
 
-Download the latest release package from the [Releases page](https://github.com/Chetic/chunksilo/releases).
+### Option A: Install from PyPI (Recommended)
+
+Requires Python 3.11 or later. Models are downloaded automatically on first run (~500MB).
+
+```bash
+pip install chunksilo
+
+# Or with Confluence support:
+pip install chunksilo[confluence]
+```
+
+Then:
+1. **Create** a config file at `~/.config/chunksilo/config.yaml` (see [Configuration](#configuration))
+2. **Build** the index: `chunksilo --build-index`
+3. **Configure** your MCP client (see [MCP Client Configuration](#mcp-client-configuration))
+
+### Option B: Offline Bundle
+
+A self-contained package with pre-downloaded models, ideal for air-gapped environments or systems without Python installed.
+
+Download from the [Releases page](https://github.com/Chetic/chunksilo/releases):
 
 1. **Download** the `chunksilo-vX.Y.Z-manylinux_2_34_x86_64.tar.gz` file
 2. **Extract** and install:
@@ -115,6 +135,8 @@ All settings are optional and have sensible defaults.
 
 #### Confluence Settings (optional)
 
+> **Note:** Confluence integration requires the optional dependency. Install with: `pip install chunksilo[confluence]`
+
 | Setting | Default | Description |
 | :--- | :--- | :--- |
 | `confluence.url` | `""` | Confluence base URL (empty = disabled) |
@@ -140,12 +162,20 @@ All settings are optional and have sensible defaults.
 
 Configure your MCP client to run ChunkSilo. Below are examples for common clients.
 
+> **Note:** For PyPI installs, use `chunksilo-mcp` directly. For offline bundles, use the full path `/path/to/chunksilo/venv/bin/chunksilo-mcp`. You can find the PyPI-installed binary location with `which chunksilo-mcp`.
+
 ### Claude Code
 
 Add chunksilo as an MCP server using the CLI:
 
+**PyPI install:**
 ```bash
-claude mcp add chunksilo --scope user -- /path/to/venv/bin/chunksilo-mcp --config /path/to/config.yaml
+claude mcp add chunksilo --scope user -- chunksilo-mcp --config ~/.config/chunksilo/config.yaml
+```
+
+**Offline bundle:**
+```bash
+claude mcp add chunksilo --scope user -- /path/to/chunksilo/venv/bin/chunksilo-mcp --config /path/to/chunksilo/config.yaml
 ```
 
 Verify it's connected:
@@ -158,6 +188,19 @@ claude mcp list
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 
+**PyPI install:**
+```json
+{
+  "mcpServers": {
+    "chunksilo": {
+      "command": "chunksilo-mcp",
+      "args": ["--config", "/path/to/config.yaml"]
+    }
+  }
+}
+```
+
+**Offline bundle:**
 ```json
 {
   "mcpServers": {
@@ -173,6 +216,21 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 
 Add to `cline_mcp_settings.json` (typically in `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/`):
 
+**PyPI install:**
+```json
+{
+  "mcpServers": {
+    "chunksilo": {
+      "command": "chunksilo-mcp",
+      "args": ["--config", "/path/to/config.yaml"],
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}
+```
+
+**Offline bundle:**
 ```json
 {
   "mcpServers": {
@@ -190,6 +248,19 @@ Add to `cline_mcp_settings.json` (typically in `~/.config/Code/User/globalStorag
 
 Add to `mcp_settings.json` (typically in `~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/`):
 
+**PyPI install:**
+```json
+{
+  "mcpServers": {
+    "chunksilo": {
+      "command": "chunksilo-mcp",
+      "args": ["--config", "/path/to/config.yaml"]
+    }
+  }
+}
+```
+
+**Offline bundle:**
 ```json
 {
   "mcpServers": {
@@ -203,10 +274,10 @@ Add to `mcp_settings.json` (typically in `~/.config/Code/User/globalStorage/roov
 
 ## Troubleshooting
 
-- **Index missing**: Run `chunksilo --build-index` (or `./venv/bin/chunksilo --build-index` in the install directory).
+- **Index missing**: Run `chunksilo --build-index` (PyPI install) or `./venv/bin/chunksilo --build-index` (offline bundle).
 - **Retrieval errors**: Check paths in your MCP client configuration.
 - **Offline mode**: The release package includes models and sets `offline: true` by default. Set `retrieval.offline: false` in `config.yaml` if you need network access.
-- **Confluence Integration**: Set `confluence.url`, `confluence.username`, and `confluence.api_token` in `config.yaml` to enable Confluence search.
+- **Confluence Integration**: Install with `pip install chunksilo[confluence]`, then set `confluence.url`, `confluence.username`, and `confluence.api_token` in `config.yaml`.
 - **Custom CA Bundle**: Set `ssl.ca_bundle_path` in `config.yaml` for custom certificates.
 - **Network mounts**: Unavailable directories are skipped with a warning; indexing continues with available directories.
 - **Legacy .doc files**: Requires LibreOffice to be installed for automatic conversion to .docx. If LibreOffice is not found, .doc files are skipped with a warning. Full heading extraction is supported.
