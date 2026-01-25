@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """Test the RAG system in retrieval-only mode (no LLM in the MCP server)."""
-import sys
 import traceback
 from pathlib import Path
 from dotenv import load_dotenv
 import pytest
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from chunksilo.index import load_index_config, build_index
+from chunksilo.search import load_llamaindex_index
+from chunksilo.cfgload import load_config
 
-from index import load_index_config, build_index
-from chunksilo import STORAGE_DIR, load_llamaindex_index
+STORAGE_DIR = Path(load_config()["storage"]["storage_dir"])
 
 load_dotenv()
 

@@ -1,10 +1,6 @@
 """Shared pytest fixtures for ChunkSilo tests."""
 import pytest
 from pathlib import Path
-import sys
-
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 @pytest.fixture
@@ -100,9 +96,8 @@ def patched_ingest_globals(test_env):
 
     This fixture patches STORAGE_DIR and STATE_DB_PATH
     to use temporary directories, then restores originals after test.
-    Note: DATA_DIR was removed in favor of config-based directories.
     """
-    import index
+    from chunksilo import index
 
     original = {
         "STORAGE_DIR": index.STORAGE_DIR,
@@ -120,23 +115,27 @@ def patched_ingest_globals(test_env):
 
 
 @pytest.fixture
-def patched_mcp_globals(test_env):
-    """Patch chunksilo module globals for isolated testing.
+def patched_search_globals(test_env):
+    """Patch search module globals for isolated testing.
 
-    This fixture patches STORAGE_DIR and resets caches to ensure
+    This fixture patches the config and resets caches to ensure
     tests don't interfere with each other.
     """
-    import chunksilo
+    from chunksilo import search
 
-    original_storage = chunksilo.STORAGE_DIR
-    original_initialized = chunksilo._embed_model_initialized
+    original_config = search._config
+    original_initialized = search._embed_model_initialized
+    original_index_cache = search._index_cache
 
-    chunksilo.STORAGE_DIR = test_env["storage_dir"]
-    chunksilo._index_cache = None
-    chunksilo._embed_model_initialized = False
+    # Create a test config with the temp storage dir
+    test_config = search._init_config()
+    test_config["storage"]["storage_dir"] = str(test_env["storage_dir"])
+    search._config = test_config
+    search._index_cache = None
+    search._embed_model_initialized = False
 
     yield test_env
 
-    chunksilo.STORAGE_DIR = original_storage
-    chunksilo._index_cache = None
-    chunksilo._embed_model_initialized = original_initialized
+    search._config = original_config
+    search._index_cache = original_index_cache
+    search._embed_model_initialized = original_initialized

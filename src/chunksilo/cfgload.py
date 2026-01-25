@@ -3,14 +3,42 @@
 """
 Shared configuration loading for ChunkSilo.
 
-Loads configuration from config.yaml.
+Loads configuration from config.yaml, searching in standard locations.
 """
+import logging
+import os
 import yaml
 from pathlib import Path
 from typing import Any
 
+logger = logging.getLogger(__name__)
 
-CONFIG_PATH = Path(__file__).parent / "config.yaml"
+
+def _find_config() -> Path:
+    """Find config.yaml using a priority-based search.
+
+    Search order:
+    1. CHUNKSILO_CONFIG environment variable
+    2. ./config.yaml (current working directory)
+    3. ~/.config/chunksilo/config.yaml (XDG standard)
+    """
+    env_path = os.environ.get("CHUNKSILO_CONFIG")
+    if env_path:
+        return Path(env_path)
+
+    cwd_path = Path.cwd() / "config.yaml"
+    if cwd_path.exists():
+        return cwd_path
+
+    xdg_path = Path.home() / ".config" / "chunksilo" / "config.yaml"
+    if xdg_path.exists():
+        return xdg_path
+
+    # Return cwd path as default (will fall through to defaults if not found)
+    return cwd_path
+
+
+CONFIG_PATH = _find_config()
 
 _DEFAULTS: dict[str, Any] = {
     "indexing": {
@@ -33,7 +61,7 @@ _DEFAULTS: dict[str, Any] = {
         "recency_boost": 0.3,
         "recency_half_life_days": 365,
         "bm25_similarity_top_k": 10,
-        "offline": True,
+        "offline": False,
     },
     "confluence": {
         "url": "",
@@ -84,8 +112,10 @@ def load_config(config_path: Path | None = None) -> dict[str, Any]:
     path = config_path or CONFIG_PATH
 
     if not path.exists():
-        # Return defaults if config file doesn't exist
+        logger.info("Config file not found at %s; using built-in defaults", path)
         return _DEFAULTS.copy()
+
+    logger.info("Using config: %s", path)
 
     with open(path, "r", encoding="utf-8") as f:
         user_config = yaml.safe_load(f) or {}

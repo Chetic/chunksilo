@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """Pytest-based test script for the RAG system."""
-import sys
 from pathlib import Path
 import pytest
-import asyncio
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from chunksilo.index import load_index_config, build_index
+from chunksilo.search import load_llamaindex_index, run_search
+from chunksilo.cfgload import load_config
 
-from index import load_index_config, build_index
-from chunksilo import STORAGE_DIR, load_llamaindex_index
+STORAGE_DIR = Path(load_config()["storage"]["storage_dir"])
 
 
 
@@ -36,6 +34,13 @@ def test_query():
     print("Testing Query Functionality")
     print("=" * 60)
 
+    if not (STORAGE_DIR / "docstore.json").exists():
+        pytest.skip("Index not built (docstore.json missing); run ingestion before query tests.")
+
+    # Load index to verify it exists
+    load_llamaindex_index()
+    print("✓ Index loaded successfully")
+
     # Test queries
     test_queries = [
         "What is this document about?",
@@ -43,33 +48,20 @@ def test_query():
         "What are the key points?",
     ]
 
-    from chunksilo import search_docs
+    for query in test_queries:
+        print(f"\nQuery: {query}")
+        print("-" * 60)
 
-    async def _run_queries():
-        if not (STORAGE_DIR / "docstore.json").exists():
-            pytest.skip("Index not built (docstore.json missing); run ingestion before query tests.")
+        result = run_search(query)
+        chunks = result.get("chunks", [])
+        print(f"Retrieved {len(chunks)} chunks")
 
-        # Load index to verify it exists
-        index = load_llamaindex_index()
-        print("✓ Index loaded successfully")
+        if chunks:
+            top = chunks[0]
+            print(f"Top chunk score: {top.get('score', 'N/A')}")
+            print(f"Top chunk preview: {top.get('text', '')[:200]}...")
 
-        for query in test_queries:
-            print(f"\nQuery: {query}")
-            print("-" * 60)
-
-            result = await search_docs(query)
-            chunks = result.get("chunks", [])
-            print(f"Retrieved {len(chunks)} chunks")
-
-            if chunks:
-                top = chunks[0]
-                print(f"Top chunk score: {top.get('score', 'N/A')}")
-                print(f"Top chunk preview: {top.get('text', '')[:200]}...")
-
-            if "retrieval_time" in result:
-                print(f"Retrieval time: {result['retrieval_time']}")
-
-
-    asyncio.run(_run_queries())
+        if "retrieval_time" in result:
+            print(f"Retrieval time: {result['retrieval_time']}")
 
 
