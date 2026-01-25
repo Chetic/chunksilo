@@ -11,7 +11,7 @@ ChunkSilo is like a local Google for your documents. It uses semantic search —
 
 ## Features
 
-- **Local indexing and search**: All indexing and search runs on your machine with bundled models — ChunkSilo itself makes no external network calls when `offline: true` (default). Note: search results are passed to your MCP client's LLM, which may be cloud-hosted.
+- **Local indexing and search**: All indexing and search runs on your machine with bundled models — ChunkSilo itself makes no external network calls when `offline: true`. Note: search results are passed to your MCP client's LLM, which may be cloud-hosted.
 - **Incremental indexing**: Only reindexes new or changed files, so re-runs are fast even on large document collections.
 - **Heading-aware navigation**: Extracts headings from PDFs, Word docs, and Markdown so results include the full heading path (e.g. "Chapter 3 > Setup > Prerequisites").
 - **Date filtering and recency boost**: Search within a date range or let recent documents rank higher automatically.
@@ -24,7 +24,7 @@ ChunkSilo is like a local Google for your documents. It uses semantic search —
 
 ### Option A: Install from PyPI (Recommended)
 
-Requires Python 3.11 or later. Models are downloaded automatically on first run (~500MB).
+Requires Python 3.11 or later. Models are downloaded automatically on first run (~250MB). The first run may appear to pause while models download — this is normal.
 
 ```bash
 pip install chunksilo
@@ -82,7 +82,6 @@ retrieval:
   embed_top_k: 20
   rerank_top_k: 5
   score_threshold: 0.1
-  offline: true
 
 # Confluence integration (optional)
 confluence:
@@ -131,7 +130,7 @@ All settings are optional and have sensible defaults.
 | `retrieval.recency_boost` | `0.3` | Recency boost weight (0.0-1.0) |
 | `retrieval.recency_half_life_days` | `365` | Days until recency boost halves |
 | `retrieval.bm25_similarity_top_k` | `10` | Files returned by BM25 filename search |
-| `retrieval.offline` | `true` | Prevent ML library network requests |
+| `retrieval.offline` | `false` | Prevent ML library network requests |
 
 #### Confluence Settings (optional)
 
@@ -157,6 +156,46 @@ All settings are optional and have sensible defaults.
 | :--- | :--- | :--- |
 | `storage.storage_dir` | `./storage` | Directory for vector index and state |
 | `storage.model_cache_dir` | `./models` | Directory for model cache |
+
+## CLI Usage
+
+The `chunksilo` command provides indexing, searching, and model management:
+
+```bash
+# Build or update the search index
+chunksilo --build-index
+
+# Search for documents
+chunksilo "your search query"
+
+# Search with date filtering
+chunksilo "quarterly report" --date-from 2024-01-01 --date-to 2024-03-31
+
+# Output results as JSON
+chunksilo "search query" --json
+
+# Show verbose output (model loading, search stats)
+chunksilo "search query" --verbose
+
+# Pre-download ML models (useful before going offline)
+chunksilo --download-models
+
+# Use a custom config file
+chunksilo --build-index --config /path/to/config.yaml
+```
+
+### CLI Options
+
+| Option | Description |
+| :--- | :--- |
+| `query` | Search query text (positional argument) |
+| `--build-index` | Build or update the search index, then exit |
+| `--download-models` | Download required ML models, then exit |
+| `--date-from` | Start date filter (YYYY-MM-DD format, inclusive) |
+| `--date-to` | End date filter (YYYY-MM-DD format, inclusive) |
+| `--json` | Output results as JSON instead of formatted text |
+| `-v, --verbose` | Show diagnostic messages (model loading, search stats) |
+| `--config` | Path to config.yaml (overrides auto-discovery) |
 
 ## MCP Client Configuration
 
@@ -276,7 +315,7 @@ Add to `mcp_settings.json` (typically in `~/.config/Code/User/globalStorage/roov
 
 - **Index missing**: Run `chunksilo --build-index` (PyPI install) or `./venv/bin/chunksilo --build-index` (offline bundle).
 - **Retrieval errors**: Check paths in your MCP client configuration.
-- **Offline mode**: The release package includes models and sets `offline: true` by default. Set `retrieval.offline: false` in `config.yaml` if you need network access.
+- **Offline mode**: PyPI installs default to `offline: false` (models auto-download). The offline bundle includes pre-downloaded models and sets `offline: true`. Set `retrieval.offline: true` in `config.yaml` to prevent network calls after initial model download.
 - **Confluence Integration**: Install with `pip install chunksilo[confluence]`, then set `confluence.url`, `confluence.username`, and `confluence.api_token` in `config.yaml`.
 - **Custom CA Bundle**: Set `ssl.ca_bundle_path` in `config.yaml` for custom certificates.
 - **Network mounts**: Unavailable directories are skipped with a warning; indexing continues with available directories.
