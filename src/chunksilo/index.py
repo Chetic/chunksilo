@@ -1237,6 +1237,7 @@ def configure_offline_mode(offline: bool, cache_dir: Path) -> None:
 def build_index(
     download_only: bool = False,
     config_path: Path | None = None,
+    model_cache_dir: Path | None = None,
 ) -> None:
     """Build and persist the vector index incrementally."""
     global _config, STORAGE_DIR, STATE_DB_PATH, RETRIEVAL_MODEL_CACHE_DIR, BM25_INDEX_DIR, HEADING_STORE_PATH
@@ -1252,6 +1253,10 @@ def build_index(
         HEADING_STORE_PATH = STORAGE_DIR / "heading_store.json"
         RETRIEVAL_EMBED_MODEL_NAME = cfg["retrieval"]["embed_model_name"]
         RETRIEVAL_RERANK_MODEL_NAME = cfg["retrieval"]["rerank_model_name"]
+
+    # Override model cache dir if specified via CLI
+    if model_cache_dir:
+        RETRIEVAL_MODEL_CACHE_DIR = model_cache_dir
 
     # Read offline setting from config; force online when downloading models
     offline = False if download_only else _config["retrieval"].get("offline", False)
@@ -1397,12 +1402,18 @@ if __name__ == "__main__":
         type=str,
         help="Path to config.yaml (overrides auto-discovery)",
     )
+    parser.add_argument(
+        "--model-cache-dir",
+        type=str,
+        help="Directory to download/cache models (overrides config)",
+    )
     args = parser.parse_args()
 
     try:
         build_index(
             download_only=args.download_models,
             config_path=Path(args.config) if args.config else None,
+            model_cache_dir=Path(args.model_cache_dir) if args.model_cache_dir else None,
         )
     except Exception as e:
         logger.error(f"Indexing failed: {e}", exc_info=True)
