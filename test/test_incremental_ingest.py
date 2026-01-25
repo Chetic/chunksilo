@@ -99,21 +99,21 @@ def test_incremental_ingestion(test_env):
     
     logger.info("--- Step 1: Initial Run (1 file) ---")
     create_file(data_dir, "doc1.txt", "This is document 1.")
-    build_index(offline=True)
+    build_index()
     check_db_count(db_path, 1)
 
     logger.info("--- Step 2: No Change Run ---")
-    build_index(offline=True)
+    build_index()
     check_db_count(db_path, 1)
 
     logger.info("--- Step 3: Add File ---")
     create_file(data_dir, "doc2.txt", "This is document 2.")
-    build_index(offline=True)
+    build_index()
     check_db_count(db_path, 2)
 
     logger.info("--- Step 4: Modify File ---")
     create_file(data_dir, "doc1.txt", "This is document 1 modified.")
-    build_index(offline=True)
+    build_index()
     check_db_count(db_path, 2)
     
     # Check if hash changed in DB
@@ -124,5 +124,5 @@ def test_incremental_ingestion(test_env):
 
     logger.info("--- Step 5: Delete File ---")
     (data_dir / "doc2.txt").unlink()
-    build_index(offline=True)
+    build_index()
     check_db_count(db_path, 1)

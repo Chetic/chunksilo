@@ -156,7 +156,7 @@ def test_heading_path_extraction(test_env):
                  patch("chunksilo.index.ensure_embedding_model_cached"), \
                  patch("chunksilo.index.ensure_rerank_model_cached"):
 
-                index.build_index(offline=True)
+                index.build_index()
 
                 # Reset search state
                 search._index_cache = None
