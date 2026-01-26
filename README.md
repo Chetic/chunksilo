@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="chunksilo.png" alt="ChunkSilo Logo" width="500">
+</p>
+
 # ChunkSilo MCP Server
 
 ChunkSilo is like a local Google for your documents. It uses semantic search — matching by meaning rather than exact keywords — so your LLM can find relevant information across all your files even when the wording differs from your query. Point it at your PDFs, Word docs, Markdown, and text files, and it builds a fully searchable index locally on your machine.
