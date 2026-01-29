@@ -6,23 +6,38 @@
 
 ChunkSilo is like a local Google for your documents. It uses semantic search — matching by meaning rather than exact keywords — so your LLM can find relevant information across all your files even when the wording differs from your query. Point it at your PDFs, Word docs, Markdown, and text files, and it builds a fully searchable index locally on your machine.
 
-## Overview
+- Runs entirely on your machine — no servers, no infrastructure
+- Semantic search + keyword filename matching across PDF, DOCX, DOC, Markdown, and TXT
+- Incremental indexing — only reprocesses new or changed files
+- Heading-aware results with source links back to the original file
+- Date filtering and recency boosting
+- Optional Confluence integration
 
-- **No permissions headache**: Each user indexes only the files they already have access to. No centralized access-control system to build or maintain — document permissions stay exactly where they are.
-- **No infrastructure required**: Runs entirely on the user's own machine as an MCP server. Nothing to deploy, no servers to manage.
-- **Easy to set up**: Any user with an MCP-compatible LLM client can install, point at their document directories, and have everything indexed and searchable.
-- **Works with what you have**: Supports PDF, DOCX, DOC, Markdown, and TXT from local folders, network drives, or shared mounts.
+### Example `search_docs` output
 
-## Features
-
-- **Local indexing and search**: All indexing and search runs on your machine with bundled models — ChunkSilo itself makes no external network calls when `offline: true`. Note: search results are passed to your MCP client's LLM, which may be cloud-hosted.
-- **Incremental indexing**: Only reindexes new or changed files, so re-runs are fast even on large document collections.
-- **Heading-aware navigation**: Extracts headings from PDFs, Word docs, and Markdown so results include the full heading path (e.g. "Chapter 3 > Setup > Prerequisites").
-- **Date filtering and recency boost**: Search within a date range or let recent documents rank higher automatically.
-- **Dual retrieval**: Returns both meaning-based chunk matches and keyword-based filename matches separately, so file lookups don't get buried by unrelated content.
-- **Multi-directory with per-folder rules**: Index multiple directories with individual include/exclude glob patterns — useful for shared drives with mixed content.
-- **Confluence integration**: Optionally searches your Confluence instance alongside local files, with results returned in the same format.
-- **Source links**: Each result includes a clickable link back to the source file or Confluence page in supported MCP clients.
+```json
+{
+  "matched_files": [
+    { "uri": "file:///docs/database-configuration.docx", "score": 0.8432 }
+  ],
+  "num_matched_files": 1,
+  "chunks": [
+    {
+      "text": "To configure the database connection, set the DATABASE_URL environment variable...",
+      "score": 0.912,
+      "location": {
+        "uri": "file:///docs/setup-guide.pdf",
+        "page": 12,
+        "line": null,
+        "heading_path": ["Getting Started", "Configuration", "Database"]
+      }
+    }
+  ],
+  "num_chunks": 1,
+  "query": "how to configure the database",
+  "retrieval_time": "0.42s"
+}
+```
 
 ## Installation
 
