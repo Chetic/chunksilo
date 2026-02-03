@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="chunksilo.png" alt="ChunkSilo Logo" width="500">
+  <img src="https://raw.githubusercontent.com/Chetic/chunksilo/main/chunksilo.png" alt="ChunkSilo Logo" width="500">
 </p>
 
 # ChunkSilo MCP Server
