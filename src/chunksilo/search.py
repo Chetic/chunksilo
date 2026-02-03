@@ -738,8 +738,8 @@ def _search_jira(query: str, config: dict[str, Any]) -> list[NodeWithScore]:
 
     Configuration Requirements:
         config["jira"]["url"]: Jira base URL (empty = disabled)
-        config["jira"]["username"]: Jira username or email
-        config["jira"]["api_token"]: Jira API token (not password)
+        config["jira"]["username"]: Jira username/email (required for Cloud, optional for Server PAT)
+        config["jira"]["api_token"]: API token (Cloud) or Personal Access Token (Server/Data Center)
         config["jira"]["max_results"]: Maximum issues to return
         config["jira"]["projects"]: List of project keys (empty = all)
         config["jira"]["include_comments"]: Include issue comments
@@ -763,8 +763,12 @@ def _search_jira(query: str, config: dict[str, Any]) -> list[NodeWithScore]:
         - Automatically configured through jira_options["verify"]
 
     Authentication:
-        - Uses basic auth (username + API token)
-        - Works for both Jira Cloud and Data Center/Server
+        - Jira Cloud: Set both username (email) and api_token (API token)
+          Uses basic auth internally
+        - Jira Server/Data Center with PAT: Set only api_token (Personal Access Token)
+          Leave username empty; uses bearer token auth internally
+        - Jira Server/Data Center with password: Set username and api_token (password)
+          Uses basic auth internally (if basic auth enabled on server)
 
     References:
         - Jira REST API: https://developer.atlassian.com/cloud/jira/platform/rest/v3/
@@ -790,13 +794,10 @@ def _search_jira(query: str, config: dict[str, Any]) -> list[NodeWithScore]:
     ca_bundle_path = config["ssl"]["ca_bundle_path"] or None
 
     # Validate required credentials are present
-    if not (base_url and username and api_token):
-        missing = []
-        if not username:
-            missing.append("jira.username")
-        if not api_token:
-            missing.append("jira.api_token")
-        logger.warning(f"Jira search skipped: missing {', '.join(missing)} in config")
+    # For Jira Cloud: both username and api_token required (basic auth)
+    # For Jira Server/Data Center with PAT: only api_token required (token auth)
+    if not api_token:
+        logger.warning("Jira search skipped: missing jira.api_token in config")
         return []
 
     try:
@@ -806,12 +807,23 @@ def _search_jira(query: str, config: dict[str, Any]) -> list[NodeWithScore]:
         if ca_bundle_path:
             jira_options["verify"] = ca_bundle_path
 
-        # Use basic auth (username + API token) for authentication
-        # Works for both Jira Cloud and Data Center/Server
-        jira_client = JIRA(
-            options=jira_options,
-            basic_auth=(username, api_token)
-        )
+        # Choose authentication method based on credentials provided:
+        # - Username + API token: Use basic auth (Jira Cloud, or Server with password)
+        # - API token only: Use token auth (Jira Server/Data Center with PAT)
+        if username:
+            # Basic auth for Jira Cloud (username + API token)
+            # Also works for Jira Server with username + password
+            jira_client = JIRA(
+                options=jira_options,
+                basic_auth=(username, api_token)
+            )
+        else:
+            # Token auth for Jira Server/Data Center Personal Access Tokens (PAT)
+            # PATs are used alone without a username
+            jira_client = JIRA(
+                options=jira_options,
+                token_auth=api_token
+            )
 
         # Construct JQL with text search and project filtering
         jql = _prepare_jira_jql_query(query, config)
