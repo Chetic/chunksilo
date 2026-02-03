@@ -2,7 +2,6 @@
 """Test the RAG system in retrieval-only mode (no LLM in the MCP server)."""
 import traceback
 from pathlib import Path
-from dotenv import load_dotenv
 import pytest
 
 from chunksilo.index import load_index_config, build_index
@@ -10,8 +9,6 @@ from chunksilo.search import load_llamaindex_index
 from chunksilo.cfgload import load_config
 
 STORAGE_DIR = Path(load_config()["storage"]["storage_dir"])
-
-load_dotenv()
 
 
 def test_ingestion():

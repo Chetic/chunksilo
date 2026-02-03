@@ -63,8 +63,8 @@ python test_retrieval_only.py
 ```
 
 This will:
-- Ingest documents from `DATA_DIR` (default `./data`)
-- Build and persist the index into `STORAGE_DIR` (default `./storage`)
+- Ingest documents from the directories configured in `config.yaml` (default `./data`)
+- Build and persist the index to the storage directory in `config.yaml` (default `./storage`)
 - Perform a retrieval-only test over the index
 
 ### 2. End-to-end retrieval test (MCP server logic)
