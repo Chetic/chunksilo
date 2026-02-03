@@ -79,6 +79,7 @@ echo "Downloading dependencies with manylinux_2_34 constraints..."
 python3.11 -m pip download \
   -r "$PACKAGE_ROOT/requirements.txt" \
   llama-index-readers-confluence \
+  jira \
   -c "$CONSTRAINTS_FILE" \
   -d "$PACKAGE_ROOT/dependencies" \
   --no-cache-dir \
@@ -104,7 +105,7 @@ echo "✓ Dependencies downloaded successfully to $PACKAGE_ROOT/dependencies"
 echo "Generating third-party license report..."
 python3.11 -m venv /tmp/license-venv
 /tmp/license-venv/bin/pip install --quiet --no-index --find-links "$PACKAGE_ROOT/dependencies" \
-  -r "$PACKAGE_ROOT/requirements.txt" llama-index-readers-confluence
+  -r "$PACKAGE_ROOT/requirements.txt" llama-index-readers-confluence jira
 /tmp/license-venv/bin/pip install --quiet pip-licenses
 
 # Validate that installed package count is reasonable vs downloaded wheels

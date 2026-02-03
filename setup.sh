@@ -25,11 +25,11 @@ DEP_DIR="$SCRIPT_DIR/dependencies"
 if [ -d "$DEP_DIR" ] && [ -n "$(ls -A "$DEP_DIR" 2>/dev/null)" ]; then
     # Packaged mode: use pre-downloaded wheels
     echo "Using packaged dependencies from $DEP_DIR"
-    ./venv/bin/pip install --no-index --find-links "$DEP_DIR" --no-cache-dir -r requirements.txt llama-index-readers-confluence
+    ./venv/bin/pip install --no-index --find-links "$DEP_DIR" --no-cache-dir -r requirements.txt llama-index-readers-confluence jira
 else
     # Development mode: install from PyPI
     echo "Development mode: installing dependencies from PyPI..."
-    ./venv/bin/pip install --no-cache-dir -r requirements.txt llama-index-readers-confluence
+    ./venv/bin/pip install --no-cache-dir -r requirements.txt llama-index-readers-confluence jira
 fi
 
 # Install the package itself (entry points, no deps since they're already installed)
