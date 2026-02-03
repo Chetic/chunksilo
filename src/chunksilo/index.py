@@ -14,11 +14,12 @@ import sqlite3
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Dict, Optional, Iterator, Set, Any
+from typing import List, Dict, Optional, Iterator, Set, Any, Tuple
 
 from docx import Document
 
@@ -190,11 +191,15 @@ class HeadingStore:
     which checks metadata length before applying exclusions. By storing headings
     in a separate file, we keep chunk metadata small while preserving heading
     data for retrieval.
+
+    Supports deferred writes via flush() or context manager to batch disk I/O.
     """
 
     def __init__(self, store_path: Path):
         self.store_path = store_path
         self._data: Dict[str, List[dict]] = {}
+        self._dirty = False  # Track if data needs saving
+        self._lock = threading.Lock()  # Thread safety for parallel file loading
         self._load()
 
     def _load(self):
@@ -214,19 +219,37 @@ class HeadingStore:
             json.dump(self._data, f)
 
     def set_headings(self, file_path: str, headings: List[dict]):
-        """Store headings for a file."""
-        self._data[file_path] = headings
-        self._save()
+        """Store headings for a file (deferred write - call flush() to persist)."""
+        with self._lock:
+            self._data[file_path] = headings
+            self._dirty = True
 
     def get_headings(self, file_path: str) -> List[dict]:
         """Get headings for a file."""
-        return self._data.get(file_path, [])
+        with self._lock:
+            return self._data.get(file_path, [])
 
     def remove_headings(self, file_path: str):
-        """Remove headings for a file."""
-        if file_path in self._data:
-            del self._data[file_path]
+        """Remove headings for a file (deferred write - call flush() to persist)."""
+        with self._lock:
+            if file_path in self._data:
+                del self._data[file_path]
+                self._dirty = True
+
+    def flush(self):
+        """Write pending changes to disk."""
+        if self._dirty:
             self._save()
+            self._dirty = False
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - auto-flush on exit."""
+        self.flush()
+        return False  # Don't suppress exceptions
 
 
 # Module-level heading store instance (lazy initialized)
@@ -324,6 +347,38 @@ class IngestionState:
                     ",".join(doc_ids),
                     file_info.source_dir,
                 ),
+            )
+
+    def update_file_states_batch(self, file_updates: List[tuple[FileInfo, List[str]]]):
+        """Update multiple files in a single transaction (batch operation).
+
+        Args:
+            file_updates: List of (FileInfo, doc_ids) tuples
+        """
+        if not file_updates:
+            return
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.executemany(
+                """
+                INSERT INTO files (path, hash, last_modified, doc_ids, source_dir)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(path) DO UPDATE SET
+                    hash=excluded.hash,
+                    last_modified=excluded.last_modified,
+                    doc_ids=excluded.doc_ids,
+                    source_dir=excluded.source_dir
+                """,
+                [
+                    (
+                        info.path,
+                        info.hash,
+                        info.last_modified,
+                        ",".join(doc_ids),
+                        info.source_dir,
+                    )
+                    for info, doc_ids in file_updates
+                ]
             )
 
     def remove_file_state(self, path: str):
@@ -1430,6 +1485,19 @@ def build_bm25_index(index, storage_dir: Path) -> None:
     logger.info(f"BM25 index persisted to {bm25_dir}")
 
 
+def batched(iterable, n):
+    """Batch data into lists of length n. The last batch may be shorter.
+
+    Compatible with Python <3.12 (which added itertools.batched).
+    """
+    it = iter(iterable)
+    while True:
+        batch = list(itertools.islice(it, n))
+        if not batch:
+            return
+        yield batch
+
+
 def configure_offline_mode(offline: bool, cache_dir: Path) -> None:
     """Configure environment variables for offline mode."""
     if offline:
@@ -1452,6 +1520,106 @@ def configure_offline_mode(offline: bool, cache_dir: Path) -> None:
         constants.HF_HUB_OFFLINE = offline
     except ImportError:
         pass
+
+
+def calculate_optimal_batch_size(
+    num_files: int,
+    avg_chunks_per_file: int = 10,
+    max_memory_mb: int = 2048,
+    embedding_dims: int = 384,
+) -> int:
+    """Calculate optimal batch size to stay within memory budget.
+
+    Args:
+        num_files: Total number of files to process
+        avg_chunks_per_file: Estimated average chunks per file
+        max_memory_mb: Maximum memory budget in MB
+        embedding_dims: Embedding dimensions (384 for BAAI/bge-small-en-v1.5)
+
+    Returns:
+        Optimal batch size (number of files to process together)
+    """
+    # Each embedding: dims × 4 bytes (float32)
+    bytes_per_embedding = embedding_dims * 4
+
+    # Estimate total memory for all files
+    total_chunks = num_files * avg_chunks_per_file
+    total_memory_mb = (total_chunks * bytes_per_embedding) / (1024 * 1024)
+
+    if total_memory_mb <= max_memory_mb:
+        # Can process all files at once
+        return num_files
+    else:
+        # Calculate batch size to stay under memory limit
+        max_chunks = int((max_memory_mb * 1024 * 1024) / bytes_per_embedding)
+        batch_size = max(1, int(max_chunks / avg_chunks_per_file))
+        return min(batch_size, num_files)
+
+
+def load_files_parallel(
+    files: List[FileInfo],
+    data_source: DataSource,
+    progress: SimpleProgressBar,
+    max_workers: int = 4,
+    timeout_enabled: bool = True,
+    per_file_timeout: float = 300,
+    heartbeat_interval: float = 2.0,
+) -> Dict[str, Tuple[FileInfo, List[Any]]]:
+    """Load files in parallel using ThreadPoolExecutor.
+
+    Args:
+        files: List of FileInfo objects to load
+        data_source: DataSource instance for loading files
+        progress: Progress bar for tracking
+        max_workers: Maximum number of parallel workers
+        timeout_enabled: Whether to enable per-file timeout
+        per_file_timeout: Timeout in seconds per file
+        heartbeat_interval: Heartbeat interval in seconds
+
+    Returns:
+        Dict mapping file path to (FileInfo, List[LlamaIndexDocument])
+    """
+    file_docs = {}
+
+    def load_single_file(file_info: FileInfo):
+        """Load a single file (executed in thread pool)."""
+        try:
+            with FileProcessingContext(
+                file_info.path,
+                progress,
+                timeout_seconds=per_file_timeout if timeout_enabled else None,
+                heartbeat_interval=heartbeat_interval
+            ) as ctx:
+                ctx.set_phase("Loading file")
+                docs = data_source.load_file(file_info, ctx)
+                return file_info, docs
+        except FileProcessingTimeoutError as e:
+            logger.error(f"Timeout loading {file_info.path}: {e}")
+            return file_info, []
+        except Exception as e:
+            logger.error(f"Error loading {file_info.path}: {e}")
+            return file_info, []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all file loading tasks
+        future_to_file = {
+            executor.submit(load_single_file, file_info): file_info
+            for file_info in files
+        }
+
+        # Collect results as they complete
+        for future in as_completed(future_to_file):
+            file_info = future_to_file[future]
+            try:
+                result_file_info, docs = future.result(timeout=per_file_timeout + 10)
+                if docs:  # Only add if we got documents
+                    file_docs[result_file_info.path] = (result_file_info, docs)
+            except Exception as e:
+                logger.error(f"Error retrieving result for {file_info.path}: {e}")
+            finally:
+                progress.update()
+
+    return file_docs
 
 
 def build_index(
@@ -1577,65 +1745,154 @@ def build_index(
 
     # Process New/Modified Files
     if files_to_process:
-        progress = SimpleProgressBar(len(files_to_process), desc="Processing files", unit="file")
-
-        # Get timeout configuration
+        # Get configuration
         timeout_enabled = cfgload.get("indexing.timeout.enabled", True)
         per_file_timeout = cfgload.get("indexing.timeout.per_file_seconds", 300)
         heartbeat_interval = cfgload.get("indexing.timeout.heartbeat_interval_seconds", 2)
 
+        # Checkpointing and batching configuration
+        checkpoint_interval_files = cfgload.get("indexing.checkpoint_interval_files", 50)
+        checkpoint_interval_seconds = cfgload.get("indexing.checkpoint_interval_seconds", 300)
+
+        # Adaptive batch sizing
+        enable_adaptive_batching = cfgload.get("indexing.enable_adaptive_batching", True)
+        max_memory_mb = cfgload.get("indexing.max_memory_mb", 2048)
+
+        if enable_adaptive_batching:
+            # Calculate optimal batch size based on memory constraints
+            optimal_batch_size = calculate_optimal_batch_size(
+                num_files=len(files_to_process),
+                avg_chunks_per_file=10,  # Conservative estimate
+                max_memory_mb=max_memory_mb
+            )
+            # Use smaller of checkpoint interval or optimal batch size
+            batch_size = min(checkpoint_interval_files, optimal_batch_size)
+            logger.info(f"Adaptive batching enabled: processing {len(files_to_process)} files in batches of {batch_size}")
+        else:
+            batch_size = checkpoint_interval_files
+            logger.info(f"Fixed batch size: {batch_size} files per batch")
+
+        # Phase 1: Delete old versions
+        logger.info("Removing old versions of modified files...")
         for file_info in files_to_process:
-            file_path = Path(file_info.path)
+            existing_state = tracked_files.get(file_info.path)
+            if existing_state:
+                for doc_id in existing_state["doc_ids"]:
+                    try:
+                        index.delete_ref_doc(doc_id, delete_from_docstore=True)
+                    except KeyError:
+                        pass  # Document might already be gone
 
-            try:
-                # Wrap file processing with timeout and heartbeat
-                with FileProcessingContext(
-                    str(file_path),
+        # Phase 2-4: Process files in batches with checkpointing
+        total_files = len(files_to_process)
+        files_since_checkpoint = 0
+        last_checkpoint_time = time.time()
+
+        progress = SimpleProgressBar(total_files, desc="Processing files", unit="file")
+
+        # Get parallel loading configuration
+        max_workers = cfgload.get("indexing.parallel_workers", 4)
+        enable_parallel = cfgload.get("indexing.enable_parallel_loading", True)
+
+        # Process files in batches
+        for batch in batched(files_to_process, batch_size):
+            # Load files in this batch (parallel or sequential based on config)
+            accumulated_docs = []
+            doc_to_file_mapping = {}  # Maps doc_id -> FileInfo
+            file_doc_ids = {}  # Maps file path -> list of doc_ids
+
+            if enable_parallel and len(batch) > 1:
+                # Parallel file loading
+                logger.info(f"Loading {len(batch)} files in parallel with {max_workers} workers...")
+                file_docs = load_files_parallel(
+                    batch,
+                    data_source,
                     progress,
-                    timeout_seconds=per_file_timeout if timeout_enabled else None,
+                    max_workers=max_workers,
+                    timeout_enabled=timeout_enabled,
+                    per_file_timeout=per_file_timeout,
                     heartbeat_interval=heartbeat_interval
-                ) as ctx:
-                    # Remove old versions if they exist
-                    existing_state = tracked_files.get(file_info.path)
-                    if existing_state:
-                        ctx.set_phase("Removing old version")
-                        for doc_id in existing_state["doc_ids"]:
-                            try:
-                                index.delete_ref_doc(doc_id, delete_from_docstore=True)
-                            except KeyError:
-                                pass  # Document might already be gone
+                )
 
-                    # Load and Index New Version
-                    ctx.set_phase("Loading file")
-                    docs = data_source.load_file(file_info, ctx)
-
-                    # Index documents
-                    ctx.set_phase("Embedding & indexing")
-                    doc_ids = []
+                # Accumulate documents from parallel loading results
+                for file_path, (file_info, docs) in file_docs.items():
+                    file_doc_ids[file_path] = []
                     for doc in docs:
-                        index.insert(doc)
-                        doc_ids.append(doc.doc_id)
+                        accumulated_docs.append(doc)
+                        doc_to_file_mapping[doc.doc_id] = file_info
+                        file_doc_ids[file_path].append(doc.doc_id)
+            else:
+                # Sequential file loading (fallback)
+                for file_info in batch:
+                    file_path = Path(file_info.path)
 
-                    # Update State
-                    ctx.set_phase("Updating state")
-                    ingestion_state.update_file_state(file_info, doc_ids)
+                    try:
+                        with FileProcessingContext(
+                            str(file_path),
+                            progress,
+                            timeout_seconds=per_file_timeout if timeout_enabled else None,
+                            heartbeat_interval=heartbeat_interval
+                        ) as ctx:
+                            ctx.set_phase("Loading file")
+                            docs = data_source.load_file(file_info, ctx)
 
-            except FileProcessingTimeoutError as e:
-                logger.error(f"Timeout: {e}")
-                # Continue processing other files
-                continue
-            except Exception as e:
-                logger.error(f"Error processing {file_path}: {e}")
-                # Continue processing other files
-                continue
-            finally:
-                # Always update progress bar
-                progress.update()
+                            # Accumulate documents
+                            file_doc_ids[file_info.path] = []
+                            for doc in docs:
+                                accumulated_docs.append(doc)
+                                doc_to_file_mapping[doc.doc_id] = file_info
+                                file_doc_ids[file_info.path].append(doc.doc_id)
 
-    # Persist Index
+                    except FileProcessingTimeoutError as e:
+                        logger.error(f"Timeout: {e}")
+                        continue
+                    except Exception as e:
+                        logger.error(f"Error loading {file_path}: {e}")
+                        continue
+                    finally:
+                        progress.update()
+
+            # Batch embedding for this batch
+            if accumulated_docs:
+                logger.info(f"Batch embedding {len(accumulated_docs)} documents from {len(batch)} files...")
+                with Spinner(f"Converting {len(accumulated_docs)} documents to nodes"):
+                    nodes = text_splitter.get_nodes_from_documents(accumulated_docs)
+
+                logger.info(f"Embedding and indexing {len(nodes)} nodes...")
+                with Spinner(f"Embedding {len(nodes)} nodes"):
+                    index.insert_nodes(nodes)
+
+            # Batch update state for this batch
+            state_updates = []
+            for file_path, doc_ids in file_doc_ids.items():
+                if doc_ids:
+                    file_info = doc_to_file_mapping[doc_ids[0]]
+                    state_updates.append((file_info, doc_ids))
+
+            if state_updates:
+                ingestion_state.update_file_states_batch(state_updates)
+
+            # Checkpoint after each batch
+            files_since_checkpoint += len(batch)
+            elapsed = time.time() - last_checkpoint_time
+
+            logger.info(f"Creating checkpoint after processing {files_since_checkpoint} files...")
+            index.storage_context.persist(persist_dir=str(STORAGE_DIR))
+
+            # Flush HeadingStore
+            with get_heading_store() as store:
+                pass  # Context manager will auto-flush
+
+            files_since_checkpoint = 0
+            last_checkpoint_time = time.time()
+
+    # Final checkpoint - ensure all data is persisted
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Persisting index to {STORAGE_DIR}")
+    logger.info(f"Creating final checkpoint to {STORAGE_DIR}")
     index.storage_context.persist(persist_dir=str(STORAGE_DIR))
+
+    # Flush HeadingStore one final time
+    get_heading_store().flush()
 
     # Build BM25 index for file name matching
     build_bm25_index(index, STORAGE_DIR)

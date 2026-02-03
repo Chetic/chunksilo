@@ -50,6 +50,12 @@ _DEFAULTS: dict[str, Any] = {
         },
         "chunk_size": 1600,
         "chunk_overlap": 200,
+        "checkpoint_interval_files": 50,
+        "checkpoint_interval_seconds": 300,
+        "parallel_workers": 4,
+        "enable_parallel_loading": True,
+        "enable_adaptive_batching": True,
+        "max_memory_mb": 2048,
         "timeout": {
             "enabled": True,
             "per_file_seconds": 300,  # 5 minutes per file
