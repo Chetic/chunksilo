@@ -1116,6 +1116,7 @@ def run_search(
                 rerank_request = RerankRequest(query=enhanced_query, passages=passages)
                 reranked_results = reranker.rerank(rerank_request)
 
+                # Build text-to-node mapping for fallback text matching
                 text_to_indices: dict[str, list[tuple[int, NodeWithScore]]] = {}
                 for idx, node in enumerate(nodes):
                     node_text = node.node.get_content() or ""
@@ -1126,20 +1127,34 @@ def run_search(
                 reranked_nodes = []
                 seen_indices: set[int] = set()
                 for result in reranked_results:
-                    doc_text = result.get("text", "")
                     score = result.get("score", 0.0)
+                    result_idx = result.get("id")
 
-                    if doc_text in text_to_indices:
-                        for idx, node in text_to_indices[doc_text]:
-                            if idx not in seen_indices:
-                                reranked_nodes.append(node)
-                                rerank_scores[id(node)] = float(score)
-                                seen_indices.add(idx)
-                                break
+                    # Primary: match by index (flashrank returns original passage index)
+                    if result_idx is not None and 0 <= result_idx < len(nodes):
+                        if result_idx not in seen_indices:
+                            node = nodes[result_idx]
+                            reranked_nodes.append(node)
+                            rerank_scores[id(node)] = float(score)
+                            seen_indices.add(result_idx)
+                    else:
+                        # Fallback: match by text content
+                        doc_text = result.get("text", "")
+                        if doc_text in text_to_indices:
+                            for idx, node in text_to_indices[doc_text]:
+                                if idx not in seen_indices:
+                                    reranked_nodes.append(node)
+                                    rerank_scores[id(node)] = float(score)
+                                    seen_indices.add(idx)
+                                    break
 
+                # Add remaining unmatched nodes with minimum matched score
+                # This ensures Jira/Confluence results aren't dropped due to text mismatch
+                min_score = min(rerank_scores.values()) if rerank_scores else 0.0
                 for idx, node in enumerate(nodes):
                     if idx not in seen_indices:
                         reranked_nodes.append(node)
+                        rerank_scores[id(node)] = min_score
 
                 nodes = reranked_nodes[:rerank_limit]
             except Exception as e:
