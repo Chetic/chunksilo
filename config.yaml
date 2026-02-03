@@ -19,16 +19,30 @@ confluence:
 # Leave url empty to disable Jira integration
 # Install with: pip install chunksilo[jira]
 jira:
+  # Jira base URL (leave empty to disable)
+  # Cloud: https://company.atlassian.net
+  # Server: https://jira.company.com
   url: ""
+
+  # Username (Cloud: email, Server: username)
   username: ""
+
+  # API token (create at id.atlassian.com/manage-profile/security/api-tokens)
   api_token: ""
+
   timeout: 10.0
   max_results: 30
-  # Optional: restrict search to specific projects (empty = all accessible)
+
+  # Project keys to search ([] = all accessible projects)
+  # Example: ["PROJ", "ENG"]
+  # Tip: Specify projects for faster searches on large instances
   projects: []
-  # Control what content is included in search results
-  include_comments: true
-  include_custom_fields: true
+
+  # Include comments in search (slower but more comprehensive)
+  include_comments: false
+
+  # Include custom fields (rarely useful for semantic search)
+  include_custom_fields: false
 
 # SSL/TLS settings - for corporate environments with custom CA certificates
 ssl:
