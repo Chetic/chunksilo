@@ -109,8 +109,8 @@ def base_config():
             "timeout": 10.0,
             "max_results": 30,
             "projects": [],
-            "include_comments": True,
-            "include_custom_fields": True,
+            "include_comments": False,
+            "include_custom_fields": False,
         },
         "ssl": {
             "ca_bundle_path": ""
