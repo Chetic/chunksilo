@@ -385,12 +385,63 @@ def _get_confluence_page_dates(
     return {}
 
 
+def _normalize_jira_issue_keys(query: str) -> str:
+    """Normalize potential Jira issue keys to canonical hyphenated format.
+
+    Converts various separator patterns to canonical hyphenated format:
+    - "abc 1234" -> "ABC-1234" (space separator)
+    - "abc_1234" -> "ABC-1234" (underscore separator)
+    - "abc1234" -> "ABC-1234" (no separator)
+
+    Pattern requirements to avoid worst-case false positives:
+    - 2-10 uppercase letters only (project key, no digits to avoid ambiguity)
+    - optional separator (space, underscore, or none)
+    - 1-6 digits (issue number)
+    - Must be word-bounded
+
+    Note: Some false positives are acceptable (e.g., "error 404" -> "ERROR-404")
+    because the JQL query uses OR logic, so non-existent keys fail gracefully
+    while text search still works.
+
+    Args:
+        query: User's search query string
+
+    Returns:
+        Query with normalized issue keys in canonical format
+
+    Examples:
+        >>> _normalize_jira_issue_keys("abc 1234")
+        'ABC-1234'
+        >>> _normalize_jira_issue_keys("proj_567 test123")
+        'PROJ-567 TEST-123'
+        >>> _normalize_jira_issue_keys("error 404")  # acceptable false positive
+        'ERROR-404'
+    """
+    # Pattern: 2-10 letters only (to avoid ambiguity with no separator) +
+    #          optional separator (space/underscore/none) +
+    #          1-6 digits
+    # Note: Project keys are typically all letters (ABC, PROJ, TEST)
+    # Mixed alphanumeric keys like "H2" will still work with separators
+    pattern = r'\b([A-Z]{2,10})[\s_]?(\d{1,6})\b'
+
+    def replacer(match):
+        project = match.group(1).upper()
+        issue_num = match.group(2)
+        return f"{project}-{issue_num}"
+
+    return re.sub(pattern, replacer, query, flags=re.IGNORECASE)
+
+
 def _prepare_jira_jql_query(query: str, config: dict[str, Any]) -> str:
     """Construct a JQL query from user search terms and configuration.
 
     Uses Jira's 'text' field which searches across Summary, Description,
     Environment, Comments, and all text custom fields. Additionally detects
     Jira issue keys (e.g., "ABEI-1660") and includes exact key searches.
+
+    The query is first normalized to convert alternative issue key formats
+    (e.g., "abc 1234", "abc_1234", "abc1234") to canonical format ("ABC-1234")
+    before issue key detection. This enables flexible searching for LLMs and users.
 
     Note: Fuzzy search operators (~) are deprecated in Jira Cloud but work
     in Data Center/Server. ChunkSilo's semantic search (embeddings + reranker)
@@ -416,11 +467,15 @@ def _prepare_jira_jql_query(query: str, config: dict[str, Any]) -> str:
         - JQL operators: https://support.atlassian.com/jira-software-cloud/docs/jql-operators/
         - JQL key field: https://support.atlassian.com/jira-software-cloud/docs/search-by-issue-key/
     """
-    # Detect Jira issue keys in the query (e.g., "ABEI-1660", "PROJ-123")
+    # Normalize potential issue keys with alternative separators
+    # (e.g., "abc 1234" -> "ABC-1234", "test123" -> "TEST-123")
+    normalized_query = _normalize_jira_issue_keys(query)
+
+    # Detect Jira issue keys in the normalized query (e.g., "ABEI-1660", "PROJ-123")
     # Pattern matches: 1+ uppercase letters/digits, hyphen, 1+ digits
     # Case-insensitive matching, but preserve original case for extraction
     issue_key_pattern = r'\b([A-Z][A-Z0-9]+-\d+)\b'
-    detected_keys = re.findall(issue_key_pattern, query, re.IGNORECASE)
+    detected_keys = re.findall(issue_key_pattern, normalized_query, re.IGNORECASE)
 
     # Build key search clauses for exact issue key matches
     key_clauses = []

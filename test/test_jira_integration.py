@@ -230,6 +230,80 @@ class TestJiraJqlQuery:
         assert "ABEI" in jql
         assert "ORDER BY updated DESC" in jql
 
+    def test_issue_key_space_separator(self, base_config):
+        """Issue key with space separator should be normalized to hyphen."""
+        jql = _prepare_jira_jql_query("abc 1234", base_config)
+        assert 'key = "ABC-1234"' in jql
+        assert "ORDER BY updated DESC" in jql
+
+    def test_issue_key_underscore_separator(self, base_config):
+        """Issue key with underscore separator should be normalized to hyphen."""
+        jql = _prepare_jira_jql_query("proj_567", base_config)
+        assert 'key = "PROJ-567"' in jql
+        assert "ORDER BY updated DESC" in jql
+
+    def test_issue_key_no_separator(self, base_config):
+        """Issue key with no separator should be normalized to hyphen."""
+        jql = _prepare_jira_jql_query("test123", base_config)
+        assert 'key = "TEST-123"' in jql
+        assert "ORDER BY updated DESC" in jql
+
+    def test_issue_key_mixed_separators(self, base_config):
+        """Multiple issue keys with different separators should all normalize."""
+        jql = _prepare_jira_jql_query("abc 1234 def_567 ghi890", base_config)
+        assert 'key = "ABC-1234"' in jql
+        assert 'key = "DEF-567"' in jql
+        assert 'key = "GHI-890"' in jql
+        assert " OR " in jql
+        assert "ORDER BY updated DESC" in jql
+
+    def test_issue_key_with_text_space_separator(self, base_config):
+        """Issue key with space separator mixed with text should work."""
+        jql = _prepare_jira_jql_query("abc 1234 authentication bug", base_config)
+        assert 'key = "ABC-1234"' in jql
+        assert 'text ~ "authentication"' in jql
+        assert 'text ~ "bug"' in jql
+        assert " OR " in jql
+        assert "ORDER BY updated DESC" in jql
+
+    def test_issue_key_case_insensitive_space_separator(self, base_config):
+        """Lowercase issue key with space should normalize to uppercase."""
+        jql = _prepare_jira_jql_query("proj 123", base_config)
+        assert 'key = "PROJ-123"' in jql
+        assert "ORDER BY updated DESC" in jql
+
+    def test_issue_key_acceptable_false_positive(self, base_config):
+        """Common technical terms like 'error 404' normalize but fail gracefully."""
+        jql = _prepare_jira_jql_query("error 404", base_config)
+        # Should search key (even though it likely doesn't exist)
+        assert 'key = "ERROR-404"' in jql
+        # Should also search text fields
+        assert 'text ~ "error"' in jql or 'text ~ "404"' in jql
+        assert " OR " in jql
+        assert "ORDER BY updated DESC" in jql
+
+    def test_no_false_positive_numbers_only(self, base_config):
+        """Numbers without project key prefix should not be detected."""
+        jql = _prepare_jira_jql_query("123 456", base_config)
+        assert "key =" not in jql  # No key search
+        assert "text ~" in jql or jql == ""  # Text search only or empty
+        if jql:
+            assert "ORDER BY updated DESC" in jql
+
+    def test_no_false_positive_too_many_digits(self, base_config):
+        """Issue keys with too many digits should not match."""
+        jql = _prepare_jira_jql_query("abc 12345678", base_config)
+        assert "key =" not in jql  # Too many digits
+        assert "text ~" in jql  # Text search only
+        assert "ORDER BY updated DESC" in jql
+
+    def test_no_false_positive_long_project_key(self, base_config):
+        """Very long project keys should not match."""
+        jql = _prepare_jira_jql_query("verylongprojectname 123", base_config)
+        assert "key =" not in jql  # Project key too long
+        assert "text ~" in jql  # Text search only
+        assert "ORDER BY updated DESC" in jql
+
 
 # ============================================================================
 # ISSUE TO TEXT CONVERSION TESTS
