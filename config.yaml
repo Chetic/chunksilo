@@ -15,6 +15,21 @@ confluence:
   timeout: 10.0
   max_results: 30
 
+# Jira integration (optional) - enables live search of Jira issues
+# Leave url empty to disable Jira integration
+# Install with: pip install chunksilo[jira]
+jira:
+  url: ""
+  username: ""
+  api_token: ""
+  timeout: 10.0
+  max_results: 30
+  # Optional: restrict search to specific projects (empty = all accessible)
+  projects: []
+  # Control what content is included in search results
+  include_comments: true
+  include_custom_fields: true
+
 # SSL/TLS settings - for corporate environments with custom CA certificates
 ssl:
   # Path to custom CA bundle file (leave empty to use system defaults)

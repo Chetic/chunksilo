@@ -70,6 +70,16 @@ _DEFAULTS: dict[str, Any] = {
         "timeout": 10.0,
         "max_results": 30,
     },
+    "jira": {
+        "url": "",
+        "username": "",
+        "api_token": "",
+        "timeout": 10.0,
+        "max_results": 30,
+        "projects": [],  # Empty list = all accessible projects
+        "include_comments": True,
+        "include_custom_fields": True,
+    },
     "ssl": {
         "ca_bundle_path": "",
     },

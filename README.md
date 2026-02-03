@@ -50,6 +50,12 @@ pip install chunksilo
 
 # Or with Confluence support:
 pip install chunksilo[confluence]
+
+# Or with Jira support:
+pip install chunksilo[jira]
+
+# Or with both Confluence and Jira:
+pip install chunksilo[confluence,jira]
 ```
 
 Then:
@@ -162,6 +168,27 @@ All settings are optional and have sensible defaults.
 | `confluence.api_token` | `""` | Confluence API token |
 | `confluence.timeout` | `10.0` | Request timeout in seconds |
 | `confluence.max_results` | `30` | Maximum results per search |
+
+#### Jira Settings (optional)
+
+> **Note:** Jira integration requires the optional dependency. Install with: `pip install chunksilo[jira]`
+
+| Setting | Default | Description |
+| :--- | :--- | :--- |
+| `jira.url` | `""` | Jira base URL (empty = disabled) |
+| `jira.username` | `""` | Jira username/email |
+| `jira.api_token` | `""` | Jira API token |
+| `jira.timeout` | `10.0` | Request timeout in seconds |
+| `jira.max_results` | `30` | Maximum results per search |
+| `jira.projects` | `[]` | Project keys to search (empty = all) |
+| `jira.include_comments` | `true` | Include issue comments in search |
+| `jira.include_custom_fields` | `true` | Include custom fields in search |
+
+**Creating a Jira API Token:**
+1. Log into Jira
+2. Go to Account Settings > Security > API Tokens
+3. Click "Create API Token"
+4. Copy the token and add it to your config
 
 #### SSL Settings (optional)
 
@@ -336,6 +363,7 @@ Add to `mcp_settings.json` (typically in `~/.config/Code/User/globalStorage/roov
 - **Retrieval errors**: Check paths in your MCP client configuration.
 - **Offline mode**: PyPI installs default to `offline: false` (models auto-download). The offline bundle includes pre-downloaded models and sets `offline: true`. Set `retrieval.offline: true` in `config.yaml` to prevent network calls after initial model download.
 - **Confluence Integration**: Install with `pip install chunksilo[confluence]`, then set `confluence.url`, `confluence.username`, and `confluence.api_token` in `config.yaml`.
+- **Jira Integration**: Install with `pip install chunksilo[jira]`, then set `jira.url`, `jira.username`, and `jira.api_token` in `config.yaml`. Optionally configure `jira.projects` to restrict search to specific project keys.
 - **Custom CA Bundle**: Set `ssl.ca_bundle_path` in `config.yaml` for custom certificates.
 - **Network mounts**: Unavailable directories are skipped with a warning; indexing continues with available directories.
 - **Legacy .doc files**: Requires LibreOffice to be installed for automatic conversion to .docx. If LibreOffice is not found, .doc files are skipped with a warning. Full heading extraction is supported.

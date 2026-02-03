@@ -26,6 +26,7 @@ dynamic = ["dependencies"]
 
 [project.optional-dependencies]
 confluence = ["llama-index-readers-confluence>=0.6.0,<1"]
+jira = ["jira>=3.5.0,<4"]
 test = ["pytest>=7.4.0,<9", "requests>=2.31.0,<3"]
 
 [project.scripts]
