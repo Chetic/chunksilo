@@ -7,6 +7,7 @@ Contains all retrieval logic independent of the MCP server.
 Used by both the MCP server (server.py) and the CLI (cli.py).
 """
 import os
+import re
 import time
 import math
 import logging
@@ -371,17 +372,13 @@ def _get_confluence_page_dates(
             data = response.json()
             result = {}
             if "createdAt" in data:
-                try:
-                    dt = datetime.fromisoformat(data["createdAt"].replace("Z", "+00:00"))
-                    result["creation_date"] = dt.strftime("%Y-%m-%d")
-                except Exception:
-                    pass
+                creation_date = _parse_iso8601_to_date(data["createdAt"])
+                if creation_date:
+                    result["creation_date"] = creation_date
             if "version" in data and "createdAt" in data["version"]:
-                try:
-                    dt = datetime.fromisoformat(data["version"]["createdAt"].replace("Z", "+00:00"))
-                    result["last_modified_date"] = dt.strftime("%Y-%m-%d")
-                except Exception:
-                    pass
+                last_modified = _parse_iso8601_to_date(data["version"]["createdAt"])
+                if last_modified:
+                    result["last_modified_date"] = last_modified
             return result
     except Exception as e:
         logger.debug(f"Failed to fetch Confluence page dates: {e}")
@@ -610,20 +607,15 @@ def _jira_issue_to_metadata(issue, jira_url: str) -> dict[str, Any]:
     # Dates for filtering and recency boosting
     # Parse ISO 8601 format and convert to YYYY-MM-DD for consistency
     if hasattr(issue.fields, 'created') and issue.fields.created:
-        try:
-            # Handle timezone indicator 'Z' (UTC)
-            dt = datetime.fromisoformat(issue.fields.created.replace('Z', '+00:00'))
-            metadata["creation_date"] = dt.strftime("%Y-%m-%d")
-        except Exception as e:
-            logger.debug(f"Failed to parse creation date for {issue.key}: {e}")
+        creation_date = _parse_iso8601_to_date(issue.fields.created)
+        if creation_date:
+            metadata["creation_date"] = creation_date
 
     if hasattr(issue.fields, 'updated') and issue.fields.updated:
-        try:
-            dt = datetime.fromisoformat(issue.fields.updated.replace('Z', '+00:00'))
-            # last_modified_date used for recency boost calculation
-            metadata["last_modified_date"] = dt.strftime("%Y-%m-%d")
-        except Exception as e:
-            logger.debug(f"Failed to parse updated date for {issue.key}: {e}")
+        # last_modified_date used for recency boost calculation
+        last_modified = _parse_iso8601_to_date(issue.fields.updated)
+        if last_modified:
+            metadata["last_modified_date"] = last_modified
 
     # Project information
     if hasattr(issue.fields, 'project') and issue.fields.project:
@@ -887,6 +879,41 @@ def load_llamaindex_index(config: dict[str, Any] | None = None):
     index = load_index_from_storage(storage_context)
     _index_cache = index
     return index
+
+
+def _parse_iso8601_to_date(iso_string: str) -> str | None:
+    """Parse ISO 8601 timestamp to YYYY-MM-DD format.
+
+    Handles various ISO 8601 formats including:
+    - Z suffix: 2024-01-15T10:30:00Z
+    - Timezone with colon: 2024-01-15T10:30:00.000+00:00
+    - Timezone without colon: 2024-01-15T10:30:00.000+0000 (Jira format)
+
+    Args:
+        iso_string: ISO 8601 formatted datetime string
+
+    Returns:
+        Date in YYYY-MM-DD format, or None if parsing fails
+    """
+    if not iso_string:
+        return None
+
+    try:
+        # Normalize the timestamp
+        normalized = iso_string.strip()
+
+        # Replace Z suffix with +00:00
+        normalized = normalized.replace('Z', '+00:00')
+
+        # Insert colon in timezone offsets like +0000 → +00:00
+        # Matches ±HHMM at end of string, inserts colon: ±HH:MM
+        normalized = re.sub(r'([+-]\d{2})(\d{2})$', r'\1:\2', normalized)
+
+        # Parse and format
+        dt = datetime.fromisoformat(normalized)
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        return None
 
 
 def _parse_date(date_str: str) -> datetime | None:

@@ -251,5 +251,99 @@ class TestParseDate:
         assert result is None
 
 
+class TestParseISO8601ToDate:
+    """Tests for _parse_iso8601_to_date in search.py"""
+
+    def test_z_suffix(self):
+        """Handle Z timezone indicator."""
+        from chunksilo.search import _parse_iso8601_to_date
+
+        result = _parse_iso8601_to_date("2024-01-15T10:30:00Z")
+        assert result == "2024-01-15"
+
+    def test_z_with_milliseconds(self):
+        """Handle Z with fractional seconds."""
+        from chunksilo.search import _parse_iso8601_to_date
+
+        result = _parse_iso8601_to_date("2024-01-15T10:30:00.000Z")
+        assert result == "2024-01-15"
+
+    def test_timezone_with_colon(self):
+        """Handle +00:00 format."""
+        from chunksilo.search import _parse_iso8601_to_date
+
+        result = _parse_iso8601_to_date("2024-01-15T10:30:00.000+00:00")
+        assert result == "2024-01-15"
+
+    def test_timezone_without_colon_utc(self):
+        """Handle +0000 format (Jira)."""
+        from chunksilo.search import _parse_iso8601_to_date
+
+        result = _parse_iso8601_to_date("2024-01-15T10:30:00.000+0000")
+        assert result == "2024-01-15"
+
+    def test_timezone_without_colon_negative(self):
+        """Handle -0500 format."""
+        from chunksilo.search import _parse_iso8601_to_date
+
+        result = _parse_iso8601_to_date("2024-01-15T10:30:00.000-0500")
+        assert result == "2024-01-15"
+
+    def test_timezone_with_colon_non_utc(self):
+        """Handle +05:30 format."""
+        from chunksilo.search import _parse_iso8601_to_date
+
+        result = _parse_iso8601_to_date("2024-01-15T10:30:00.000+05:30")
+        assert result == "2024-01-15"
+
+    def test_fractional_seconds_variations(self):
+        """Handle different fractional second formats."""
+        from chunksilo.search import _parse_iso8601_to_date
+
+        # 3 digits
+        assert _parse_iso8601_to_date("2024-01-15T10:30:00.000+0000") == "2024-01-15"
+        # 2 digits
+        assert _parse_iso8601_to_date("2024-01-15T10:30:00.00+0000") == "2024-01-15"
+        # 1 digit
+        assert _parse_iso8601_to_date("2024-01-15T10:30:00.0+0000") == "2024-01-15"
+        # No fractional seconds
+        assert _parse_iso8601_to_date("2024-01-15T10:30:00+0000") == "2024-01-15"
+
+    def test_invalid_format(self):
+        """Return None for invalid strings."""
+        from chunksilo.search import _parse_iso8601_to_date
+
+        result = _parse_iso8601_to_date("not-a-valid-date")
+        assert result is None
+
+    def test_empty_string(self):
+        """Return None for empty string."""
+        from chunksilo.search import _parse_iso8601_to_date
+
+        result = _parse_iso8601_to_date("")
+        assert result is None
+
+    def test_none_input(self):
+        """Return None for None input."""
+        from chunksilo.search import _parse_iso8601_to_date
+
+        result = _parse_iso8601_to_date(None)
+        assert result is None
+
+    def test_whitespace_handling(self):
+        """Handle leading/trailing whitespace."""
+        from chunksilo.search import _parse_iso8601_to_date
+
+        result = _parse_iso8601_to_date("  2024-01-15T10:30:00.000+0000  ")
+        assert result == "2024-01-15"
+
+    def test_malformed_iso_string(self):
+        """Return None for malformed dates."""
+        from chunksilo.search import _parse_iso8601_to_date
+
+        assert _parse_iso8601_to_date("2024-13-45T10:30:00.000+0000") is None
+        assert _parse_iso8601_to_date("invalid-iso-timestamp") is None
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main(["-v", __file__]))
