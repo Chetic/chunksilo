@@ -186,6 +186,50 @@ class TestJiraJqlQuery:
         # Query with only stopwords should produce simple or empty query
         assert jql == "" or "ORDER BY updated DESC" in jql
 
+    def test_issue_key_detection_single(self, base_config):
+        """Single issue key should be detected and searched by key field."""
+        jql = _prepare_jira_jql_query("ABEI-1660", base_config)
+        assert 'key = "ABEI-1660"' in jql
+        assert "ORDER BY updated DESC" in jql
+
+    def test_issue_key_detection_lowercase(self, base_config):
+        """Lowercase issue key should be normalized to uppercase."""
+        jql = _prepare_jira_jql_query("abei-1660", base_config)
+        assert 'key = "ABEI-1660"' in jql
+        assert "ORDER BY updated DESC" in jql
+
+    def test_issue_key_detection_multiple(self, base_config):
+        """Multiple issue keys should be detected."""
+        jql = _prepare_jira_jql_query("ABEI-1660 PROJ-123", base_config)
+        assert 'key = "ABEI-1660"' in jql
+        assert 'key = "PROJ-123"' in jql
+        assert " OR " in jql
+        assert "ORDER BY updated DESC" in jql
+
+    def test_issue_key_mixed_with_text(self, base_config):
+        """Issue key mixed with text should search both key and text."""
+        jql = _prepare_jira_jql_query("ABEI-1660 authentication", base_config)
+        assert 'key = "ABEI-1660"' in jql
+        assert 'text ~ "authentication"' in jql
+        assert " OR " in jql
+        assert "ORDER BY updated DESC" in jql
+
+    def test_no_issue_key_detection(self, base_config):
+        """Non-issue-key queries should work as before."""
+        jql = _prepare_jira_jql_query("authentication bug", base_config)
+        assert "key =" not in jql  # No key search
+        assert "text ~" in jql  # Text search only
+        assert "ORDER BY updated DESC" in jql
+
+    def test_issue_key_with_project_filter(self, base_config):
+        """Issue key search should respect project filter."""
+        base_config["jira"]["projects"] = ["ABEI"]
+        jql = _prepare_jira_jql_query("ABEI-1660", base_config)
+        assert 'key = "ABEI-1660"' in jql
+        assert "project IN" in jql
+        assert "ABEI" in jql
+        assert "ORDER BY updated DESC" in jql
+
 
 # ============================================================================
 # ISSUE TO TEXT CONVERSION TESTS

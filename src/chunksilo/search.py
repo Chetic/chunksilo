@@ -389,8 +389,8 @@ def _prepare_jira_jql_query(query: str, config: dict[str, Any]) -> str:
     """Construct a JQL query from user search terms and configuration.
 
     Uses Jira's 'text' field which searches across Summary, Description,
-    Environment, Comments, and all text custom fields. This provides broad
-    coverage similar to natural language search.
+    Environment, Comments, and all text custom fields. Additionally detects
+    Jira issue keys (e.g., "ABEI-1660") and includes exact key searches.
 
     Note: Fuzzy search operators (~) are deprecated in Jira Cloud but work
     in Data Center/Server. ChunkSilo's semantic search (embeddings + reranker)
@@ -414,20 +414,35 @@ def _prepare_jira_jql_query(query: str, config: dict[str, Any]) -> str:
     References:
         - Jira text field: https://support.atlassian.com/jira-software-cloud/docs/search-for-work-items-using-the-text-field/
         - JQL operators: https://support.atlassian.com/jira-software-cloud/docs/jql-operators/
+        - JQL key field: https://support.atlassian.com/jira-software-cloud/docs/search-by-issue-key/
     """
+    # Detect Jira issue keys in the query (e.g., "ABEI-1660", "PROJ-123")
+    # Pattern matches: 1+ uppercase letters/digits, hyphen, 1+ digits
+    # Case-insensitive matching, but preserve original case for extraction
+    issue_key_pattern = r'\b([A-Z][A-Z0-9]+-\d+)\b'
+    detected_keys = re.findall(issue_key_pattern, query, re.IGNORECASE)
+
+    # Build key search clauses for exact issue key matches
+    key_clauses = []
+    if detected_keys:
+        # Normalize to uppercase (Jira keys are case-insensitive)
+        unique_keys = list(dict.fromkeys(k.upper() for k in detected_keys))
+        key_clauses = [f'key = "{key}"' for key in unique_keys]
+        logger.debug(f"Detected Jira issue keys in query: {unique_keys}")
+
     # Reuse Confluence query term preparation for stopword filtering
     # This gives us a clean list of meaningful search terms
     query_terms = _prepare_confluence_query_terms(query)
 
     # Build the text search clause
     # Using JQL 'text' field which searches across all text fields for broad recall
+    text_clause = ""
     if not query_terms:
         # No meaningful terms after filtering, use original query
         escaped = query.strip().replace('"', '\\"')
-        if not escaped:
-            logger.warning("Jira search skipped: empty query after processing")
-            return ""
-        text_clause = f'text ~ "{escaped}"'
+        if escaped and not detected_keys:
+            # Only add text clause if we don't have issue keys
+            text_clause = f'text ~ "{escaped}"'
     elif len(query_terms) == 1:
         # Single term - simple text search
         text_clause = f'text ~ "{query_terms[0]}"'
@@ -437,6 +452,21 @@ def _prepare_jira_jql_query(query: str, config: dict[str, Any]) -> str:
         text_conditions = ' OR '.join([f'text ~ "{term}"' for term in query_terms])
         text_clause = f'({text_conditions})'
 
+    # Combine key and text searches
+    if key_clauses and text_clause:
+        # Search both by key and text content
+        combined_clause = f'({" OR ".join(key_clauses)} OR {text_clause})'
+    elif key_clauses:
+        # Only key searches
+        combined_clause = " OR ".join(key_clauses)
+    elif text_clause:
+        # Only text search
+        combined_clause = text_clause
+    else:
+        # No valid search terms
+        logger.warning("Jira search skipped: empty query after processing")
+        return ""
+
     # Add project filter if configured
     # Empty projects list means search all accessible projects
     projects = config["jira"].get("projects", [])
@@ -444,9 +474,9 @@ def _prepare_jira_jql_query(query: str, config: dict[str, Any]) -> str:
         # Restrict search to specific project keys
         project_list = ", ".join([f'"{p}"' for p in projects])
         project_clause = f'project IN ({project_list})'
-        jql = f'{text_clause} AND {project_clause}'
+        jql = f'{combined_clause} AND {project_clause}'
     else:
-        jql = text_clause
+        jql = combined_clause
 
     # Order by updated DESC for recency
     # This enables ChunkSilo's recency boost feature and returns most relevant recent issues first
