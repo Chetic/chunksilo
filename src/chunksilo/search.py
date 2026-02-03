@@ -7,6 +7,7 @@ Contains all retrieval logic independent of the MCP server.
 Used by both the MCP server (server.py) and the CLI (cli.py).
 """
 import os
+import re
 import time
 import math
 import logging
@@ -25,6 +26,12 @@ try:
 except ImportError:
     ConfluenceReader = None
     requests = None
+
+# Optional Jira integration
+try:
+    from jira import JIRA
+except ImportError:
+    JIRA = None
 
 # TEMPORARY FIX: Patch Confluence HTML parser to handle syntax highlighting spans
 # Remove when upstream issue is fixed (see confluence_html_formatter.py)
@@ -365,21 +372,277 @@ def _get_confluence_page_dates(
             data = response.json()
             result = {}
             if "createdAt" in data:
-                try:
-                    dt = datetime.fromisoformat(data["createdAt"].replace("Z", "+00:00"))
-                    result["creation_date"] = dt.strftime("%Y-%m-%d")
-                except Exception:
-                    pass
+                creation_date = _parse_iso8601_to_date(data["createdAt"])
+                if creation_date:
+                    result["creation_date"] = creation_date
             if "version" in data and "createdAt" in data["version"]:
-                try:
-                    dt = datetime.fromisoformat(data["version"]["createdAt"].replace("Z", "+00:00"))
-                    result["last_modified_date"] = dt.strftime("%Y-%m-%d")
-                except Exception:
-                    pass
+                last_modified = _parse_iso8601_to_date(data["version"]["createdAt"])
+                if last_modified:
+                    result["last_modified_date"] = last_modified
             return result
     except Exception as e:
         logger.debug(f"Failed to fetch Confluence page dates: {e}")
     return {}
+
+
+def _prepare_jira_jql_query(query: str, config: dict[str, Any]) -> str:
+    """Construct a JQL query from user search terms and configuration.
+
+    Uses Jira's 'text' field which searches across Summary, Description,
+    Environment, Comments, and all text custom fields. This provides broad
+    coverage similar to natural language search.
+
+    Note: Fuzzy search operators (~) are deprecated in Jira Cloud but work
+    in Data Center/Server. ChunkSilo's semantic search (embeddings + reranker)
+    provides fuzzy matching regardless of Jira version.
+
+    Args:
+        query: User's search query string
+        config: Configuration dict containing jira settings
+
+    Returns:
+        JQL query string ready for Jira API
+
+    Raises:
+        None - returns safe default query on edge cases
+
+    Performance Note:
+        For high-volume instances, consider using specific fields like
+        "Summary ~ 'term' OR Description ~ 'term'" instead of "text ~ 'term'"
+        to reduce search scope. The current implementation prioritizes recall.
+
+    References:
+        - Jira text field: https://support.atlassian.com/jira-software-cloud/docs/search-for-work-items-using-the-text-field/
+        - JQL operators: https://support.atlassian.com/jira-software-cloud/docs/jql-operators/
+    """
+    # Reuse Confluence query term preparation for stopword filtering
+    # This gives us a clean list of meaningful search terms
+    query_terms = _prepare_confluence_query_terms(query)
+
+    # Build the text search clause
+    # Using JQL 'text' field which searches across all text fields for broad recall
+    if not query_terms:
+        # No meaningful terms after filtering, use original query
+        escaped = query.strip().replace('"', '\\"')
+        if not escaped:
+            logger.warning("Jira search skipped: empty query after processing")
+            return ""
+        text_clause = f'text ~ "{escaped}"'
+    elif len(query_terms) == 1:
+        # Single term - simple text search
+        text_clause = f'text ~ "{query_terms[0]}"'
+    else:
+        # Multiple terms - use OR logic to find issues matching any term
+        # ChunkSilo's reranker will score results by relevance after retrieval
+        text_conditions = ' OR '.join([f'text ~ "{term}"' for term in query_terms])
+        text_clause = f'({text_conditions})'
+
+    # Add project filter if configured
+    # Empty projects list means search all accessible projects
+    projects = config["jira"].get("projects", [])
+    if projects:
+        # Restrict search to specific project keys
+        project_list = ", ".join([f'"{p}"' for p in projects])
+        project_clause = f'project IN ({project_list})'
+        jql = f'{text_clause} AND {project_clause}'
+    else:
+        jql = text_clause
+
+    # Order by updated DESC for recency
+    # This enables ChunkSilo's recency boost feature and returns most relevant recent issues first
+    jql += ' ORDER BY updated DESC'
+
+    return jql
+
+
+def _jira_issue_to_text(issue, include_comments: bool, include_custom_fields: bool) -> str:
+    """Convert a Jira issue to searchable text representation.
+
+    This function constructs a text representation of a Jira issue that will
+    be embedded and indexed by ChunkSilo's vector database. The text includes
+    structured sections for issue metadata, description, comments, and custom
+    fields, making it suitable for semantic search.
+
+    Args:
+        issue: JIRA issue object from the jira library
+        include_comments: If True, include all issue comments with author names
+        include_custom_fields: If True, include all custom field values
+
+    Returns:
+        Formatted text string suitable for embedding and search
+
+    Format:
+        Issue: PROJ-123
+        Summary: Issue title here
+
+        Description:
+        Issue description text...
+
+        Comments:
+        - John Doe: Comment text
+        - Jane Smith: Another comment
+
+        Custom Fields:
+        customfield_10001: value
+
+    Note:
+        Custom fields are detected by checking for attributes starting with
+        'customfield_'. Only fields with non-empty values are included.
+
+    Error Handling:
+        Missing or None fields (description, comments) are gracefully skipped.
+        The function always returns valid text even with minimal issue data.
+    """
+    parts = []
+
+    # Issue key and summary are always included
+    # These are the most important fields for identifying and understanding the issue
+    parts.append(f"Issue: {issue.key}")
+    parts.append(f"Summary: {issue.fields.summary}")
+
+    # Description provides detailed context
+    # Use hasattr() for safe field access since description can be missing/None
+    if hasattr(issue.fields, 'description') and issue.fields.description:
+        parts.append(f"\nDescription:\n{issue.fields.description}")
+
+    # Comments provide discussion context and additional searchable content
+    # Include author names for context (who said what matters for search)
+    if include_comments and hasattr(issue.fields, 'comment'):
+        comments = issue.fields.comment.comments
+        if comments:
+            parts.append("\nComments:")
+            for comment in comments:
+                # Safely extract author display name
+                author = getattr(comment, 'author', None)
+                author_name = author.displayName if author and hasattr(author, 'displayName') else 'Unknown'
+                parts.append(f"- {author_name}: {comment.body}")
+
+    # Custom fields provide instance-specific metadata
+    # Detect by 'customfield_' prefix, include any with non-empty values
+    if include_custom_fields:
+        custom_fields = []
+        for field_name in dir(issue.fields):
+            if field_name.startswith('customfield_'):
+                field_value = getattr(issue.fields, field_name, None)
+                # Only include fields with meaningful values
+                if field_value is not None and str(field_value).strip():
+                    custom_fields.append(f"{field_name}: {field_value}")
+
+        if custom_fields:
+            parts.append("\nCustom Fields:")
+            parts.extend(custom_fields)
+
+    # Join all sections with newlines for structured, readable text
+    # This format works well for semantic search and LLM processing
+    return "\n".join(parts)
+
+
+def _jira_issue_to_metadata(issue, jira_url: str) -> dict[str, Any]:
+    """Extract structured metadata from a Jira issue.
+
+    This function extracts metadata that will be attached to the search result
+    node. The metadata is used for:
+    - Display in search results (title, status, etc.)
+    - Date range filtering (creation_date, last_modified_date)
+    - Recency boosting (last_modified_date)
+    - URI construction (issue_key)
+    - Result grouping and sorting
+
+    Args:
+        issue: JIRA issue object from the jira library
+        jira_url: Base Jira URL for constructing attachment URLs
+
+    Returns:
+        Dictionary of metadata fields following ChunkSilo conventions
+
+    Metadata Fields:
+        Required:
+            - source: Always "Jira"
+            - issue_key: Jira issue key (e.g., "PROJ-123")
+            - issue_type: Type of issue ("Bug", "Story", etc.)
+            - status: Current status ("Open", "In Progress", etc.)
+            - title: Issue summary
+            - file_name: Display name (format: "{key}: {summary}")
+
+        Optional (present if available):
+            - priority: Issue priority ("High", "Medium", "Low")
+            - creation_date: ISO format date string (YYYY-MM-DD)
+            - last_modified_date: ISO format date string (YYYY-MM-DD)
+            - project_key: Project key (e.g., "PROJ")
+            - project_name: Full project name
+            - assignee: Assigned user's display name
+            - reporter: Reporter's display name
+            - attachments: List of attachment metadata (not content)
+
+    Date Format:
+        Jira returns ISO 8601 dates like "2024-01-15T10:30:00.000+0000".
+        We convert to "YYYY-MM-DD" format for consistency with ChunkSilo's
+        date filtering and display logic.
+
+    Attachment Handling:
+        Per requirements, we list attachment metadata but do NOT download
+        or index attachment content. Users/models can follow URLs to access
+        attachments if needed.
+
+    Error Handling:
+        Missing optional fields (priority, assignee, etc.) are gracefully
+        skipped. The function always returns a valid metadata dict with
+        at least the required fields.
+    """
+    # Required fields - always present
+    metadata = {
+        "source": "Jira",  # Identifies source for URI resolution and display
+        "issue_key": issue.key,  # Unique identifier for linking
+        "issue_type": issue.fields.issuetype.name,
+        "status": issue.fields.status.name,
+        "title": issue.fields.summary,
+        # file_name format matches ChunkSilo convention for display
+        "file_name": f"{issue.key}: {issue.fields.summary}",
+    }
+
+    # Optional: Priority (may not exist on all issue types)
+    if hasattr(issue.fields, 'priority') and issue.fields.priority:
+        metadata["priority"] = issue.fields.priority.name
+
+    # Dates for filtering and recency boosting
+    # Parse ISO 8601 format and convert to YYYY-MM-DD for consistency
+    if hasattr(issue.fields, 'created') and issue.fields.created:
+        creation_date = _parse_iso8601_to_date(issue.fields.created)
+        if creation_date:
+            metadata["creation_date"] = creation_date
+
+    if hasattr(issue.fields, 'updated') and issue.fields.updated:
+        # last_modified_date used for recency boost calculation
+        last_modified = _parse_iso8601_to_date(issue.fields.updated)
+        if last_modified:
+            metadata["last_modified_date"] = last_modified
+
+    # Project information
+    if hasattr(issue.fields, 'project') and issue.fields.project:
+        metadata["project_key"] = issue.fields.project.key
+        metadata["project_name"] = issue.fields.project.name
+
+    # People - use display names for human-readable output
+    if hasattr(issue.fields, 'assignee') and issue.fields.assignee:
+        metadata["assignee"] = issue.fields.assignee.displayName
+
+    if hasattr(issue.fields, 'reporter') and issue.fields.reporter:
+        metadata["reporter"] = issue.fields.reporter.displayName
+
+    # Attachments - list metadata only, don't index content
+    # Per requirements: provide URIs so user/model can access if needed
+    if hasattr(issue.fields, 'attachment') and issue.fields.attachment:
+        attachments = []
+        for att in issue.fields.attachment:
+            attachments.append({
+                "filename": att.filename,
+                "url": att.content,  # Direct download URL
+                "size": att.size,  # Size in bytes
+            })
+        if attachments:
+            metadata["attachments"] = attachments
+
+    return metadata
 
 
 def _search_confluence(query: str, config: dict[str, Any]) -> list[NodeWithScore]:
@@ -447,6 +710,153 @@ def _search_confluence(query: str, config: dict[str, Any]) -> list[NodeWithScore
         return []
 
 
+def _search_jira(query: str, config: dict[str, Any]) -> list[NodeWithScore]:
+    """Search Jira for issues matching the query using JQL.
+
+    This function performs a real-time search against the configured Jira
+    instance using JQL (Jira Query Language). Results are converted to
+    ChunkSilo's NodeWithScore format and merged with other search results.
+
+    The function follows ChunkSilo's integration pattern (same as Confluence):
+    - Returns empty list on errors (graceful degradation)
+    - Logs warnings for configuration issues
+    - Uses timeout protection in calling code (ThreadPoolExecutor)
+    - Converts results to standard NodeWithScore format
+
+    Search Strategy:
+        - Uses JQL 'text' field for broad search across all text fields
+        - Relies on ChunkSilo's semantic search (embeddings + reranker) for
+          relevance ranking instead of traditional fuzzy search
+        - Returns results with score=0.0; FlashRank reranker scores them
+
+    Args:
+        query: User's search query string
+        config: Configuration dictionary with jira and ssl settings
+
+    Returns:
+        List of NodeWithScore objects, or empty list on error/disabled
+
+    Configuration Requirements:
+        config["jira"]["url"]: Jira base URL (empty = disabled)
+        config["jira"]["username"]: Jira username or email
+        config["jira"]["api_token"]: Jira API token (not password)
+        config["jira"]["max_results"]: Maximum issues to return
+        config["jira"]["projects"]: List of project keys (empty = all)
+        config["jira"]["include_comments"]: Include issue comments
+        config["jira"]["include_custom_fields"]: Include custom fields
+        config["ssl"]["ca_bundle_path"]: Optional SSL CA bundle path
+
+    Error Handling:
+        - Empty URL: Returns [] with debug log
+        - Missing library: Returns [] with warning log
+        - Missing credentials: Returns [] with warning log
+        - API errors: Returns [] with error log (exc_info=True)
+        - All errors are non-fatal to allow other searches to succeed
+
+    Performance:
+        - Respects max_results limit (default 30)
+        - Orders by updated DESC (most recent first)
+        - Fetches all fields including custom fields
+
+    SSL/TLS:
+        - Supports custom CA bundles via ssl.ca_bundle_path
+        - Automatically configured through jira_options["verify"]
+
+    Authentication:
+        - Uses basic auth (username + API token)
+        - Works for both Jira Cloud and Data Center/Server
+
+    References:
+        - Jira REST API: https://developer.atlassian.com/cloud/jira/platform/rest/v3/
+        - JQL Reference: https://support.atlassian.com/jira-software-cloud/docs/use-advanced-search-with-jira-query-language-jql/
+    """
+    # Check if Jira integration is enabled via URL
+    base_url = config["jira"]["url"]
+    if not base_url:
+        logger.debug("Jira search skipped: jira.url not set in config")
+        return []
+
+    # Gracefully degrade if optional dependency not installed
+    if JIRA is None:
+        logger.warning("jira library not installed, skipping Jira search")
+        return []
+
+    # Extract configuration settings
+    username = config["jira"]["username"]
+    api_token = config["jira"]["api_token"]
+    max_results = config["jira"]["max_results"]
+    include_comments = config["jira"]["include_comments"]
+    include_custom_fields = config["jira"]["include_custom_fields"]
+    ca_bundle_path = config["ssl"]["ca_bundle_path"] or None
+
+    # Validate required credentials are present
+    if not (base_url and username and api_token):
+        missing = []
+        if not username:
+            missing.append("jira.username")
+        if not api_token:
+            missing.append("jira.api_token")
+        logger.warning(f"Jira search skipped: missing {', '.join(missing)} in config")
+        return []
+
+    try:
+        # Configure SSL certificate verification if CA bundle provided
+        # This enables Jira integration in corporate environments with custom CAs
+        jira_options = {"server": base_url}
+        if ca_bundle_path:
+            jira_options["verify"] = ca_bundle_path
+
+        # Use basic auth (username + API token) for authentication
+        # Works for both Jira Cloud and Data Center/Server
+        jira_client = JIRA(
+            options=jira_options,
+            basic_auth=(username, api_token)
+        )
+
+        # Construct JQL with text search and project filtering
+        jql = _prepare_jira_jql_query(query, config)
+        if not jql:
+            # Empty query after processing
+            return []
+
+        # Log JQL query for debugging
+        logger.debug(f"Jira JQL query: {jql}")
+
+        # Fetch all fields including custom fields for comprehensive search
+        # maxResults limits API response size for performance
+        issues = jira_client.search_issues(
+            jql,
+            maxResults=max_results,
+            fields='*all'  # Get all fields including custom fields
+        )
+
+        # Convert issues to NodeWithScore format
+        nodes: list[NodeWithScore] = []
+        for issue in issues:
+            # Build searchable text representation
+            # This will be embedded and indexed by ChunkSilo's vector database
+            text = _jira_issue_to_text(issue, include_comments, include_custom_fields)
+
+            # Extract structured metadata for filtering and display
+            metadata = _jira_issue_to_metadata(issue, base_url)
+
+            # Create node with text and metadata
+            # Initial score is 0.0; FlashRank reranker will assign relevance scores
+            node = TextNode(text=text, metadata=metadata)
+            nodes.append(NodeWithScore(node=node, score=0.0))
+
+        logger.debug(f"Jira search returned {len(nodes)} issues")
+        # Return results for merging with other search sources
+        return nodes
+
+    except Exception as e:
+        # Catch all exceptions to prevent search pipeline failure
+        # Log errors with full traceback for debugging
+        logger.error(f"Failed to search Jira: {e}", exc_info=True)
+        # Return empty list to allow search to continue with other sources
+        return []
+
+
 def load_llamaindex_index(config: dict[str, Any] | None = None):
     """Load the LlamaIndex from storage."""
     if config is None:
@@ -469,6 +879,41 @@ def load_llamaindex_index(config: dict[str, Any] | None = None):
     index = load_index_from_storage(storage_context)
     _index_cache = index
     return index
+
+
+def _parse_iso8601_to_date(iso_string: str) -> str | None:
+    """Parse ISO 8601 timestamp to YYYY-MM-DD format.
+
+    Handles various ISO 8601 formats including:
+    - Z suffix: 2024-01-15T10:30:00Z
+    - Timezone with colon: 2024-01-15T10:30:00.000+00:00
+    - Timezone without colon: 2024-01-15T10:30:00.000+0000 (Jira format)
+
+    Args:
+        iso_string: ISO 8601 formatted datetime string
+
+    Returns:
+        Date in YYYY-MM-DD format, or None if parsing fails
+    """
+    if not iso_string:
+        return None
+
+    try:
+        # Normalize the timestamp
+        normalized = iso_string.strip()
+
+        # Replace Z suffix with +00:00
+        normalized = normalized.replace('Z', '+00:00')
+
+        # Insert colon in timezone offsets like +0000 → +00:00
+        # Matches ±HHMM at end of string, inserts colon: ±HH:MM
+        normalized = re.sub(r'([+-]\d{2})(\d{2})$', r'\1:\2', normalized)
+
+        # Parse and format
+        dt = datetime.fromisoformat(normalized)
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        return None
 
 
 def _parse_date(date_str: str) -> datetime | None:
@@ -623,6 +1068,23 @@ def run_search(
         if confluence_nodes:
             nodes.extend(confluence_nodes)
 
+        # Search Jira (with timeout)
+        jira_nodes: list[NodeWithScore] = []
+        jira_timeout = config["jira"]["timeout"]
+        if config["jira"]["url"]:
+            try:
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_search_jira, enhanced_query, config)
+                    jira_nodes = future.result(timeout=jira_timeout)
+                logger.info(f"Jira search returned {len(jira_nodes)} entries")
+            except FuturesTimeoutError:
+                logger.warning(f"Jira search timed out after {jira_timeout}s")
+            except Exception as e:
+                logger.error(f"Error during Jira search: {e}")
+
+        if jira_nodes:
+            nodes.extend(jira_nodes)
+
         # Apply date filtering
         if date_from or date_to:
             original_count = len(nodes)
@@ -734,6 +1196,12 @@ def run_search(
                         from urllib.parse import quote
                         encoded_title = quote(title.replace(" ", "+"))
                         source_uri = f"{confluence_url.rstrip('/')}/spaces/~{encoded_title}"
+            elif original_source == "Jira":
+                # Build Jira issue URI using standard browse URL format
+                jira_url = config["jira"]["url"]
+                issue_key = metadata.get("issue_key")
+                if jira_url and issue_key:
+                    source_uri = f"{jira_url.rstrip('/')}/browse/{issue_key}"
             elif file_path:
                 source_uri = _resolve_file_uri(file_path, config)
 
