@@ -50,6 +50,16 @@ _DEFAULTS: dict[str, Any] = {
         },
         "chunk_size": 1600,
         "chunk_overlap": 200,
+        "timeout": {
+            "enabled": True,
+            "per_file_seconds": 300,  # 5 minutes per file
+            "doc_conversion_seconds": 90,  # 90 seconds for .doc conversion
+            "heartbeat_interval_seconds": 2,
+        },
+        "logging": {
+            "log_slow_files": True,
+            "slow_file_threshold_seconds": 30,
+        },
     },
     "retrieval": {
         "embed_model_name": "BAAI/bge-small-en-v1.5",

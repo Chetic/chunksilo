@@ -341,8 +341,17 @@ class DataSource(ABC):
         pass
 
     @abstractmethod
-    def load_file(self, file_info: FileInfo) -> List[LlamaIndexDocument]:
-        """Load and return documents for a given file."""
+    def load_file(
+        self,
+        file_info: FileInfo,
+        ctx: "FileProcessingContext | None" = None
+    ) -> List[LlamaIndexDocument]:
+        """Load and return documents for a given file.
+
+        Args:
+            file_info: File information
+            ctx: Optional processing context for progress updates and timeout
+        """
         pass
 
 
@@ -562,18 +571,32 @@ class LocalFileSystemSource(DataSource):
             source_dir=str(self.base_dir.absolute()),
         )
 
-    def load_file(self, file_info: FileInfo) -> List[LlamaIndexDocument]:
+    def load_file(
+        self,
+        file_info: FileInfo,
+        ctx: "FileProcessingContext | None" = None
+    ) -> List[LlamaIndexDocument]:
         file_path = Path(file_info.path)
         if file_path.suffix.lower() == ".docx":
-            return split_docx_into_heading_documents(file_path)
+            if ctx:
+                ctx.set_phase("Parsing DOCX")
+            return split_docx_into_heading_documents(file_path, ctx)
         elif file_path.suffix.lower() == ".doc":
             # Convert .doc to .docx using LibreOffice, then process
-            docx_path = _convert_doc_to_docx(file_path)
+            if ctx:
+                ctx.set_phase("Converting .doc to .docx")
+
+            # Use specialized timeout for .doc conversion
+            doc_timeout = cfgload.get("indexing.timeout.doc_conversion_seconds", 90)
+            docx_path = _convert_doc_to_docx(file_path, timeout=doc_timeout)
+
             if docx_path is None:
                 logger.warning(f"Skipping {file_path}: could not convert .doc to .docx")
                 return []
             try:
-                docs = split_docx_into_heading_documents(docx_path)
+                if ctx:
+                    ctx.set_phase("Parsing converted DOCX")
+                docs = split_docx_into_heading_documents(docx_path, ctx)
                 # Update metadata to point to original .doc file
                 for doc in docs:
                     doc.metadata["file_path"] = str(file_path)
@@ -657,16 +680,20 @@ class MultiDirectoryDataSource(DataSource):
                     seen_paths.add(file_info.path)
                     yield file_info
 
-    def load_file(self, file_info: FileInfo) -> List[LlamaIndexDocument]:
+    def load_file(
+        self,
+        file_info: FileInfo,
+        ctx: "FileProcessingContext | None" = None
+    ) -> List[LlamaIndexDocument]:
         """Load file using the appropriate source based on source_dir."""
         # Find the source that owns this file
         for source in self.sources:
             if file_info.source_dir == str(source.base_dir.absolute()):
-                return source.load_file(file_info)
+                return source.load_file(file_info, ctx)
 
         # Fallback: use first source (shouldn't happen normally)
         if self.sources:
-            return self.sources[0].load_file(file_info)
+            return self.sources[0].load_file(file_info, ctx)
 
         raise ValueError(f"No source available for file: {file_info.path}")
 
@@ -688,25 +715,70 @@ class SimpleProgressBar:
         self.unit = unit
         self.width = width
         self.current = 0
+        self.current_file = ""
+        self.current_phase = ""
+        self.heartbeat_char = ""
+        self._lock = threading.Lock()
         if self.total > 0:
+            self._render()
+
+    def set_current_file(self, file_path: str, phase: str = "") -> None:
+        """Set current file being processed (thread-safe)."""
+        with self._lock:
+            self.current_file = file_path
+            self.current_phase = phase
+            self._render()
+
+    def set_heartbeat(self, char: str) -> None:
+        """Update heartbeat indicator (thread-safe)."""
+        with self._lock:
+            self.heartbeat_char = char
             self._render()
 
     def update(self, step: int = 1) -> None:
         if self.total <= 0:
             return
-        self.current = min(self.total, self.current + step)
-        self._render()
-        if self.current >= self.total:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
+        with self._lock:
+            self.current = min(self.total, self.current + step)
+            # Clear current file on completion
+            self.current_file = ""
+            self.current_phase = ""
+            self.heartbeat_char = ""
+            self._render()
+            if self.current >= self.total:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
 
     def _render(self) -> None:
+        """Render progress bar with current file info (must hold lock)."""
         progress = self.current / self.total if self.total else 0
         filled = int(self.width * progress)
         bar = "#" * filled + "-" * (self.width - filled)
-        sys.stdout.write(
-            f"\r{self.desc} [{bar}] {progress * 100:5.1f}% ({self.current}/{self.total} {self.unit}s)"
-        )
+
+        # Build status line
+        status = f"\r{self.desc} [{bar}] {progress * 100:5.1f}% ({self.current}/{self.total} {self.unit}s)"
+
+        # Add current file info if available
+        if self.current_file:
+            # Truncate file path to fit terminal (assume 80 char width)
+            max_path_len = 50
+            file_display = Path(self.current_file).name
+            if len(file_display) > max_path_len:
+                file_display = "..." + file_display[-(max_path_len-3):]
+
+            status += f"\n  → {file_display}"
+
+            if self.current_phase:
+                status += f" ({self.current_phase}{self.heartbeat_char})"
+            elif self.heartbeat_char:
+                status += f" {self.heartbeat_char}"
+
+        # Clear old lines and write new status
+        sys.stdout.write("\033[K")  # Clear to end of line
+        if self.current_file:
+            sys.stdout.write("\033[K\n\033[K")  # Clear next line
+            sys.stdout.write("\033[2A")  # Move up 2 lines
+        sys.stdout.write(status)
         sys.stdout.flush()
 
 
@@ -741,6 +813,126 @@ class Spinner:
             sys.stdout.write("\r" + self._line)
             sys.stdout.flush()
             time.sleep(self.interval)
+
+
+class FileProcessingTimeoutError(Exception):
+    """Raised when file processing exceeds timeout."""
+    pass
+
+
+class FileProcessingContext:
+    """Context manager for file processing with timeout and heartbeat.
+
+    Usage:
+        with FileProcessingContext(file_path, progress_bar, timeout=300) as ctx:
+            ctx.set_phase("Converting .doc")
+            result = process_file()
+    """
+
+    def __init__(
+        self,
+        file_path: str,
+        progress_bar: SimpleProgressBar,
+        timeout_seconds: float | None = None,
+        heartbeat_interval: float = 2.0
+    ):
+        self.file_path = file_path
+        self.progress_bar = progress_bar
+        self.timeout_seconds = timeout_seconds
+        self.heartbeat_interval = heartbeat_interval
+
+        self._start_time: float | None = None
+        self._stop_event = threading.Event()
+        self._timeout_event = threading.Event()
+        self._heartbeat_thread: threading.Thread | None = None
+        self._current_phase = ""
+
+    def __enter__(self):
+        """Start timing and heartbeat thread."""
+        self._start_time = time.time()
+
+        # Start heartbeat thread
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            daemon=True
+        )
+        self._heartbeat_thread.start()
+
+        # Update progress bar
+        self.progress_bar.set_current_file(self.file_path, "")
+
+        # Log file processing start
+        logger.info(f"Processing file: {self.file_path}")
+
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Stop heartbeat and log duration."""
+        # Stop heartbeat thread
+        self._stop_event.set()
+        if self._heartbeat_thread:
+            self._heartbeat_thread.join(timeout=1.0)
+
+        # Log duration if file was processed
+        if self._start_time:
+            duration = time.time() - self._start_time
+            logger.info(f"Completed file: {self.file_path} ({duration:.1f}s)")
+
+            slow_threshold = cfgload.get(
+                "indexing.logging.slow_file_threshold_seconds", 30
+            )
+            if duration > slow_threshold:
+                logger.warning(
+                    f"Slow file processing: {self.file_path} took {duration:.1f}s"
+                )
+
+        # Clear progress bar file indicator
+        self.progress_bar.set_current_file("", "")
+
+        # Don't suppress exceptions
+        return False
+
+    def set_phase(self, phase: str) -> None:
+        """Update current operation phase."""
+        self._current_phase = phase
+        logger.debug(f"{self.file_path}: {phase}")
+        self.progress_bar.set_current_file(self.file_path, phase)
+
+        # Check for timeout
+        self._check_timeout()
+
+    def _check_timeout(self) -> None:
+        """Check if processing has exceeded timeout."""
+        if self.timeout_seconds is None or self._start_time is None:
+            return
+
+        elapsed = time.time() - self._start_time
+        if elapsed > self.timeout_seconds:
+            self._timeout_event.set()
+            raise FileProcessingTimeoutError(
+                f"File processing timed out after {elapsed:.1f}s: {self.file_path}"
+            )
+
+    def _heartbeat_loop(self) -> None:
+        """Background thread that updates heartbeat indicator."""
+        spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"  # Braille spinner
+        idx = 0
+
+        while not self._stop_event.is_set():
+            # Update heartbeat character
+            self.progress_bar.set_heartbeat(spinner_chars[idx])
+            idx = (idx + 1) % len(spinner_chars)
+
+            # Check for timeout
+            try:
+                self._check_timeout()
+            except FileProcessingTimeoutError:
+                # Timeout detected - set flag and exit heartbeat
+                # The main thread will detect this on next set_phase() call
+                break
+
+            # Sleep until next heartbeat
+            time.sleep(self.heartbeat_interval)
 
 
 def _embedding_cache_path(model_name: str, cache_dir: Path) -> Path:
@@ -926,11 +1118,16 @@ def _get_doc_temp_dir() -> Path:
     return temp_dir
 
 
-def _convert_doc_to_docx(doc_path: Path) -> Path | None:
+def _convert_doc_to_docx(doc_path: Path, timeout: float = 60) -> Path | None:
     """Convert a .doc file to .docx using LibreOffice.
 
-    Returns path to temporary .docx file, or None if conversion fails.
-    Caller is responsible for cleaning up the temp file.
+    Args:
+        doc_path: Path to .doc file
+        timeout: Timeout in seconds for conversion process
+
+    Returns:
+        Path to temporary .docx file, or None if conversion fails.
+        Caller is responsible for cleaning up the temp file.
     """
     import subprocess
     import shutil
@@ -961,7 +1158,7 @@ def _convert_doc_to_docx(doc_path: Path) -> Path | None:
             [soffice, "--headless", "--convert-to", "docx",
              "--outdir", str(temp_dir), str(doc_path)],
             capture_output=True,
-            timeout=60,
+            timeout=timeout,
         )
         if result.returncode != 0:
             logger.warning(f"LibreOffice conversion failed for {doc_path}: {result.stderr}")
@@ -982,9 +1179,21 @@ def _convert_doc_to_docx(doc_path: Path) -> Path | None:
     return None
 
 
-def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocument]:
-    """Split DOCX into documents by heading."""
+def split_docx_into_heading_documents(
+    docx_path: Path,
+    ctx: "FileProcessingContext | None" = None
+) -> List[LlamaIndexDocument]:
+    """Split DOCX into documents by heading with progress updates.
+
+    Args:
+        docx_path: Path to DOCX file
+        ctx: Optional processing context for progress updates and timeout
+    """
     docs: List[LlamaIndexDocument] = []
+
+    if ctx:
+        ctx.set_phase("Opening DOCX")
+
     try:
         doc = Document(docx_path)
     except Exception as e:
@@ -1007,9 +1216,16 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
         pass  # Fall back to filesystem dates
 
     # First pass: Extract all headings with positions for hierarchy metadata
+    if ctx:
+        ctx.set_phase("Extracting headings")
+
     all_headings = []
     char_position = 0
     for para in doc.paragraphs:
+        # Periodically check for timeout during long operations
+        if ctx and len(all_headings) % 100 == 0:
+            ctx.set_phase(f"Extracting headings ({len(all_headings)} found)")
+
         style_name = getattr(para.style, "name", "") or ""
         is_heading = (
             style_name.startswith("Heading")
@@ -1028,9 +1244,13 @@ def split_docx_into_heading_documents(docx_path: Path) -> List[LlamaIndexDocumen
         char_position += len(para.text) + 1  # +1 for newline
 
     # Store headings separately to avoid metadata size issues during chunking
+    if ctx:
+        ctx.set_phase("Storing heading metadata")
     get_heading_store().set_headings(str(docx_path), all_headings)
 
     # Second pass: Split by heading (existing logic)
+    if ctx:
+        ctx.set_phase("Splitting into sections")
     current_heading: str | None = None
     current_level: int | None = None
     current_body: list[str] = []
@@ -1358,26 +1578,59 @@ def build_index(
     # Process New/Modified Files
     if files_to_process:
         progress = SimpleProgressBar(len(files_to_process), desc="Processing files", unit="file")
+
+        # Get timeout configuration
+        timeout_enabled = cfgload.get("indexing.timeout.enabled", True)
+        per_file_timeout = cfgload.get("indexing.timeout.per_file_seconds", 300)
+        heartbeat_interval = cfgload.get("indexing.timeout.heartbeat_interval_seconds", 2)
+
         for file_info in files_to_process:
-            # Remove old versions if they exist
-            existing_state = tracked_files.get(file_info.path)
-            if existing_state:
-                for doc_id in existing_state["doc_ids"]:
-                    try:
-                        index.delete_ref_doc(doc_id, delete_from_docstore=True)
-                    except KeyError:
-                        pass # Document might already be gone
+            file_path = Path(file_info.path)
 
-            # Load and Index New Version
-            docs = data_source.load_file(file_info)
-            doc_ids = []
-            for doc in docs:
-                index.insert(doc)
-                doc_ids.append(doc.doc_id)
+            try:
+                # Wrap file processing with timeout and heartbeat
+                with FileProcessingContext(
+                    str(file_path),
+                    progress,
+                    timeout_seconds=per_file_timeout if timeout_enabled else None,
+                    heartbeat_interval=heartbeat_interval
+                ) as ctx:
+                    # Remove old versions if they exist
+                    existing_state = tracked_files.get(file_info.path)
+                    if existing_state:
+                        ctx.set_phase("Removing old version")
+                        for doc_id in existing_state["doc_ids"]:
+                            try:
+                                index.delete_ref_doc(doc_id, delete_from_docstore=True)
+                            except KeyError:
+                                pass  # Document might already be gone
 
-            # Update State
-            ingestion_state.update_file_state(file_info, doc_ids)
-            progress.update()
+                    # Load and Index New Version
+                    ctx.set_phase("Loading file")
+                    docs = data_source.load_file(file_info, ctx)
+
+                    # Index documents
+                    ctx.set_phase("Embedding & indexing")
+                    doc_ids = []
+                    for doc in docs:
+                        index.insert(doc)
+                        doc_ids.append(doc.doc_id)
+
+                    # Update State
+                    ctx.set_phase("Updating state")
+                    ingestion_state.update_file_state(file_info, doc_ids)
+
+            except FileProcessingTimeoutError as e:
+                logger.error(f"Timeout: {e}")
+                # Continue processing other files
+                continue
+            except Exception as e:
+                logger.error(f"Error processing {file_path}: {e}")
+                # Continue processing other files
+                continue
+            finally:
+                # Always update progress bar
+                progress.update()
 
     # Persist Index
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
