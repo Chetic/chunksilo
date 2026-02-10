@@ -49,7 +49,7 @@ def main():
 
     args = parser.parse_args()
 
-    log_level = logging.WARNING if args.build_index else (
+    log_level = logging.WARNING if (args.build_index and not args.verbose) else (
         logging.INFO if (args.verbose or args.download_models) else logging.WARNING
     )
     logging.basicConfig(level=log_level, format="%(message)s", stream=sys.stderr)
@@ -63,11 +63,17 @@ def main():
     config_path = Path(args.config) if args.config else None
 
     if args.build_index or args.download_models:
+        # Suppress 3rd-party native output when IndexingUI owns the terminal
+        if not args.verbose:
+            os.environ["ORT_LOG_LEVEL"] = "ERROR"
+            os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+
         from .index import build_index
 
         build_index(
             download_only=args.download_models,
             config_path=config_path,
+            verbose=args.verbose,
         )
         return
 

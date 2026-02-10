@@ -6,6 +6,7 @@ without needing a real terminal. No ML models or filesystem indexing required.
 """
 import io
 import logging
+import sys
 import threading
 import time
 
@@ -182,56 +183,94 @@ class TestProgressPauseResume:
 # =============================================================================
 
 
-class TestLoggingSuppression:
-    def test_suppresses_info_logs(self):
-        """Inside context manager, INFO logs from chunksilo.index are suppressed."""
-        index_logger = logging.getLogger("chunksilo.index")
+class TestOutputSuppression:
+    def test_redirects_stdout_during_context(self):
+        """sys.stdout is redirected during context, restored after."""
+        stream = io.StringIO()
+        ui = _make_ui(stream)
+        orig_stdout = sys.stdout
+
+        with ui:
+            assert sys.stdout is not orig_stdout
+            # UI still writes to its captured stream
+            ui.print("visible")
+
+        assert sys.stdout is orig_stdout
+        assert "visible" in stream.getvalue()
+
+    def test_redirects_stderr_during_context(self):
+        """sys.stderr is redirected during context, restored after."""
+        stream = io.StringIO()
+        ui = _make_ui(stream)
+        orig_stderr = sys.stderr
+
+        with ui:
+            assert sys.stderr is not orig_stderr
+
+        assert sys.stderr is orig_stderr
+
+    def test_silences_root_stream_handlers(self):
+        """Root logger StreamHandlers are silenced during context."""
         stream = io.StringIO()
         ui = _make_ui(stream)
 
-        # Capture log output
-        log_stream = io.StringIO()
-        handler = logging.StreamHandler(log_stream)
+        log_capture = io.StringIO()
+        handler = logging.StreamHandler(log_capture)
         handler.setLevel(logging.DEBUG)
-        index_logger.addHandler(handler)
+        logging.root.addHandler(handler)
 
         try:
             with ui:
-                index_logger.info("this should be hidden")
-                index_logger.warning("this should be visible")
+                third_party = logging.getLogger("some.third.party")
+                third_party.info("should be suppressed")
 
-            log_output = log_stream.getvalue()
-            assert "this should be hidden" not in log_output
-            assert "this should be visible" in log_output
+            assert "should be suppressed" not in log_capture.getvalue()
         finally:
-            index_logger.removeHandler(handler)
+            logging.root.removeHandler(handler)
 
-    def test_restores_logging_after_exit(self):
-        """Logging level is restored after context manager exits."""
-        index_logger = logging.getLogger("chunksilo.index")
-        original_level = index_logger.level
+    def test_restores_handler_levels_after_exit(self):
+        """Root handler levels are restored after context manager exits."""
+        log_capture = io.StringIO()
+        handler = logging.StreamHandler(log_capture)
+        handler.setLevel(logging.DEBUG)
+        logging.root.addHandler(handler)
 
+        try:
+            stream = io.StringIO()
+            ui = _make_ui(stream)
+
+            with ui:
+                assert handler.level > logging.CRITICAL
+
+            assert handler.level == logging.DEBUG
+        finally:
+            logging.root.removeHandler(handler)
+
+    def test_restores_streams_on_exception(self):
+        """stdout/stderr are restored even if an exception occurs."""
         stream = io.StringIO()
         ui = _make_ui(stream)
-
-        with ui:
-            pass
-
-        assert index_logger.level == original_level
-
-    def test_restores_logging_on_exception(self):
-        """Logging level is restored even if an exception occurs."""
-        index_logger = logging.getLogger("chunksilo.index")
-        original_level = index_logger.level
-
-        stream = io.StringIO()
-        ui = _make_ui(stream)
+        orig_stdout = sys.stdout
+        orig_stderr = sys.stderr
 
         with pytest.raises(ValueError):
             with ui:
                 raise ValueError("test error")
 
-        assert index_logger.level == original_level
+        assert sys.stdout is orig_stdout
+        assert sys.stderr is orig_stderr
+
+    def test_verbose_skips_suppression(self):
+        """verbose=True leaves stdout/stderr untouched."""
+        from chunksilo.index import IndexingUI
+        stream = io.StringIO()
+        ui = IndexingUI(stream=stream, verbose=True)
+        orig_stdout = sys.stdout
+        orig_stderr = sys.stderr
+
+        with ui:
+            assert sys.stdout is orig_stdout
+            assert sys.stderr is orig_stderr
 
 
 # =============================================================================

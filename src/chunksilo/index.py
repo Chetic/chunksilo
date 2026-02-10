@@ -81,11 +81,6 @@ EXCLUDED_LLM_METADATA_KEYS = [
     "source",            # usually redundant
 ]
 
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
 logger = logging.getLogger(__name__)
 
 
@@ -761,6 +756,19 @@ class MultiDirectoryDataSource(DataSource):
         }
 
 
+class _DevNull:
+    """Minimal file-like sink that discards all writes."""
+
+    def write(self, _data: str) -> int:
+        return 0
+
+    def flush(self) -> None:
+        pass
+
+    def isatty(self) -> bool:
+        return False
+
+
 class IndexingUI:
     """Unified terminal output for the indexing pipeline.
 
@@ -773,8 +781,9 @@ class IndexingUI:
 
     _SPINNER_CHARS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
-    def __init__(self, stream=None):
+    def __init__(self, stream=None, verbose=False):
         self._stream = stream or sys.stdout
+        self._verbose = verbose
         self._lock = threading.Lock()
 
         # ANSI color codes (disabled when stream is not a TTY)
@@ -808,13 +817,15 @@ class IndexingUI:
         self._progress_heartbeat = ""
         self._progress_has_subline = False
 
-        # Logging suppression
-        self._original_level: int | None = None
+        # Output suppression state (populated by _suppress_output)
+        self._orig_stdout = None
+        self._orig_stderr = None
+        self._orig_handler_levels: list[tuple[logging.Handler, int]] = []
 
     # -- context manager --
 
     def __enter__(self):
-        self._suppress_logging()
+        self._suppress_output()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -824,7 +835,7 @@ class IndexingUI:
             self._progress_active = True
             self._progress_paused = False
             self.progress_done()
-        self._restore_logging()
+        self._restore_output()
         return False
 
     # -- step mode --
@@ -1032,16 +1043,42 @@ class IndexingUI:
         self._stream.write(text)
         self._stream.flush()
 
-    def _suppress_logging(self) -> None:
-        index_logger = logging.getLogger("chunksilo.index")
-        self._original_level = index_logger.level
-        index_logger.setLevel(logging.WARNING)
+    def _suppress_output(self) -> None:
+        """Redirect stdout/stderr and silence root logger stream handlers.
 
-    def _restore_logging(self) -> None:
-        if self._original_level is not None:
-            index_logger = logging.getLogger("chunksilo.index")
-            index_logger.setLevel(self._original_level)
-            self._original_level = None
+        IndexingUI captures self._stream at __init__ time, so it keeps
+        writing to the real terminal. All 3rd-party code that calls
+        print() or writes to sys.stdout/stderr hits _DevNull instead.
+
+        Skipped when verbose=True to allow full debugging output.
+        """
+        if self._verbose:
+            return
+
+        devnull = _DevNull()
+
+        self._orig_stdout = sys.stdout
+        self._orig_stderr = sys.stderr
+        sys.stdout = devnull
+        sys.stderr = devnull
+
+        for handler in logging.root.handlers:
+            if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+                self._orig_handler_levels.append((handler, handler.level))
+                handler.setLevel(logging.CRITICAL + 1)
+
+    def _restore_output(self) -> None:
+        """Restore stdout/stderr and root logger handler levels."""
+        if self._orig_stdout is not None:
+            sys.stdout = self._orig_stdout
+            self._orig_stdout = None
+        if self._orig_stderr is not None:
+            sys.stderr = self._orig_stderr
+            self._orig_stderr = None
+
+        for handler, level in self._orig_handler_levels:
+            handler.setLevel(level)
+        self._orig_handler_levels.clear()
 
 
 class FileProcessingTimeoutError(Exception):
@@ -1790,6 +1827,7 @@ def build_index(
     download_only: bool = False,
     config_path: Path | None = None,
     model_cache_dir: Path | None = None,
+    verbose: bool = False,
 ) -> None:
     """Build and persist the vector index incrementally."""
     global _config, STORAGE_DIR, STATE_DB_PATH, RETRIEVAL_MODEL_CACHE_DIR, BM25_INDEX_DIR, HEADING_STORE_PATH
@@ -1818,7 +1856,7 @@ def build_index(
     # Load configuration
     index_config = load_index_config()
 
-    with IndexingUI() as ui:
+    with IndexingUI(verbose=verbose) as ui:
         # Model caching
         ui.step_start("Checking embedding model cache")
         ensure_embedding_model_cached(cache_dir, offline=offline)
@@ -2084,6 +2122,10 @@ def build_index(
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
     parser = argparse.ArgumentParser(description="Build the document index")
     parser.add_argument(
         "--download-models",
