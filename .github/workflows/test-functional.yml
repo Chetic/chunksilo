@@ -66,4 +66,4 @@ jobs:
         run: |
           # Run all tests except rag_metrics (which has its own workflow)
           # This automatically discovers new test files
-          pytest test/ -v --ignore=test/test_rag_metrics.py
+          pytest test/ -v --ignore=test/test_rag_metrics.py --ignore=test/test_indexing_benchmark.py

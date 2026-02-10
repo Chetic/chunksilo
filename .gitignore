@@ -34,6 +34,7 @@ models/
 test_data/
 test_storage/
 test_results/
+bench_storage/
 
 # Local build artifacts
 release_common/

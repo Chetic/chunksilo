@@ -43,4 +43,4 @@ fi
 cd "$PROJECT_ROOT"
 
 # Run all tests except rag_metrics (which requires downloads and takes longer)
-$PYTHON -m pytest test/ -v --ignore=test/test_rag_metrics.py "$@"
+$PYTHON -m pytest test/ -v --ignore=test/test_rag_metrics.py --ignore=test/test_indexing_benchmark.py "$@"
