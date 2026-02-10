@@ -44,11 +44,19 @@ def main():
                         help="Build or update the search index, then exit")
     parser.add_argument("--download-models", action="store_true",
                         help="Download required ML models, then exit")
+    parser.add_argument("--dump-defaults", action="store_true",
+                        help="Print all default configuration values as YAML, then exit")
 
     args = parser.parse_args()
 
     log_level = logging.INFO if args.verbose or args.build_index or args.download_models else logging.WARNING
     logging.basicConfig(level=log_level, format="%(message)s", stream=sys.stderr)
+
+    if args.dump_defaults:
+        from .cfgload import _DEFAULTS
+        import yaml
+        yaml.dump(_DEFAULTS, sys.stdout, default_flow_style=False, sort_keys=False)
+        return
 
     config_path = Path(args.config) if args.config else None
 

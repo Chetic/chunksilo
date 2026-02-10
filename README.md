@@ -11,7 +11,7 @@ ChunkSilo is like a local Google for your documents. It uses semantic search —
 - Incremental indexing — only reprocesses new or changed files
 - Heading-aware results with source links back to the original file
 - Date filtering and recency boosting
-- Optional Confluence integration
+- Optional Confluence and Jira integrations
 
 ### Example `search_docs` output
 
@@ -48,13 +48,7 @@ Requires Python 3.11 or later. Models are downloaded automatically on first run 
 ```bash
 pip install chunksilo
 
-# Or with Confluence support:
-pip install chunksilo[confluence]
-
-# Or with Jira support:
-pip install chunksilo[jira]
-
-# Or with both Confluence and Jira:
+# Or with Confluence and Jira support:
 pip install chunksilo[confluence,jira]
 ```
 
@@ -124,65 +118,92 @@ All settings are optional and have sensible defaults.
 
 ### Configuration Reference
 
+> **Tip:** Run `chunksilo --dump-defaults` to see all available options with their default values.
+
 #### Indexing Settings
 
-| Setting | Default | Description |
-| :--- | :--- | :--- |
-| `indexing.directories` | `["./data"]` | List of directories to index (strings or objects) |
-| `indexing.chunk_size` | `1600` | Maximum size of text chunks |
-| `indexing.chunk_overlap` | `200` | Overlap between adjacent chunks |
+| Setting | Description |
+| :--- | :--- |
+| `indexing.directories` | List of directories to index (strings or objects) |
+| `indexing.chunk_size` | Maximum size of text chunks |
+| `indexing.chunk_overlap` | Overlap between adjacent chunks |
 
 **Per-directory options** (when using object format):
 
-| Option | Default | Description |
-| :--- | :--- | :--- |
-| `path` | (required) | Directory path to index |
-| `include` | `["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx", "**/*.doc"]` | Glob patterns for files to include |
-| `exclude` | `[]` | Glob patterns for files to exclude |
-| `recursive` | `true` | Whether to recurse into subdirectories |
-| `enabled` | `true` | Whether to index this directory |
+| Option | Description |
+| :--- | :--- |
+| `path` | Directory path to index (required) |
+| `include` | Glob patterns for files to include |
+| `exclude` | Glob patterns for files to exclude |
+| `recursive` | Whether to recurse into subdirectories |
+| `enabled` | Whether to index this directory |
+
+**Project-wide directory defaults** — set once instead of repeating per directory:
+
+| Option | Description |
+| :--- | :--- |
+| `indexing.defaults.include` | Default include patterns for all directories |
+| `indexing.defaults.exclude` | Default exclude patterns for all directories |
+| `indexing.defaults.recursive` | Default recursive setting for all directories |
+
+**Advanced indexing options** — performance tuning, timeouts, and logging:
+
+| Setting | Description |
+| :--- | :--- |
+| `indexing.parallel_workers` | Number of threads for parallel file loading |
+| `indexing.enable_parallel_loading` | Enable/disable parallel file loading |
+| `indexing.enable_adaptive_batching` | Enable memory-aware adaptive batch sizing |
+| `indexing.max_memory_mb` | Memory budget (MB) for adaptive batch sizing |
+| `indexing.checkpoint_interval_files` | Files processed between index checkpoints |
+| `indexing.checkpoint_interval_seconds` | Seconds between index checkpoints |
+| `indexing.timeout.enabled` | Enable per-file processing timeout |
+| `indexing.timeout.per_file_seconds` | Timeout in seconds for processing each file |
+| `indexing.timeout.doc_conversion_seconds` | Timeout in seconds for .doc to .docx conversion |
+| `indexing.timeout.heartbeat_interval_seconds` | Progress heartbeat update interval in seconds |
+| `indexing.logging.log_slow_files` | Warn when files take unusually long to process |
+| `indexing.logging.slow_file_threshold_seconds` | Seconds before a file is considered slow |
 
 #### Retrieval Settings
 
-| Setting | Default | Description |
-| :--- | :--- | :--- |
-| `retrieval.embed_model_name` | `BAAI/bge-small-en-v1.5` | Embedding model for vector search |
-| `retrieval.embed_top_k` | `20` | Candidates from vector search before reranking |
-| `retrieval.rerank_model_name` | `ms-marco-MiniLM-L-12-v2` | Reranker model |
-| `retrieval.rerank_top_k` | `5` | Final results after reranking |
-| `retrieval.rerank_candidates` | `100` | Maximum candidates sent to reranker |
-| `retrieval.score_threshold` | `0.1` | Minimum score (0.0-1.0) for results |
-| `retrieval.recency_boost` | `0.3` | Recency boost weight (0.0-1.0) |
-| `retrieval.recency_half_life_days` | `365` | Days until recency boost halves |
-| `retrieval.bm25_similarity_top_k` | `10` | Files returned by BM25 filename search |
-| `retrieval.offline` | `false` | Prevent ML library network requests |
+| Setting | Description |
+| :--- | :--- |
+| `retrieval.embed_model_name` | Embedding model for vector search |
+| `retrieval.embed_top_k` | Candidates from vector search before reranking |
+| `retrieval.rerank_model_name` | Reranker model |
+| `retrieval.rerank_top_k` | Final results after reranking |
+| `retrieval.rerank_candidates` | Maximum candidates sent to reranker |
+| `retrieval.score_threshold` | Minimum score (0.0-1.0) for results |
+| `retrieval.recency_boost` | Recency boost weight (0.0-1.0) |
+| `retrieval.recency_half_life_days` | Days until recency boost halves |
+| `retrieval.bm25_similarity_top_k` | Files returned by BM25 filename search |
+| `retrieval.offline` | Prevent ML library network requests |
 
 #### Confluence Settings (optional)
 
 > **Note:** Confluence integration requires the optional dependency. Install with: `pip install chunksilo[confluence]`
 
-| Setting | Default | Description |
-| :--- | :--- | :--- |
-| `confluence.url` | `""` | Confluence base URL (empty = disabled) |
-| `confluence.username` | `""` | Confluence username |
-| `confluence.api_token` | `""` | Confluence API token |
-| `confluence.timeout` | `10.0` | Request timeout in seconds |
-| `confluence.max_results` | `30` | Maximum results per search |
+| Setting | Description |
+| :--- | :--- |
+| `confluence.url` | Confluence base URL (empty = disabled) |
+| `confluence.username` | Confluence username |
+| `confluence.api_token` | Confluence API token |
+| `confluence.timeout` | Request timeout in seconds |
+| `confluence.max_results` | Maximum results per search |
 
 #### Jira Settings (optional)
 
 > **Note:** Jira integration requires the optional dependency. Install with: `pip install chunksilo[jira]`
 
-| Setting | Default | Description |
-| :--- | :--- | :--- |
-| `jira.url` | `""` | Jira base URL (empty = disabled) |
-| `jira.username` | `""` | Jira username/email |
-| `jira.api_token` | `""` | Jira API token |
-| `jira.timeout` | `10.0` | Request timeout in seconds |
-| `jira.max_results` | `30` | Maximum results per search |
-| `jira.projects` | `[]` | Project keys to search (empty = all) |
-| `jira.include_comments` | `true` | Include issue comments in search |
-| `jira.include_custom_fields` | `true` | Include custom fields in search |
+| Setting | Description |
+| :--- | :--- |
+| `jira.url` | Jira base URL (empty = disabled) |
+| `jira.username` | Jira username/email |
+| `jira.api_token` | Jira API token |
+| `jira.timeout` | Request timeout in seconds |
+| `jira.max_results` | Maximum results per search |
+| `jira.projects` | Project keys to search (empty = all) |
+| `jira.include_comments` | Include issue comments in search |
+| `jira.include_custom_fields` | Include custom fields in search |
 
 **Creating a Jira API Token:**
 1. Log into Jira
@@ -192,42 +213,24 @@ All settings are optional and have sensible defaults.
 
 #### SSL Settings (optional)
 
-| Setting | Default | Description |
-| :--- | :--- | :--- |
-| `ssl.ca_bundle_path` | `""` | Path to custom CA bundle file |
+| Setting | Description |
+| :--- | :--- |
+| `ssl.ca_bundle_path` | Path to custom CA bundle file |
 
 #### Storage Settings
 
-| Setting | Default | Description |
-| :--- | :--- | :--- |
-| `storage.storage_dir` | `./storage` | Directory for vector index and state |
-| `storage.model_cache_dir` | `./models` | Directory for model cache |
+| Setting | Description |
+| :--- | :--- |
+| `storage.storage_dir` | Directory for vector index and state |
+| `storage.model_cache_dir` | Directory for model cache |
 
 ## CLI Usage
 
-The `chunksilo` command provides indexing, searching, and model management:
-
 ```bash
-# Build or update the search index
-chunksilo --build-index
-
-# Search for documents
-chunksilo "your search query"
-
-# Search with date filtering
-chunksilo "quarterly report" --date-from 2024-01-01 --date-to 2024-03-31
-
-# Output results as JSON
-chunksilo "search query" --json
-
-# Show verbose output (model loading, search stats)
-chunksilo "search query" --verbose
-
-# Pre-download ML models (useful before going offline)
-chunksilo --download-models
-
-# Use a custom config file
-chunksilo --build-index --config /path/to/config.yaml
+chunksilo --build-index                # Build or update the search index
+chunksilo "your search query"          # Search for documents
+chunksilo "report" --date-from 2024-01-01 --date-to 2024-03-31  # Date filtering
+chunksilo --dump-defaults              # Print all config options with defaults
 ```
 
 ### CLI Options
@@ -237,11 +240,13 @@ chunksilo --build-index --config /path/to/config.yaml
 | `query` | Search query text (positional argument) |
 | `--build-index` | Build or update the search index, then exit |
 | `--download-models` | Download required ML models, then exit |
+| `--dump-defaults` | Print all default configuration values as YAML, then exit |
 | `--date-from` | Start date filter (YYYY-MM-DD format, inclusive) |
 | `--date-to` | End date filter (YYYY-MM-DD format, inclusive) |
 | `--json` | Output results as JSON instead of formatted text |
 | `-v, --verbose` | Show diagnostic messages (model loading, search stats) |
 | `--config` | Path to config.yaml (overrides auto-discovery) |
+| `CHUNKSILO_CONFIG` | Environment variable alternative to `--config` |
 
 ## MCP Client Configuration
 

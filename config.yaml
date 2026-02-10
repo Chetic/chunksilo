@@ -1,22 +1,49 @@
-# Indexing settings - used by index.py when building the search index
-# Add directories containing documents you want to search
+# ChunkSilo configuration
+# See all options and defaults: chunksilo --dump-defaults
+
+# Indexing settings - used by chunksilo --build-index
 indexing:
   directories:
     - "./data"
-  chunk_size: 1600
-  chunk_overlap: 200
+  # chunk_size: 1600
+  # chunk_overlap: 200
+
+  ## Per-directory defaults (applied to all directories unless overridden)
+  # defaults:
+  #   include: ["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx", "**/*.doc"]
+  #   exclude: []
+  #   recursive: true
+
+  ## Performance tuning
+  # parallel_workers: 4
+  # enable_parallel_loading: true
+  # enable_adaptive_batching: true
+  # max_memory_mb: 2048
+  # checkpoint_interval_files: 50
+  # checkpoint_interval_seconds: 300
+
+  ## Timeout protection
+  # timeout:
+  #   enabled: true
+  #   per_file_seconds: 300
+  #   doc_conversion_seconds: 90
+  #   heartbeat_interval_seconds: 2
+
+  ## Logging
+  # logging:
+  #   log_slow_files: true
+  #   slow_file_threshold_seconds: 30
 
 # Confluence integration (optional) - enables live search of Confluence pages
-# Leave url empty to disable Confluence integration
+# Install with: pip install chunksilo[confluence]
 confluence:
   url: ""
   username: ""
   api_token: ""
-  timeout: 10.0
-  max_results: 30
+  # timeout: 10.0
+  # max_results: 30
 
 # Jira integration (optional) - enables live search of Jira issues
-# Leave url empty to disable Jira integration
 # Install with: pip install chunksilo[jira]
 jira:
   # Jira base URL (leave empty to disable)
@@ -30,52 +57,34 @@ jira:
   # API token (create at id.atlassian.com/manage-profile/security/api-tokens)
   api_token: ""
 
-  timeout: 10.0
-  max_results: 30
+  # timeout: 10.0
+  # max_results: 30
 
   # Project keys to search ([] = all accessible projects)
   # Example: ["PROJ", "ENG"]
-  # Tip: Specify projects for faster searches on large instances
-  projects: []
+  # projects: []
 
-  # Include comments in search (slower but more comprehensive)
-  include_comments: false
-
-  # Include custom fields (rarely useful for semantic search)
-  include_custom_fields: false
+  # include_comments: false       # slower but more comprehensive
+  # include_custom_fields: false   # rarely useful for semantic search
 
 # SSL/TLS settings - for corporate environments with custom CA certificates
 ssl:
-  # Path to custom CA bundle file (leave empty to use system defaults)
-  ca_bundle_path: ""
+  # ca_bundle_path: ""
 
-# Retrieval settings - used by chunksilo.py when searching
-# These control the quality and speed of search results
+# Retrieval settings - control search quality and speed
 retrieval:
-  # Embedding model for semantic search (smaller = faster, larger = better quality)
-  embed_model_name: "BAAI/bge-small-en-v1.5"
-  # Number of candidates from vector search before reranking
-  embed_top_k: 20
-  # Reranker model for improving result relevance
-  rerank_model_name: "ms-marco-MiniLM-L-12-v2"
-  # Number of final results to return after reranking
-  rerank_top_k: 5
-  # Maximum candidates sent to reranker (safety limit)
-  rerank_candidates: 100
-  # Minimum relevance score (0.0-1.0) to include in results
-  score_threshold: 0.1
-  # Boost factor for recent documents (0.0 = no boost, 1.0 = strong boost)
-  recency_boost: 0.3
-  # Days until recency boost decays by half
-  recency_half_life_days: 365
-  # Number of results from BM25 keyword search
-  bm25_similarity_top_k: 10
-  # Prevent ML libraries from making network requests (recommended for production)
-  offline: true
+  # offline: false  # set to true after models are downloaded to prevent network requests
+  # embed_model_name: "BAAI/bge-small-en-v1.5"
+  # embed_top_k: 20
+  # rerank_model_name: "ms-marco-MiniLM-L-12-v2"
+  # rerank_top_k: 5
+  # rerank_candidates: 100
+  # score_threshold: 0.1
+  # recency_boost: 0.3
+  # recency_half_life_days: 365
+  # bm25_similarity_top_k: 10
 
-# Storage paths - usually don't need to change these
+# Storage paths
 storage:
-  # Directory for the search index and state database
   storage_dir: "./storage"
-  # Directory for caching ML models
   model_cache_dir: "./models"
