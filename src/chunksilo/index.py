@@ -32,6 +32,7 @@ from llama_index.core import (
     load_index_from_storage,
 )
 from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.schema import MetadataMode
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
 # Load configuration from config.yaml
@@ -1257,6 +1258,14 @@ def _get_cached_model_path(cache_dir: Path, model_name: str) -> Path | None:
 
 def _create_fastembed_embedding(cache_dir: Path, offline: bool = False):
     """Create a FastEmbedEmbedding instance."""
+    # Large batch size so LlamaIndex sends all texts in one call to
+    # _get_text_embeddings(), avoiding per-batch instrumentation overhead
+    # (to_dict serialization, event dispatch). Default is 10, which causes
+    # ~38 separate cycles for 375 chunks. FastEmbed handles its own internal
+    # ONNX batching (default 256).
+    embed_batch_size = 512
+    threads = os.cpu_count()
+
     if offline:
         cached_model_path = _get_cached_model_path(cache_dir, RETRIEVAL_EMBED_MODEL_NAME)
         if cached_model_path:
@@ -1266,7 +1275,9 @@ def _create_fastembed_embedding(cache_dir: Path, offline: bool = False):
             return FastEmbedEmbedding(
                 model_name=RETRIEVAL_EMBED_MODEL_NAME,
                 cache_dir=str(cache_dir),
-                specific_model_path=str(cached_model_path)
+                specific_model_path=str(cached_model_path),
+                embed_batch_size=embed_batch_size,
+                threads=threads,
             )
         else:
             logger.warning(
@@ -1274,7 +1285,10 @@ def _create_fastembed_embedding(cache_dir: Path, offline: bool = False):
             )
 
     return FastEmbedEmbedding(
-        model_name=RETRIEVAL_EMBED_MODEL_NAME, cache_dir=str(cache_dir)
+        model_name=RETRIEVAL_EMBED_MODEL_NAME,
+        cache_dir=str(cache_dir),
+        embed_batch_size=embed_batch_size,
+        threads=threads,
     )
 
 
@@ -2084,6 +2098,18 @@ def build_index(
 
                     batch_label = f" (batch {batch_num}/{total_batches})" if total_batches > 1 else ""
                     ui.step_start(f"Embedding {len(nodes)} nodes{batch_label}")
+
+                    # Pre-compute embeddings in bulk via FastEmbed ONNX directly,
+                    # bypassing LlamaIndex's per-batch instrumentation overhead.
+                    # embed_nodes() skips nodes where node.embedding is already set.
+                    texts = [
+                        node.get_content(metadata_mode=MetadataMode.EMBED)
+                        for node in nodes
+                    ]
+                    embeddings = embed_model._get_text_embeddings(texts)
+                    for node, emb in zip(nodes, embeddings):
+                        node.embedding = emb
+
                     index.insert_nodes(nodes)
                     ui.step_done()
 

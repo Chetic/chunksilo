@@ -12,7 +12,7 @@ permissions:
 jobs:
   benchmark-indexing:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
 
     steps:
       - name: Check out repository
@@ -35,7 +35,7 @@ jobs:
           TEST_STORAGE_DIR: ./bench_storage
           TEST_RESULTS_DIR: ./test_results
           ABORT_ON_DOWNLOAD_FAILURE: 1
-          BENCHMARK_THRESHOLD: 600
+          BENCHMARK_THRESHOLD: 120
         run: |
           cd test
           python test_indexing_benchmark.py

@@ -21,10 +21,10 @@ import json
 import logging
 import os
 import platform
+import resource
 import shutil
 import sys
 import time
-import tracemalloc
 from pathlib import Path
 
 logging.basicConfig(
@@ -44,7 +44,7 @@ from chunksilo.index import build_index
 TEST_DATA_DIR = Path(os.getenv("TEST_DATA_DIR", "./test_data"))
 TEST_STORAGE_DIR = Path(os.getenv("TEST_STORAGE_DIR", "./bench_storage"))
 TEST_RESULTS_DIR = Path(os.getenv("TEST_RESULTS_DIR", "./test_results"))
-BENCHMARK_THRESHOLD_SECONDS = int(os.getenv("BENCHMARK_THRESHOLD", "600"))
+BENCHMARK_THRESHOLD_SECONDS = int(os.getenv("BENCHMARK_THRESHOLD", "120"))
 
 
 def _corpus_stats(data_dir: Path) -> dict:
@@ -123,14 +123,18 @@ def run_benchmark() -> dict:
         logger.info("Step 2: Building index (timed)")
         logger.info("=" * 70)
 
-        tracemalloc.start()
+        # Use resource.getrusage for zero-overhead peak memory measurement.
+        # tracemalloc tracks every allocation and adds 4-5x overhead to
+        # ONNX-heavy workloads (measured: 362s with tracemalloc vs 68s without).
         t_start = time.monotonic()
 
         build_index()
 
         elapsed = time.monotonic() - t_start
-        _, peak_mem = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
+        # ru_maxrss is peak RSS for the process lifetime.
+        # On macOS it's in bytes, on Linux it's in KB.
+        max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        peak_mem = max_rss if sys.platform == "darwin" else max_rss * 1024
 
         logger.info(f"Indexing completed in {elapsed:.2f}s")
 
