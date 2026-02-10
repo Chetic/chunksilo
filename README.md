@@ -11,7 +11,7 @@ ChunkSilo is like a local Google for your documents. It uses semantic search —
 - Incremental indexing — only reprocesses new or changed files
 - Heading-aware results with source links back to the original file
 - Date filtering and recency boosting
-- Optional Confluence and Jira integrations
+- Optional Confluence and Jira integrations (supports Cloud and Server/Data Center)
 
 ### Example `search_docs` output
 
@@ -102,7 +102,7 @@ retrieval:
   rerank_top_k: 5
   score_threshold: 0.1
 
-# Confluence integration (optional)
+# Confluence integration (optional) - supports Cloud and Server/Data Center
 confluence:
   url: "https://confluence.example.com"
   username: "your-username"
@@ -186,9 +186,15 @@ All settings are optional and have sensible defaults.
 | :--- | :--- |
 | `confluence.url` | Confluence base URL (empty = disabled) |
 | `confluence.username` | Confluence username |
-| `confluence.api_token` | Confluence API token |
+| `confluence.api_token` | Confluence API token (Cloud) or Personal Access Token (Server/Data Center) |
 | `confluence.timeout` | Request timeout in seconds |
 | `confluence.max_results` | Maximum results per search |
+
+**Creating a Confluence API Token:**
+1. Log into Confluence
+2. Go to Account Settings > Security > API Tokens (for Cloud) or User Profile > Personal Access Tokens (for Server/Data Center)
+3. Click "Create API Token" or "Create Token"
+4. Copy the token and add it to your config
 
 #### Jira Settings (optional)
 
