@@ -329,3 +329,125 @@ class TestPrint:
         output = _output(ui)
         assert "Line 1\n" in output
         assert "Line 2\n" in output
+
+    def test_success_outputs_message(self, ui):
+        """ui.success() writes message with newline (plain in non-TTY)."""
+        ui.success("All done")
+        output = _output(ui)
+        assert "All done\n" in output
+
+    def test_error_outputs_message(self, ui):
+        """ui.error() writes message with newline (plain in non-TTY)."""
+        ui.error("Something failed")
+        output = _output(ui)
+        assert "Something failed\n" in output
+
+
+# =============================================================================
+# Color support tests
+# =============================================================================
+
+
+class _FakeTTY(io.StringIO):
+    """StringIO that pretends to be a TTY for color testing."""
+    def isatty(self):
+        return True
+
+
+def _make_tty_ui():
+    """Create an IndexingUI with a fake TTY stream to enable colors."""
+    from chunksilo.index import IndexingUI
+    return IndexingUI(stream=_FakeTTY())
+
+
+class TestColorSupport:
+    def test_non_tty_has_no_color_codes(self, ui):
+        """Non-TTY stream (StringIO) produces no ANSI color codes."""
+        assert ui.GREEN == ""
+        assert ui.RESET == ""
+        assert ui.BOLD == ""
+        assert ui.DIM == ""
+
+    def test_tty_has_color_codes(self):
+        """TTY stream produces ANSI color codes."""
+        ui = _make_tty_ui()
+        assert ui.GREEN == "\033[32m"
+        assert ui.RESET == "\033[0m"
+        assert ui.BOLD == "\033[1m"
+        assert ui.CYAN == "\033[36m"
+
+    def test_tty_step_done_has_green_suffix(self):
+        """On TTY, step_done('done') includes green ANSI code."""
+        ui = _make_tty_ui()
+        ui.step_start("Loading")
+        time.sleep(0.05)
+        ui.step_done()
+        output = ui._stream.getvalue()
+        assert "\033[32mdone\033[0m" in output
+
+    def test_tty_step_done_skipped_has_yellow(self):
+        """On TTY, step_done('skipped') includes yellow ANSI code."""
+        ui = _make_tty_ui()
+        ui.step_start("Check")
+        time.sleep(0.05)
+        ui.step_done("skipped")
+        output = ui._stream.getvalue()
+        assert "\033[33mskipped\033[0m" in output
+
+    def test_tty_step_done_interrupted_has_red(self):
+        """On TTY, step_done('interrupted') includes red ANSI code."""
+        ui = _make_tty_ui()
+        ui.step_start("Running")
+        time.sleep(0.05)
+        ui.step_done("interrupted")
+        output = ui._stream.getvalue()
+        assert "\033[31minterrupted\033[0m" in output
+
+    def test_tty_progress_bar_uses_block_chars(self):
+        """On TTY, progress bar uses █ and ░ instead of # and -."""
+        ui = _make_tty_ui()
+        ui.progress_start(10, "Files")
+        ui.progress_update(5)
+        output = ui._stream.getvalue()
+        assert "█" in output
+        assert "░" in output
+        assert "#" not in output
+        assert "-" not in output.split("]")[0]  # no dash in bar area
+
+    def test_tty_success_has_bold_green(self):
+        """On TTY, success() wraps message in bold green."""
+        ui = _make_tty_ui()
+        ui.success("Done!")
+        output = ui._stream.getvalue()
+        assert "\033[1;32mDone!\033[0m" in output
+
+    def test_tty_error_has_red(self):
+        """On TTY, error() wraps message in red."""
+        ui = _make_tty_ui()
+        ui.error("Failed!")
+        output = ui._stream.getvalue()
+        assert "\033[31mFailed!\033[0m" in output
+
+
+# =============================================================================
+# Spinner clear-to-end-of-line tests
+# =============================================================================
+
+
+class TestSpinnerClearLine:
+    def test_spinner_writes_include_clear_eol(self):
+        """Spinner animation includes \\033[K to prevent traces."""
+        ui = _make_tty_ui()
+        ui.step_start("Working")
+        # Let spinner write at least one frame
+        time.sleep(0.15)
+        ui.step_done()
+        output = ui._stream.getvalue()
+        # Spinner frames should include \033[K (clear to end of line)
+        # Find a spinner character followed by the clear code
+        spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        has_clear = any(
+            f"{ch}\033[0m\033[K" in output
+            for ch in spinner_chars
+        )
+        assert has_clear, "Spinner frames should include \\033[K to clear line remnants"

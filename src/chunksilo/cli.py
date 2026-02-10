@@ -87,9 +87,19 @@ def main():
         print(json.dumps(result, indent=2))
         return
 
+    # ANSI colors (disabled when stdout is not a TTY)
+    _tty = sys.stdout.isatty()
+    RESET = "\033[0m" if _tty else ""
+    BOLD = "\033[1m" if _tty else ""
+    DIM = "\033[2m" if _tty else ""
+    CYAN = "\033[36m" if _tty else ""
+    YELLOW = "\033[33m" if _tty else ""
+    RED = "\033[31m" if _tty else ""
+    BOLD_CYAN = "\033[1;36m" if _tty else ""
+
     # Check for errors
     if result.get("error"):
-        print(f"Error: {result['error']}", file=sys.stderr)
+        print(f"{RED}Error: {result['error']}{RESET}", file=sys.stderr)
         sys.exit(1)
 
     # Human-readable output
@@ -97,15 +107,15 @@ def main():
     chunks = result.get("chunks", [])
 
     if matched_files:
-        print(f"\nMatched files ({len(matched_files)}):")
+        print(f"\n{BOLD}Matched files ({len(matched_files)}):{RESET}")
         for f in matched_files:
-            print(f"  {f.get('uri', 'unknown')}  (score: {f.get('score', 0):.4f})")
+            print(f"  {CYAN}{f.get('uri', 'unknown')}{RESET}  {DIM}(score: {f.get('score', 0):.4f}){RESET}")
 
     if not chunks:
-        print("\nNo results found.")
+        print(f"\n{YELLOW}No results found.{RESET}")
         return
 
-    print(f"\nResults ({len(chunks)}):\n")
+    print(f"\n{BOLD}Results ({len(chunks)}):{RESET}\n")
 
     for i, chunk in enumerate(chunks, 1):
         loc = chunk.get("location", {})
@@ -113,14 +123,14 @@ def main():
         heading = " > ".join(loc.get("heading_path") or [])
         score = chunk.get("score", 0)
 
-        print(f"[{i}] {uri}")
+        print(f"{BOLD_CYAN}[{i}]{RESET} {CYAN}{uri}{RESET}")
         if heading:
-            print(f"    Heading: {heading}")
+            print(f"    {YELLOW}Heading: {heading}{RESET}")
         if loc.get("page"):
-            print(f"    Page: {loc['page']}")
+            print(f"    {DIM}Page: {loc['page']}{RESET}")
         if loc.get("line"):
-            print(f"    Line: {loc['line']}")
-        print(f"    Score: {score:.3f}")
+            print(f"    {DIM}Line: {loc['line']}{RESET}")
+        print(f"    {DIM}Score: {score:.3f}{RESET}")
 
         text = chunk.get("text", "")
         preview = text[:200].replace("\n", " ")
@@ -131,4 +141,4 @@ def main():
 
     retrieval_time = result.get("retrieval_time", "")
     if retrieval_time:
-        print(f"({retrieval_time})")
+        print(f"{DIM}({retrieval_time}){RESET}")

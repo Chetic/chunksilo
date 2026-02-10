@@ -777,6 +777,19 @@ class IndexingUI:
         self._stream = stream or sys.stdout
         self._lock = threading.Lock()
 
+        # ANSI color codes (disabled when stream is not a TTY)
+        _s = self._stream
+        _tty = hasattr(_s, "isatty") and _s.isatty()
+        self.RESET = "\033[0m" if _tty else ""
+        self.BOLD = "\033[1m" if _tty else ""
+        self.DIM = "\033[2m" if _tty else ""
+        self.GREEN = "\033[32m" if _tty else ""
+        self.YELLOW = "\033[33m" if _tty else ""
+        self.CYAN = "\033[36m" if _tty else ""
+        self.RED = "\033[31m" if _tty else ""
+        self.BOLD_GREEN = "\033[1;32m" if _tty else ""
+        self.BOLD_CYAN = "\033[1;36m" if _tty else ""
+
         # Step/spinner state
         self._step_message: str | None = None
         self._step_stop = threading.Event()
@@ -821,7 +834,7 @@ class IndexingUI:
         with self._lock:
             self._step_message = message
             self._step_stop.clear()
-            self._write(f"\r{message}... ")
+            self._write(f"\r{self.BOLD}{message}{self.RESET}... ")
         self._step_thread = threading.Thread(target=self._step_spin, daemon=True)
         self._step_thread.start()
 
@@ -834,14 +847,18 @@ class IndexingUI:
         with self._lock:
             msg = self._step_message or ""
             self._step_message = None
-            self._write(f"\r{msg}... {suffix}\033[K\n")
+            colored_suffix = self._color_suffix(suffix)
+            self._write(f"\r{self.BOLD}{msg}{self.RESET}... {colored_suffix}\033[K\n")
 
     def _step_spin(self) -> None:
         idx = 0
         while not self._step_stop.is_set():
             with self._lock:
                 if self._step_message is not None:
-                    self._write(f"\r{self._step_message}... {self._SPINNER_CHARS[idx]}")
+                    self._write(
+                        f"\r{self.BOLD}{self._step_message}{self.RESET}... "
+                        f"{self.CYAN}{self._SPINNER_CHARS[idx]}{self.RESET}\033[K"
+                    )
             idx = (idx + 1) % len(self._SPINNER_CHARS)
             self._step_stop.wait(0.1)
 
@@ -932,16 +949,21 @@ class IndexingUI:
             return
         progress = self._progress_current / self._progress_total
         filled = int(self._progress_width * progress)
-        bar = "#" * filled + "-" * (self._progress_width - filled)
+        bar_filled = f"{self.GREEN}{'█' * filled}{self.RESET}"
+        bar_empty = f"{self.DIM}{'░' * (self._progress_width - filled)}{self.RESET}"
+        bar = f"{bar_filled}{bar_empty}"
 
         # Move cursor to start of progress area
         if self._progress_has_subline:
             self._stream.write("\033[1A\r")
 
         # Line 1: progress bar
+        pct = f"{progress * 100:5.1f}%"
+        if progress >= 1.0:
+            pct = f"{self.BOLD_GREEN}{pct}{self.RESET}"
         line1 = (
-            f"{self._progress_desc} [{bar}] "
-            f"{progress * 100:5.1f}%  ({self._progress_current}/{self._progress_total})"
+            f"{self.BOLD}{self._progress_desc}{self.RESET} [{bar}] "
+            f"{pct}  {self.DIM}({self._progress_current}/{self._progress_total}){self.RESET}"
         )
         self._stream.write(f"\r\033[K{line1}")
 
@@ -950,14 +972,14 @@ class IndexingUI:
             file_display = Path(self._progress_file).name
             if len(file_display) > 50:
                 file_display = "..." + file_display[-47:]
-            subline = f"  {file_display}"
+            subline = f"  {self.DIM}{file_display}{self.RESET}"
             if self._progress_phase:
-                subline += f" ({self._progress_phase}"
+                subline += f" {self.DIM}({self._progress_phase}"
                 if self._progress_heartbeat:
-                    subline += f" {self._progress_heartbeat}"
-                subline += ")"
+                    subline += f" {self.CYAN}{self._progress_heartbeat}{self.RESET}{self.DIM}"
+                subline += f"){self.RESET}"
             elif self._progress_heartbeat:
-                subline += f" {self._progress_heartbeat}"
+                subline += f" {self.CYAN}{self._progress_heartbeat}{self.RESET}"
             self._stream.write(f"\n\033[K{subline}")
             self._progress_has_subline = True
         elif self._progress_has_subline:
@@ -982,7 +1004,28 @@ class IndexingUI:
         with self._lock:
             self._write(f"{message}\n")
 
+    def success(self, message: str) -> None:
+        """Print a success message in bold green."""
+        with self._lock:
+            self._write(f"{self.BOLD_GREEN}{message}{self.RESET}\n")
+
+    def error(self, message: str) -> None:
+        """Print an error message in red."""
+        with self._lock:
+            self._write(f"{self.RED}{message}{self.RESET}\n")
+
     # -- internal helpers --
+
+    def _color_suffix(self, suffix: str) -> str:
+        """Return a color-coded suffix string for step_done output."""
+        s = suffix.lower()
+        if s in ("done", "no changes"):
+            return f"{self.GREEN}{suffix}{self.RESET}"
+        if s in ("skipped",):
+            return f"{self.YELLOW}{suffix}{self.RESET}"
+        if s in ("interrupted",):
+            return f"{self.RED}{suffix}{self.RESET}"
+        return suffix
 
     def _write(self, text: str) -> None:
         """Write to stream and flush. Caller must hold lock."""
@@ -1791,7 +1834,7 @@ def build_index(
             ui.step_done("skipped")
 
         if download_only:
-            ui.print("Models downloaded successfully.")
+            ui.success("Models downloaded successfully.")
             return
 
         # Initialize State and Multi-Directory Data Source
@@ -1806,7 +1849,7 @@ def build_index(
         ui.print(dir_msg)
 
         if not data_source.sources:
-            ui.print("Error: No available directories to index. Check your config.yaml.")
+            ui.error("Error: No available directories to index. Check your config.yaml.")
             return
 
         # Initialize Embedding Model
@@ -1880,7 +1923,7 @@ def build_index(
             ingestion_state.remove_file_state(deleted_path)
 
         if not files_to_process and not deleted_files:
-            ui.print("Index is up to date.")
+            ui.success("Index is up to date.")
             return
 
         # Process New/Modified Files
@@ -2037,7 +2080,7 @@ def build_index(
         build_bm25_index(index, STORAGE_DIR)
         ui.step_done()
 
-        ui.print(f"\nIndexing complete. {len(files_to_process)} files processed.")
+        ui.success(f"\nIndexing complete. {len(files_to_process)} files processed.")
 
 
 if __name__ == "__main__":
