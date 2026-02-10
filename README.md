@@ -2,6 +2,10 @@
   <img src="https://raw.githubusercontent.com/Chetic/chunksilo/main/chunksilo.png" alt="ChunkSilo Logo" width="500">
 </p>
 
+<p align="center">
+  <img src="demo/demo.gif" alt="ChunkSilo terminal demo" width="720">
+</p>
+
 # ChunkSilo MCP Server
 
 ChunkSilo is like a local Google for your documents. It uses semantic search — matching by meaning rather than exact keywords — so your LLM can find relevant information across all your files even when the wording differs from your query. Point it at your PDFs, Word docs, Markdown, and text files, and it builds a fully searchable index locally on your machine.
@@ -159,7 +163,7 @@ All settings are optional and have sensible defaults.
 | `indexing.timeout.enabled` | Enable per-file processing timeout |
 | `indexing.timeout.per_file_seconds` | Timeout in seconds for processing each file |
 | `indexing.timeout.doc_conversion_seconds` | Timeout in seconds for .doc to .docx conversion |
-| `indexing.timeout.heartbeat_interval_seconds` | Progress heartbeat update interval in seconds |
+| `indexing.timeout.heartbeat_interval_seconds` | Interval (seconds) between progress animation updates during file processing |
 | `indexing.logging.log_slow_files` | Warn when files take unusually long to process |
 | `indexing.logging.slow_file_threshold_seconds` | Seconds before a file is considered slow |
 
@@ -244,7 +248,7 @@ chunksilo --dump-defaults              # Print all config options with defaults
 | Option | Description |
 | :--- | :--- |
 | `query` | Search query text (positional argument) |
-| `--build-index` | Build or update the search index, then exit |
+| `--build-index` | Build or update the search index with step-by-step progress output, then exit |
 | `--download-models` | Download required ML models, then exit |
 | `--dump-defaults` | Print all default configuration values as YAML, then exit |
 | `--date-from` | Start date filter (YYYY-MM-DD format, inclusive) |

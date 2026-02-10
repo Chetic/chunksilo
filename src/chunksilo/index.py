@@ -761,113 +761,244 @@ class MultiDirectoryDataSource(DataSource):
         }
 
 
-class SimpleProgressBar:
-    """Lightweight progress bar using only the standard library."""
+class IndexingUI:
+    """Unified terminal output for the indexing pipeline.
 
-    def __init__(self, total: int, desc: str, unit: str = "item", width: int = 30):
-        self.total = max(total, 0)
-        self.desc = desc
-        self.unit = unit
-        self.width = width
-        self.current = 0
-        self.current_file = ""
-        self.current_phase = ""
-        self.heartbeat_char = ""
+    Owns all stdout writes during build_index(). Provides two display modes:
+    - Step mode: "message... done" with animated spinner
+    - Progress mode: progress bar with optional sub-line for current file
+
+    All methods are thread-safe via a single lock.
+    """
+
+    _SPINNER_CHARS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self, stream=None):
+        self._stream = stream or sys.stdout
         self._lock = threading.Lock()
-        if self.total > 0:
-            self._render()
 
-    def set_current_file(self, file_path: str, phase: str = "") -> None:
-        """Set current file being processed (thread-safe)."""
-        with self._lock:
-            self.current_file = file_path
-            self.current_phase = phase
-            self._render()
+        # Step/spinner state
+        self._step_message: str | None = None
+        self._step_stop = threading.Event()
+        self._step_thread: threading.Thread | None = None
 
-    def set_heartbeat(self, char: str) -> None:
-        """Update heartbeat indicator (thread-safe)."""
-        with self._lock:
-            self.heartbeat_char = char
-            self._render()
+        # Progress bar state
+        self._progress_active = False
+        self._progress_paused = False
+        self._progress_total = 0
+        self._progress_current = 0
+        self._progress_desc = ""
+        self._progress_unit = "file"
+        self._progress_width = 30
+        self._progress_file = ""
+        self._progress_phase = ""
+        self._progress_heartbeat = ""
+        self._progress_has_subline = False
 
-    def update(self, step: int = 1) -> None:
-        if self.total <= 0:
-            return
-        with self._lock:
-            self.current = min(self.total, self.current + step)
-            # Clear current file on completion
-            self.current_file = ""
-            self.current_phase = ""
-            self.heartbeat_char = ""
-            self._render()
-            if self.current >= self.total:
-                sys.stdout.write("\n")
-                sys.stdout.flush()
+        # Logging suppression
+        self._original_level: int | None = None
 
-    def _render(self) -> None:
-        """Render progress bar with current file info (must hold lock)."""
-        progress = self.current / self.total if self.total else 0
-        filled = int(self.width * progress)
-        bar = "#" * filled + "-" * (self.width - filled)
-
-        # Build status line
-        status = f"\r{self.desc} [{bar}] {progress * 100:5.1f}% ({self.current}/{self.total} {self.unit}s)"
-
-        # Add current file info if available
-        if self.current_file:
-            # Truncate file path to fit terminal (assume 80 char width)
-            max_path_len = 50
-            file_display = Path(self.current_file).name
-            if len(file_display) > max_path_len:
-                file_display = "..." + file_display[-(max_path_len-3):]
-
-            status += f"\n  → {file_display}"
-
-            if self.current_phase:
-                status += f" ({self.current_phase}{self.heartbeat_char})"
-            elif self.heartbeat_char:
-                status += f" {self.heartbeat_char}"
-
-        # Clear old lines and write new status
-        sys.stdout.write("\033[K")  # Clear to end of line
-        if self.current_file:
-            sys.stdout.write("\033[K\n\033[K")  # Clear next line
-            sys.stdout.write("\033[2A")  # Move up 2 lines
-        sys.stdout.write(status)
-        sys.stdout.flush()
-
-
-class Spinner:
-    """Simple console spinner to indicate long-running steps."""
-
-    def __init__(self, desc: str, interval: float = 0.1):
-        self.desc = desc
-        self.interval = interval
-        self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._line = desc
+    # -- context manager --
 
     def __enter__(self):
-        self._thread = threading.Thread(target=self._spin, daemon=True)
-        self._thread.start()
+        self._suppress_logging()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self._stop_event.set()
-        if self._thread:
-            self._thread.join()
-        # Clear spinner line
-        sys.stdout.write("\r" + " " * len(self._line) + "\r")
-        sys.stdout.flush()
+        if self._step_message is not None:
+            self.step_done("interrupted")
+        if self._progress_active or self._progress_paused:
+            self._progress_active = True
+            self._progress_paused = False
+            self.progress_done()
+        self._restore_logging()
+        return False
 
-    def _spin(self) -> None:
-        for char in itertools.cycle("|/-\\"):
-            if self._stop_event.is_set():
-                break
-            self._line = f"{self.desc} {char}"
-            sys.stdout.write("\r" + self._line)
-            sys.stdout.flush()
-            time.sleep(self.interval)
+    # -- step mode --
+
+    def step_start(self, message: str) -> None:
+        """Begin an animated step: prints 'message... ⠋' with spinner."""
+        with self._lock:
+            self._step_message = message
+            self._step_stop.clear()
+            self._write(f"\r{message}... ")
+        self._step_thread = threading.Thread(target=self._step_spin, daemon=True)
+        self._step_thread.start()
+
+    def step_done(self, suffix: str = "done") -> None:
+        """Complete the current step: replaces spinner with suffix."""
+        self._step_stop.set()
+        if self._step_thread:
+            self._step_thread.join()
+            self._step_thread = None
+        with self._lock:
+            msg = self._step_message or ""
+            self._step_message = None
+            self._write(f"\r{msg}... {suffix}\033[K\n")
+
+    def _step_spin(self) -> None:
+        idx = 0
+        while not self._step_stop.is_set():
+            with self._lock:
+                if self._step_message is not None:
+                    self._write(f"\r{self._step_message}... {self._SPINNER_CHARS[idx]}")
+            idx = (idx + 1) % len(self._SPINNER_CHARS)
+            self._step_stop.wait(0.1)
+
+    # -- progress mode --
+
+    def progress_start(self, total: int, desc: str = "Processing files", unit: str = "file") -> None:
+        """Enter progress bar mode."""
+        with self._lock:
+            self._progress_active = True
+            self._progress_paused = False
+            self._progress_total = max(total, 0)
+            self._progress_current = 0
+            self._progress_desc = desc
+            self._progress_unit = unit
+            self._progress_file = ""
+            self._progress_phase = ""
+            self._progress_heartbeat = ""
+            self._progress_has_subline = False
+            if self._progress_total > 0:
+                self._render_progress()
+
+    def progress_update(self, step: int = 1) -> None:
+        """Advance the progress bar."""
+        with self._lock:
+            if not self._progress_active or self._progress_total <= 0:
+                return
+            self._progress_current = min(self._progress_total, self._progress_current + step)
+            self._progress_file = ""
+            self._progress_phase = ""
+            self._progress_heartbeat = ""
+            self._render_progress()
+
+    def progress_set_file(self, file_path: str, phase: str = "") -> None:
+        """Set current file shown on sub-line under the bar."""
+        with self._lock:
+            if not self._progress_active:
+                return
+            self._progress_file = file_path
+            self._progress_phase = phase
+            self._render_progress()
+
+    def progress_set_heartbeat(self, char: str) -> None:
+        """Update heartbeat animation character."""
+        with self._lock:
+            if not self._progress_active:
+                return
+            self._progress_heartbeat = char
+            self._render_progress()
+
+    def progress_pause(self) -> None:
+        """Temporarily hide the progress bar for step output."""
+        with self._lock:
+            if not self._progress_active:
+                return
+            self._clear_progress_area()
+            self._progress_active = False
+            self._progress_paused = True
+
+    def progress_resume(self) -> None:
+        """Re-show the progress bar after a pause."""
+        with self._lock:
+            if not self._progress_paused:
+                return
+            self._progress_active = True
+            self._progress_paused = False
+            self._progress_has_subline = False
+            self._render_progress()
+
+    def progress_done(self) -> None:
+        """Exit progress bar mode."""
+        with self._lock:
+            if not self._progress_active:
+                return
+            # Render final state
+            self._render_progress()
+            # Move past the progress area
+            if self._progress_has_subline:
+                self._write("\n\n")
+            else:
+                self._write("\n")
+            self._progress_active = False
+            self._progress_paused = False
+            self._progress_has_subline = False
+
+    def _render_progress(self) -> None:
+        """Render progress bar + optional file sub-line. Must hold lock."""
+        if self._progress_total <= 0:
+            return
+        progress = self._progress_current / self._progress_total
+        filled = int(self._progress_width * progress)
+        bar = "#" * filled + "-" * (self._progress_width - filled)
+
+        # Move cursor to start of progress area
+        if self._progress_has_subline:
+            self._stream.write("\033[1A\r")
+
+        # Line 1: progress bar
+        line1 = (
+            f"{self._progress_desc} [{bar}] "
+            f"{progress * 100:5.1f}%  ({self._progress_current}/{self._progress_total})"
+        )
+        self._stream.write(f"\r\033[K{line1}")
+
+        # Line 2: current file
+        if self._progress_file:
+            file_display = Path(self._progress_file).name
+            if len(file_display) > 50:
+                file_display = "..." + file_display[-47:]
+            subline = f"  {file_display}"
+            if self._progress_phase:
+                subline += f" ({self._progress_phase}"
+                if self._progress_heartbeat:
+                    subline += f" {self._progress_heartbeat}"
+                subline += ")"
+            elif self._progress_heartbeat:
+                subline += f" {self._progress_heartbeat}"
+            self._stream.write(f"\n\033[K{subline}")
+            self._progress_has_subline = True
+        elif self._progress_has_subline:
+            # Clear stale sub-line
+            self._stream.write(f"\n\033[K")
+
+        self._stream.flush()
+
+    def _clear_progress_area(self) -> None:
+        """Clear progress bar lines from terminal. Must hold lock."""
+        if self._progress_has_subline:
+            self._stream.write("\033[1A\r\033[K\n\033[K\033[1A\r")
+        else:
+            self._stream.write("\r\033[K")
+        self._stream.flush()
+        self._progress_has_subline = False
+
+    # -- general output --
+
+    def print(self, message: str) -> None:
+        """Print a plain text line."""
+        with self._lock:
+            self._write(f"{message}\n")
+
+    # -- internal helpers --
+
+    def _write(self, text: str) -> None:
+        """Write to stream and flush. Caller must hold lock."""
+        self._stream.write(text)
+        self._stream.flush()
+
+    def _suppress_logging(self) -> None:
+        index_logger = logging.getLogger("chunksilo.index")
+        self._original_level = index_logger.level
+        index_logger.setLevel(logging.WARNING)
+
+    def _restore_logging(self) -> None:
+        if self._original_level is not None:
+            index_logger = logging.getLogger("chunksilo.index")
+            index_logger.setLevel(self._original_level)
+            self._original_level = None
 
 
 class FileProcessingTimeoutError(Exception):
@@ -879,7 +1010,7 @@ class FileProcessingContext:
     """Context manager for file processing with timeout and heartbeat.
 
     Usage:
-        with FileProcessingContext(file_path, progress_bar, timeout=300) as ctx:
+        with FileProcessingContext(file_path, ui, timeout=300) as ctx:
             ctx.set_phase("Converting .doc")
             result = process_file()
     """
@@ -887,12 +1018,12 @@ class FileProcessingContext:
     def __init__(
         self,
         file_path: str,
-        progress_bar: SimpleProgressBar,
+        ui: IndexingUI,
         timeout_seconds: float | None = None,
         heartbeat_interval: float = 2.0
     ):
         self.file_path = file_path
-        self.progress_bar = progress_bar
+        self.ui = ui
         self.timeout_seconds = timeout_seconds
         self.heartbeat_interval = heartbeat_interval
 
@@ -913,26 +1044,21 @@ class FileProcessingContext:
         )
         self._heartbeat_thread.start()
 
-        # Update progress bar
-        self.progress_bar.set_current_file(self.file_path, "")
-
-        # Log file processing start
-        logger.info(f"Processing file: {self.file_path}")
+        # Update UI with current file
+        self.ui.progress_set_file(self.file_path, "")
 
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Stop heartbeat and log duration."""
+        """Stop heartbeat and check for slow files."""
         # Stop heartbeat thread
         self._stop_event.set()
         if self._heartbeat_thread:
             self._heartbeat_thread.join(timeout=1.0)
 
-        # Log duration if file was processed
+        # Warn about slow files (warnings still pass through)
         if self._start_time:
             duration = time.time() - self._start_time
-            logger.info(f"Completed file: {self.file_path} ({duration:.1f}s)")
-
             slow_threshold = cfgload.get(
                 "indexing.logging.slow_file_threshold_seconds", 30
             )
@@ -941,8 +1067,8 @@ class FileProcessingContext:
                     f"Slow file processing: {self.file_path} took {duration:.1f}s"
                 )
 
-        # Clear progress bar file indicator
-        self.progress_bar.set_current_file("", "")
+        # Clear file indicator
+        self.ui.progress_set_file("", "")
 
         # Don't suppress exceptions
         return False
@@ -950,8 +1076,7 @@ class FileProcessingContext:
     def set_phase(self, phase: str) -> None:
         """Update current operation phase."""
         self._current_phase = phase
-        logger.debug(f"{self.file_path}: {phase}")
-        self.progress_bar.set_current_file(self.file_path, phase)
+        self.ui.progress_set_file(self.file_path, phase)
 
         # Check for timeout
         self._check_timeout()
@@ -970,23 +1095,19 @@ class FileProcessingContext:
 
     def _heartbeat_loop(self) -> None:
         """Background thread that updates heartbeat indicator."""
-        spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"  # Braille spinner
+        spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         idx = 0
 
         while not self._stop_event.is_set():
-            # Update heartbeat character
-            self.progress_bar.set_heartbeat(spinner_chars[idx])
+            self.ui.progress_set_heartbeat(spinner_chars[idx])
             idx = (idx + 1) % len(spinner_chars)
 
             # Check for timeout
             try:
                 self._check_timeout()
             except FileProcessingTimeoutError:
-                # Timeout detected - set flag and exit heartbeat
-                # The main thread will detect this on next set_phase() call
                 break
 
-            # Sleep until next heartbeat
             time.sleep(self.heartbeat_interval)
 
 
@@ -1559,7 +1680,7 @@ def calculate_optimal_batch_size(
 def load_files_parallel(
     files: List[FileInfo],
     data_source: DataSource,
-    progress: SimpleProgressBar,
+    ui: IndexingUI,
     max_workers: int = 4,
     timeout_enabled: bool = True,
     per_file_timeout: float = 300,
@@ -1570,7 +1691,7 @@ def load_files_parallel(
     Args:
         files: List of FileInfo objects to load
         data_source: DataSource instance for loading files
-        progress: Progress bar for tracking
+        ui: IndexingUI instance for progress tracking
         max_workers: Maximum number of parallel workers
         timeout_enabled: Whether to enable per-file timeout
         per_file_timeout: Timeout in seconds per file
@@ -1586,7 +1707,7 @@ def load_files_parallel(
         try:
             with FileProcessingContext(
                 file_info.path,
-                progress,
+                ui,
                 timeout_seconds=per_file_timeout if timeout_enabled else None,
                 heartbeat_interval=heartbeat_interval
             ) as ctx:
@@ -1617,7 +1738,7 @@ def load_files_parallel(
             except Exception as e:
                 logger.error(f"Error retrieving result for {file_info.path}: {e}")
             finally:
-                progress.update()
+                ui.progress_update()
 
     return file_docs
 
@@ -1653,251 +1774,270 @@ def build_index(
 
     # Load configuration
     index_config = load_index_config()
-    logger.info(f"Indexing configured with {len(index_config.directories)} directories")
 
-    ensure_embedding_model_cached(cache_dir, offline=offline)
-    try:
-        ensure_rerank_model_cached(cache_dir, offline=offline)
-    except FileNotFoundError:
-        if download_only or offline:
-            raise
-        logger.warning("Rerank model could not be cached yet; continuing without it.")
+    with IndexingUI() as ui:
+        # Model caching
+        ui.step_start("Checking embedding model cache")
+        ensure_embedding_model_cached(cache_dir, offline=offline)
+        ui.step_done()
 
-    if download_only:
-        logger.info("Models downloaded; skipping index build.")
-        return
+        ui.step_start("Checking rerank model cache")
+        try:
+            ensure_rerank_model_cached(cache_dir, offline=offline)
+            ui.step_done()
+        except FileNotFoundError:
+            if download_only or offline:
+                raise
+            ui.step_done("skipped")
 
-    # Initialize State and Multi-Directory Data Source
-    ingestion_state = IngestionState(STATE_DB_PATH)
-    data_source = MultiDirectoryDataSource(index_config)
+        if download_only:
+            ui.print("Models downloaded successfully.")
+            return
 
-    # Log directory summary
-    summary = data_source.get_summary()
-    logger.info(f"Active directories: {summary['available']}")
-    if summary['unavailable']:
-        logger.warning(f"Unavailable directories (skipped): {summary['unavailable']}")
+        # Initialize State and Multi-Directory Data Source
+        ingestion_state = IngestionState(STATE_DB_PATH)
+        data_source = MultiDirectoryDataSource(index_config)
 
-    if not data_source.sources:
-        logger.error("No available directories to index. Check your config.yaml indexing.directories.")
-        return
+        # Directory summary
+        summary = data_source.get_summary()
+        dir_msg = f"Directories: {len(summary['available'])} available"
+        if summary['unavailable']:
+            dir_msg += f", {len(summary['unavailable'])} unavailable"
+        ui.print(dir_msg)
 
-    # Initialize Embedding Model
-    logger.info(f"Initializing embedding model: {RETRIEVAL_EMBED_MODEL_NAME}")
-    with Spinner("Initializing embedding model"):
+        if not data_source.sources:
+            ui.print("Error: No available directories to index. Check your config.yaml.")
+            return
+
+        # Initialize Embedding Model
+        ui.step_start("Initializing embedding model")
         embed_model = _create_fastembed_embedding(RETRIEVAL_MODEL_CACHE_DIR, offline=offline)
-    Settings.embed_model = embed_model
+        Settings.embed_model = embed_model
+        ui.step_done()
 
-    # Configure Text Splitter using config values
-    text_splitter = SentenceSplitter(
-        chunk_size=index_config.chunk_size,
-        chunk_overlap=index_config.chunk_overlap,
-        separator=" ",
-    )
-    Settings.text_splitter = text_splitter
+        # Configure Text Splitter using config values
+        text_splitter = SentenceSplitter(
+            chunk_size=index_config.chunk_size,
+            chunk_overlap=index_config.chunk_overlap,
+            separator=" ",
+        )
+        Settings.text_splitter = text_splitter
 
-    # Load existing index or create new
-    if (STORAGE_DIR / "docstore.json").exists():
-        logger.info("Loading existing index context...")
-        storage_context = StorageContext.from_defaults(persist_dir=str(STORAGE_DIR))
-        index = load_index_from_storage(storage_context, embed_model=embed_model)
-    else:
-        logger.info("Creating new index context...")
-        storage_context = StorageContext.from_defaults()
-        index = VectorStoreIndex([], storage_context=storage_context, embed_model=embed_model)
-
-    # Change Detection
-    tracked_files = ingestion_state.get_all_files()
-    found_files: Set[str] = set()
-    files_to_process: List[FileInfo] = []
-
-    logger.info("Scanning for changes...")
-    for file_info in data_source.iter_files():
-        found_files.add(file_info.path)
-        existing_state = tracked_files.get(file_info.path)
-
-        if existing_state:
-            # Check if modified
-            if existing_state["hash"] != file_info.hash:
-                logger.info(f"Modified file detected: {file_info.path}")
-                files_to_process.append(file_info)
+        # Load existing index or create new
+        if (STORAGE_DIR / "docstore.json").exists():
+            ui.step_start("Loading existing index")
+            storage_context = StorageContext.from_defaults(persist_dir=str(STORAGE_DIR))
+            index = load_index_from_storage(storage_context, embed_model=embed_model)
+            ui.step_done()
         else:
-            # New file
-            logger.info(f"New file detected: {file_info.path}")
-            files_to_process.append(file_info)
+            ui.step_start("Creating new index")
+            storage_context = StorageContext.from_defaults()
+            index = VectorStoreIndex([], storage_context=storage_context, embed_model=embed_model)
+            ui.step_done()
 
-    # Identify Deleted Files
-    deleted_files = set(tracked_files.keys()) - found_files
-    for deleted_path in deleted_files:
-        logger.info(f"Deleted file detected: {deleted_path}")
-        doc_ids = tracked_files[deleted_path]["doc_ids"]
-        for doc_id in doc_ids:
-            try:
-                index.delete_ref_doc(doc_id, delete_from_docstore=True)
-            except Exception as e:
-                logger.warning(f"Failed to delete doc {doc_id} from index: {e}")
-        # Clean up heading data for deleted file
-        get_heading_store().remove_headings(deleted_path)
-        ingestion_state.remove_file_state(deleted_path)
+        # Change Detection
+        tracked_files = ingestion_state.get_all_files()
+        found_files: Set[str] = set()
+        files_to_process: List[FileInfo] = []
+        new_count = 0
+        modified_count = 0
 
-    if not files_to_process and not deleted_files:
-        logger.info("No changes detected. Index is up to date.")
-        return
-
-    # Process New/Modified Files
-    if files_to_process:
-        # Get configuration
-        timeout_enabled = cfgload.get("indexing.timeout.enabled", True)
-        per_file_timeout = cfgload.get("indexing.timeout.per_file_seconds", 300)
-        heartbeat_interval = cfgload.get("indexing.timeout.heartbeat_interval_seconds", 2)
-
-        # Checkpointing and batching configuration
-        checkpoint_interval_files = cfgload.get("indexing.checkpoint_interval_files", 50)
-        checkpoint_interval_seconds = cfgload.get("indexing.checkpoint_interval_seconds", 300)
-
-        # Adaptive batch sizing
-        enable_adaptive_batching = cfgload.get("indexing.enable_adaptive_batching", True)
-        max_memory_mb = cfgload.get("indexing.max_memory_mb", 2048)
-
-        if enable_adaptive_batching:
-            # Calculate optimal batch size based on memory constraints
-            optimal_batch_size = calculate_optimal_batch_size(
-                num_files=len(files_to_process),
-                avg_chunks_per_file=10,  # Conservative estimate
-                max_memory_mb=max_memory_mb
-            )
-            # Use smaller of checkpoint interval or optimal batch size
-            batch_size = min(checkpoint_interval_files, optimal_batch_size)
-            logger.info(f"Adaptive batching enabled: processing {len(files_to_process)} files in batches of {batch_size}")
-        else:
-            batch_size = checkpoint_interval_files
-            logger.info(f"Fixed batch size: {batch_size} files per batch")
-
-        # Phase 1: Delete old versions
-        logger.info("Removing old versions of modified files...")
-        for file_info in files_to_process:
+        ui.step_start("Scanning for changes")
+        for file_info in data_source.iter_files():
+            found_files.add(file_info.path)
             existing_state = tracked_files.get(file_info.path)
+
             if existing_state:
-                for doc_id in existing_state["doc_ids"]:
-                    try:
-                        index.delete_ref_doc(doc_id, delete_from_docstore=True)
-                    except KeyError:
-                        pass  # Document might already be gone
-
-        # Phase 2-4: Process files in batches with checkpointing
-        total_files = len(files_to_process)
-        files_since_checkpoint = 0
-        last_checkpoint_time = time.time()
-
-        progress = SimpleProgressBar(total_files, desc="Processing files", unit="file")
-
-        # Get parallel loading configuration
-        max_workers = cfgload.get("indexing.parallel_workers", 4)
-        enable_parallel = cfgload.get("indexing.enable_parallel_loading", True)
-
-        # Process files in batches
-        for batch in batched(files_to_process, batch_size):
-            # Load files in this batch (parallel or sequential based on config)
-            accumulated_docs = []
-            doc_to_file_mapping = {}  # Maps doc_id -> FileInfo
-            file_doc_ids = {}  # Maps file path -> list of doc_ids
-
-            if enable_parallel and len(batch) > 1:
-                # Parallel file loading
-                logger.info(f"Loading {len(batch)} files in parallel with {max_workers} workers...")
-                file_docs = load_files_parallel(
-                    batch,
-                    data_source,
-                    progress,
-                    max_workers=max_workers,
-                    timeout_enabled=timeout_enabled,
-                    per_file_timeout=per_file_timeout,
-                    heartbeat_interval=heartbeat_interval
-                )
-
-                # Accumulate documents from parallel loading results
-                for file_path, (file_info, docs) in file_docs.items():
-                    file_doc_ids[file_path] = []
-                    for doc in docs:
-                        accumulated_docs.append(doc)
-                        doc_to_file_mapping[doc.doc_id] = file_info
-                        file_doc_ids[file_path].append(doc.doc_id)
+                if existing_state["hash"] != file_info.hash:
+                    modified_count += 1
+                    files_to_process.append(file_info)
             else:
-                # Sequential file loading (fallback)
-                for file_info in batch:
-                    file_path = Path(file_info.path)
+                new_count += 1
+                files_to_process.append(file_info)
 
-                    try:
-                        with FileProcessingContext(
-                            str(file_path),
-                            progress,
-                            timeout_seconds=per_file_timeout if timeout_enabled else None,
-                            heartbeat_interval=heartbeat_interval
-                        ) as ctx:
-                            ctx.set_phase("Loading file")
-                            docs = data_source.load_file(file_info, ctx)
+        # Identify Deleted Files
+        deleted_files = set(tracked_files.keys()) - found_files
 
-                            # Accumulate documents
-                            file_doc_ids[file_info.path] = []
-                            for doc in docs:
-                                accumulated_docs.append(doc)
-                                doc_to_file_mapping[doc.doc_id] = file_info
-                                file_doc_ids[file_info.path].append(doc.doc_id)
+        # Build summary suffix
+        parts = []
+        if new_count:
+            parts.append(f"{new_count} new")
+        if modified_count:
+            parts.append(f"{modified_count} modified")
+        if deleted_files:
+            parts.append(f"{len(deleted_files)} deleted")
+        ui.step_done(", ".join(parts) if parts else "no changes")
 
-                    except FileProcessingTimeoutError as e:
-                        logger.error(f"Timeout: {e}")
-                        continue
-                    except Exception as e:
-                        logger.error(f"Error loading {file_path}: {e}")
-                        continue
-                    finally:
-                        progress.update()
+        # Process deletions
+        for deleted_path in deleted_files:
+            doc_ids = tracked_files[deleted_path]["doc_ids"]
+            for doc_id in doc_ids:
+                try:
+                    index.delete_ref_doc(doc_id, delete_from_docstore=True)
+                except Exception as e:
+                    logger.warning(f"Failed to delete doc {doc_id} from index: {e}")
+            get_heading_store().remove_headings(deleted_path)
+            ingestion_state.remove_file_state(deleted_path)
 
-            # Batch embedding for this batch
-            if accumulated_docs:
-                logger.info(f"Batch embedding {len(accumulated_docs)} documents from {len(batch)} files...")
-                with Spinner(f"Converting {len(accumulated_docs)} documents to nodes"):
-                    nodes = text_splitter.get_nodes_from_documents(accumulated_docs)
+        if not files_to_process and not deleted_files:
+            ui.print("Index is up to date.")
+            return
 
-                logger.info(f"Embedding and indexing {len(nodes)} nodes...")
-                with Spinner(f"Embedding {len(nodes)} nodes"):
-                    index.insert_nodes(nodes)
+        # Process New/Modified Files
+        if files_to_process:
+            # Get configuration
+            timeout_enabled = cfgload.get("indexing.timeout.enabled", True)
+            per_file_timeout = cfgload.get("indexing.timeout.per_file_seconds", 300)
+            heartbeat_interval = cfgload.get("indexing.timeout.heartbeat_interval_seconds", 2)
 
-            # Batch update state for this batch
-            state_updates = []
-            for file_path, doc_ids in file_doc_ids.items():
-                if doc_ids:
-                    file_info = doc_to_file_mapping[doc_ids[0]]
-                    state_updates.append((file_info, doc_ids))
+            # Checkpointing and batching configuration
+            checkpoint_interval_files = cfgload.get("indexing.checkpoint_interval_files", 50)
+            checkpoint_interval_seconds = cfgload.get("indexing.checkpoint_interval_seconds", 300)
 
-            if state_updates:
-                ingestion_state.update_file_states_batch(state_updates)
+            # Adaptive batch sizing
+            enable_adaptive_batching = cfgload.get("indexing.enable_adaptive_batching", True)
+            max_memory_mb = cfgload.get("indexing.max_memory_mb", 2048)
 
-            # Checkpoint after each batch
-            files_since_checkpoint += len(batch)
-            elapsed = time.time() - last_checkpoint_time
+            if enable_adaptive_batching:
+                optimal_batch_size = calculate_optimal_batch_size(
+                    num_files=len(files_to_process),
+                    avg_chunks_per_file=10,
+                    max_memory_mb=max_memory_mb
+                )
+                batch_size = min(checkpoint_interval_files, optimal_batch_size)
+            else:
+                batch_size = checkpoint_interval_files
 
-            logger.info(f"Creating checkpoint after processing {files_since_checkpoint} files...")
-            index.storage_context.persist(persist_dir=str(STORAGE_DIR))
+            # Delete old versions of modified files
+            ui.step_start("Removing old versions of modified files")
+            for file_info in files_to_process:
+                existing_state = tracked_files.get(file_info.path)
+                if existing_state:
+                    for doc_id in existing_state["doc_ids"]:
+                        try:
+                            index.delete_ref_doc(doc_id, delete_from_docstore=True)
+                        except KeyError:
+                            pass
+            ui.step_done()
 
-            # Flush HeadingStore
-            with get_heading_store() as store:
-                pass  # Context manager will auto-flush
-
+            # Process files in batches with checkpointing
+            total_files = len(files_to_process)
             files_since_checkpoint = 0
             last_checkpoint_time = time.time()
 
-    # Final checkpoint - ensure all data is persisted
-    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Creating final checkpoint to {STORAGE_DIR}")
-    index.storage_context.persist(persist_dir=str(STORAGE_DIR))
+            ui.progress_start(total_files, desc="Processing files", unit="file")
 
-    # Flush HeadingStore one final time
-    get_heading_store().flush()
+            # Get parallel loading configuration
+            max_workers = cfgload.get("indexing.parallel_workers", 4)
+            enable_parallel = cfgload.get("indexing.enable_parallel_loading", True)
 
-    # Build BM25 index for file name matching
-    build_bm25_index(index, STORAGE_DIR)
+            batch_num = 0
+            total_batches = (total_files + batch_size - 1) // batch_size
 
-    logger.info("Indexing complete.")
+            for batch in batched(files_to_process, batch_size):
+                batch_num += 1
+
+                # Resume progress bar if paused from previous batch
+                if batch_num > 1:
+                    ui.progress_resume()
+
+                # Load files in this batch
+                accumulated_docs = []
+                doc_to_file_mapping = {}
+                file_doc_ids = {}
+
+                if enable_parallel and len(batch) > 1:
+                    file_docs = load_files_parallel(
+                        batch,
+                        data_source,
+                        ui,
+                        max_workers=max_workers,
+                        timeout_enabled=timeout_enabled,
+                        per_file_timeout=per_file_timeout,
+                        heartbeat_interval=heartbeat_interval
+                    )
+
+                    for file_path, (file_info, docs) in file_docs.items():
+                        file_doc_ids[file_path] = []
+                        for doc in docs:
+                            accumulated_docs.append(doc)
+                            doc_to_file_mapping[doc.doc_id] = file_info
+                            file_doc_ids[file_path].append(doc.doc_id)
+                else:
+                    for file_info in batch:
+                        file_path = Path(file_info.path)
+
+                        try:
+                            with FileProcessingContext(
+                                str(file_path),
+                                ui,
+                                timeout_seconds=per_file_timeout if timeout_enabled else None,
+                                heartbeat_interval=heartbeat_interval
+                            ) as ctx:
+                                ctx.set_phase("Loading file")
+                                docs = data_source.load_file(file_info, ctx)
+
+                                file_doc_ids[file_info.path] = []
+                                for doc in docs:
+                                    accumulated_docs.append(doc)
+                                    doc_to_file_mapping[doc.doc_id] = file_info
+                                    file_doc_ids[file_info.path].append(doc.doc_id)
+
+                        except FileProcessingTimeoutError as e:
+                            logger.error(f"Timeout: {e}")
+                            continue
+                        except Exception as e:
+                            logger.error(f"Error loading {file_path}: {e}")
+                            continue
+                        finally:
+                            ui.progress_update()
+
+                # Pause progress bar for embedding steps
+                ui.progress_pause()
+
+                # Batch embedding
+                if accumulated_docs:
+                    ui.step_start(f"Converting {len(accumulated_docs)} documents to nodes")
+                    nodes = text_splitter.get_nodes_from_documents(accumulated_docs)
+                    ui.step_done()
+
+                    batch_label = f" (batch {batch_num}/{total_batches})" if total_batches > 1 else ""
+                    ui.step_start(f"Embedding {len(nodes)} nodes{batch_label}")
+                    index.insert_nodes(nodes)
+                    ui.step_done()
+
+                # Batch update state
+                state_updates = []
+                for file_path, doc_ids in file_doc_ids.items():
+                    if doc_ids:
+                        file_info = doc_to_file_mapping[doc_ids[0]]
+                        state_updates.append((file_info, doc_ids))
+
+                if state_updates:
+                    ingestion_state.update_file_states_batch(state_updates)
+
+                # Checkpoint after each batch
+                files_since_checkpoint += len(batch)
+                index.storage_context.persist(persist_dir=str(STORAGE_DIR))
+
+                with get_heading_store() as store:
+                    pass  # Context manager will auto-flush
+
+                files_since_checkpoint = 0
+                last_checkpoint_time = time.time()
+
+        # Final checkpoint
+        STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+        ui.step_start("Persisting final index")
+        index.storage_context.persist(persist_dir=str(STORAGE_DIR))
+        get_heading_store().flush()
+        ui.step_done()
+
+        ui.step_start("Building BM25 index")
+        build_bm25_index(index, STORAGE_DIR)
+        ui.step_done()
+
+        ui.print(f"\nIndexing complete. {len(files_to_process)} files processed.")
 
 
 if __name__ == "__main__":

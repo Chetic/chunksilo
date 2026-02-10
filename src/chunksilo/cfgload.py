@@ -112,6 +112,8 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     """Deep merge override into base, returning a new dict."""
     result = base.copy()
     for key, value in override.items():
+        if value is None and key in result and isinstance(result[key], dict):
+            continue  # Skip None overrides for dict sections (e.g., commented-out YAML)
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
             result[key] = _deep_merge(result[key], value)
         else:
