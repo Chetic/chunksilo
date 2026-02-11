@@ -5,8 +5,8 @@
 indexing:
   directories:
     - "./data"
-  # chunk_size: 1600
-  # chunk_overlap: 200
+  # chunk_size: 512
+  # chunk_overlap: 50
 
   ## Per-directory defaults (applied to all directories unless overridden)
   # defaults:
@@ -15,11 +15,12 @@ indexing:
   #   recursive: true
 
   ## Performance tuning
-  # parallel_workers: 4
+  # batch_size: 200
+  # parallel_workers: 8
   # enable_parallel_loading: true
   # enable_adaptive_batching: true
   # max_memory_mb: 2048
-  # checkpoint_interval_files: 50
+  # checkpoint_interval_files: 500
   # checkpoint_interval_seconds: 300
 
   ## Timeout protection

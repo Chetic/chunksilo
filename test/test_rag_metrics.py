@@ -717,8 +717,8 @@ def run_rag_metrics_tests() -> Dict[str, Any]:
             **index_mod._config,
             "indexing": {
                 "directories": [str(TEST_DATA_DIR)],
-                "chunk_size": 1600,
-                "chunk_overlap": 200,
+                "chunk_size": 512,
+                "chunk_overlap": 50,
             },
         }
 

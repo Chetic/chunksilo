@@ -103,8 +103,8 @@ class DirectoryConfig:
 class IndexConfig:
     """Complete indexing configuration."""
     directories: List[DirectoryConfig]
-    chunk_size: int = 1600
-    chunk_overlap: int = 200
+    chunk_size: int = 512
+    chunk_overlap: int = 50
 
 
 def load_index_config() -> IndexConfig:
@@ -123,8 +123,8 @@ def load_index_config() -> IndexConfig:
             "indexing:\n"
             "  directories:\n"
             '    - "./data"\n'
-            "  chunk_size: 1600\n"
-            "  chunk_overlap: 200\n"
+            "  chunk_size: 512\n"
+            "  chunk_overlap: 50\n"
         )
 
     logger.info("Loading indexing config from config.yaml")
@@ -175,8 +175,8 @@ def _parse_index_config(config_data: dict) -> IndexConfig:
 
     return IndexConfig(
         directories=directories,
-        chunk_size=config_data.get("chunk_size", 1600),
-        chunk_overlap=config_data.get("chunk_overlap", 200),
+        chunk_size=config_data.get("chunk_size", 512),
+        chunk_overlap=config_data.get("chunk_overlap", 50),
     )
 
 
@@ -1801,19 +1801,20 @@ def calculate_optimal_batch_size(
     Returns:
         Optimal batch size (number of files to process together)
     """
-    # Each embedding: dims × 4 bytes (float32)
-    bytes_per_embedding = embedding_dims * 4
+    # Per-chunk memory estimate: embedding vector + source text + metadata overhead.
+    # Embedding: dims × 4 bytes (float32) ≈ 1.5 KB for 384 dims.
+    # Source text: ~2 KB avg per chunk (512 tokens ≈ ~2 KB).
+    # LlamaIndex node overhead (metadata, doc_id, relationships): ~2 KB.
+    # Total: ~5.5 KB per chunk. Use 6 KB as conservative estimate.
+    bytes_per_chunk = max(embedding_dims * 4, 6 * 1024)
 
-    # Estimate total memory for all files
     total_chunks = num_files * avg_chunks_per_file
-    total_memory_mb = (total_chunks * bytes_per_embedding) / (1024 * 1024)
+    total_memory_mb = (total_chunks * bytes_per_chunk) / (1024 * 1024)
 
     if total_memory_mb <= max_memory_mb:
-        # Can process all files at once
         return num_files
     else:
-        # Calculate batch size to stay under memory limit
-        max_chunks = int((max_memory_mb * 1024 * 1024) / bytes_per_embedding)
+        max_chunks = int((max_memory_mb * 1024 * 1024) / bytes_per_chunk)
         batch_size = max(1, int(max_chunks / avg_chunks_per_file))
         return min(batch_size, num_files)
 
@@ -2032,23 +2033,23 @@ def build_index(
             per_file_timeout = cfgload.get("indexing.timeout.per_file_seconds", 300)
             heartbeat_interval = cfgload.get("indexing.timeout.heartbeat_interval_seconds", 2)
 
-            # Checkpointing and batching configuration
-            checkpoint_interval_files = cfgload.get("indexing.checkpoint_interval_files", 50)
+            # Checkpointing configuration (controls how often we persist to disk)
+            checkpoint_interval_files = cfgload.get("indexing.checkpoint_interval_files", 500)
             checkpoint_interval_seconds = cfgload.get("indexing.checkpoint_interval_seconds", 300)
 
-            # Adaptive batch sizing
+            # Batch sizing (controls how many files are loaded/embedded together)
+            configured_batch_size = cfgload.get("indexing.batch_size", 200)
             enable_adaptive_batching = cfgload.get("indexing.enable_adaptive_batching", True)
             max_memory_mb = cfgload.get("indexing.max_memory_mb", 2048)
 
             if enable_adaptive_batching:
                 optimal_batch_size = calculate_optimal_batch_size(
                     num_files=len(files_to_process),
-                    avg_chunks_per_file=10,
                     max_memory_mb=max_memory_mb
                 )
-                batch_size = min(checkpoint_interval_files, optimal_batch_size)
+                batch_size = min(configured_batch_size, optimal_batch_size)
             else:
-                batch_size = checkpoint_interval_files
+                batch_size = configured_batch_size
 
             # Delete old versions of modified files
             ui.step_start("Removing old versions of modified files")
@@ -2170,15 +2171,19 @@ def build_index(
                 if state_updates:
                     ingestion_state.update_file_states_batch(state_updates)
 
-                # Checkpoint after each batch
+                # Checkpoint only when interval thresholds are met
                 files_since_checkpoint += len(batch)
-                index.storage_context.persist(persist_dir=str(STORAGE_DIR))
-
-                with get_heading_store() as store:
-                    pass  # Context manager will auto-flush
-
-                files_since_checkpoint = 0
-                last_checkpoint_time = time.time()
+                elapsed = time.time() - last_checkpoint_time
+                should_checkpoint = (
+                    files_since_checkpoint >= checkpoint_interval_files
+                    or elapsed >= checkpoint_interval_seconds
+                )
+                if should_checkpoint:
+                    index.storage_context.persist(persist_dir=str(STORAGE_DIR))
+                    with get_heading_store() as store:
+                        pass  # Context manager will auto-flush
+                    files_since_checkpoint = 0
+                    last_checkpoint_time = time.time()
 
         # Final checkpoint
         STORAGE_DIR.mkdir(parents=True, exist_ok=True)
