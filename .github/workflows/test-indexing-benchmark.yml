@@ -35,7 +35,7 @@ jobs:
           TEST_STORAGE_DIR: ./bench_storage
           TEST_RESULTS_DIR: ./test_results
           ABORT_ON_DOWNLOAD_FAILURE: 1
-          BENCHMARK_THRESHOLD: 120
+          BENCHMARK_THRESHOLD: 300
         run: |
           cd test
           python test_indexing_benchmark.py

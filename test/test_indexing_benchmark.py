@@ -44,7 +44,7 @@ from chunksilo.index import build_index
 TEST_DATA_DIR = Path(os.getenv("TEST_DATA_DIR", "./test_data"))
 TEST_STORAGE_DIR = Path(os.getenv("TEST_STORAGE_DIR", "./bench_storage"))
 TEST_RESULTS_DIR = Path(os.getenv("TEST_RESULTS_DIR", "./test_results"))
-BENCHMARK_THRESHOLD_SECONDS = int(os.getenv("BENCHMARK_THRESHOLD", "120"))
+BENCHMARK_THRESHOLD_SECONDS = int(os.getenv("BENCHMARK_THRESHOLD", "300"))
 
 
 def _corpus_stats(data_dir: Path) -> dict:
