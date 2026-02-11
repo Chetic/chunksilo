@@ -139,6 +139,14 @@ class TestProgressMode:
         output = _output(ui)
         assert "⠹" in output
 
+    def test_progress_update_preserves_file(self, ui):
+        """progress_update does not clear the current file sub-line."""
+        ui.progress_start(10)
+        ui.progress_set_file("/path/to/report.pdf", "Loading")
+        ui.progress_update(1)
+        output = _output(ui)
+        assert "report.pdf" in output
+
     def test_progress_done_completes(self, ui):
         """progress_done exits progress mode cleanly."""
         ui.progress_start(2)

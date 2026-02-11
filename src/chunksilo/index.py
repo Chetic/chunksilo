@@ -985,9 +985,6 @@ class IndexingUI:
             if not self._progress_active or self._progress_total <= 0:
                 return
             self._progress_current = min(self._progress_total, self._progress_current + step)
-            self._progress_file = ""
-            self._progress_phase = ""
-            self._progress_heartbeat = ""
             self._render_progress()
 
     def progress_set_file(self, file_path: str, phase: str = "") -> None:
@@ -1318,9 +1315,6 @@ class FileProcessingContext:
                 logger.warning(
                     f"Slow file processing: {self.file_path} took {duration:.1f}s"
                 )
-
-        # Clear file indicator
-        self.ui.progress_set_file("", "")
 
         # Don't suppress exceptions
         return False
