@@ -628,6 +628,9 @@ class LocalFileSystemSource(DataSource):
         ctx: "FileProcessingContext | None" = None
     ) -> List[LlamaIndexDocument]:
         file_path = Path(file_info.path)
+        if not file_path.exists():
+            logger.warning(f"Skipping disappeared file: {file_path}")
+            return []
         if file_path.suffix.lower() == ".docx":
             if ctx:
                 ctx.set_phase("Parsing DOCX")
