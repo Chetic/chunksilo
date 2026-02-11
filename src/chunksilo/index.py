@@ -792,16 +792,16 @@ class IndexingUI:
 
         # ANSI color codes (disabled when stream is not a TTY)
         _s = self._stream
-        _tty = hasattr(_s, "isatty") and _s.isatty()
-        self.RESET = "\033[0m" if _tty else ""
-        self.BOLD = "\033[1m" if _tty else ""
-        self.DIM = "\033[2m" if _tty else ""
-        self.GREEN = "\033[32m" if _tty else ""
-        self.YELLOW = "\033[33m" if _tty else ""
-        self.CYAN = "\033[36m" if _tty else ""
-        self.RED = "\033[31m" if _tty else ""
-        self.BOLD_GREEN = "\033[1;32m" if _tty else ""
-        self.BOLD_CYAN = "\033[1;36m" if _tty else ""
+        self._tty = hasattr(_s, "isatty") and _s.isatty()
+        self.RESET = "\033[0m" if self._tty else ""
+        self.BOLD = "\033[1m" if self._tty else ""
+        self.DIM = "\033[2m" if self._tty else ""
+        self.GREEN = "\033[32m" if self._tty else ""
+        self.YELLOW = "\033[33m" if self._tty else ""
+        self.CYAN = "\033[36m" if self._tty else ""
+        self.RED = "\033[31m" if self._tty else ""
+        self.BOLD_GREEN = "\033[1;32m" if self._tty else ""
+        self.BOLD_CYAN = "\033[1;36m" if self._tty else ""
 
         # Step/spinner state
         self._step_message: str | None = None
@@ -820,6 +820,7 @@ class IndexingUI:
         self._progress_phase = ""
         self._progress_heartbeat = ""
         self._progress_has_subline = False
+        self._progress_last_pct = -1  # last printed percentage (non-TTY)
 
         # Output suppression state (populated by _suppress_output)
         self._orig_stdout = None
@@ -849,6 +850,9 @@ class IndexingUI:
         with self._lock:
             self._step_message = message
             self._step_stop.clear()
+            if not self._tty:
+                self._write(f"{message}... ")
+                return
             self._write(f"\r{self.BOLD}{message}{self.RESET}... ")
         self._step_thread = threading.Thread(target=self._step_spin, daemon=True)
         self._step_thread.start()
@@ -862,6 +866,9 @@ class IndexingUI:
         with self._lock:
             msg = self._step_message or ""
             self._step_message = None
+            if not self._tty:
+                self._write(f"{suffix}\n")
+                return
             colored_suffix = self._color_suffix(suffix)
             self._write(f"\r{self.BOLD}{msg}{self.RESET}... {colored_suffix}\033[K\n")
 
@@ -892,6 +899,7 @@ class IndexingUI:
             self._progress_phase = ""
             self._progress_heartbeat = ""
             self._progress_has_subline = False
+            self._progress_last_pct = -1
             if self._progress_total > 0:
                 self._render_progress()
 
@@ -947,13 +955,21 @@ class IndexingUI:
         with self._lock:
             if not self._progress_active:
                 return
-            # Render final state
-            self._render_progress()
-            # Move past the progress area
-            if self._progress_has_subline:
-                self._write("\n\n")
+            if not self._tty:
+                # Print final 100% line if not already printed
+                if self._progress_last_pct < 100 and self._progress_total > 0:
+                    self._write(
+                        f"{self._progress_desc} "
+                        f"[{self._progress_total}/{self._progress_total}] 100%\n"
+                    )
             else:
-                self._write("\n")
+                # Render final state
+                self._render_progress()
+                # Move past the progress area
+                if self._progress_has_subline:
+                    self._write("\n\n")
+                else:
+                    self._write("\n")
             self._progress_active = False
             self._progress_paused = False
             self._progress_has_subline = False
@@ -963,6 +979,22 @@ class IndexingUI:
         if self._progress_total <= 0:
             return
         progress = self._progress_current / self._progress_total
+
+        if not self._tty:
+            # Non-TTY: print a simple line every 10% to avoid log spam
+            pct_int = int(progress * 100)
+            threshold = (pct_int // 10) * 10
+            if threshold <= self._progress_last_pct:
+                return
+            self._progress_last_pct = threshold
+            self._stream.write(
+                f"{self._progress_desc} "
+                f"[{self._progress_current}/{self._progress_total}] "
+                f"{pct_int}%\n"
+            )
+            self._stream.flush()
+            return
+
         filled = int(self._progress_width * progress)
         bar_filled = f"{self.GREEN}{'█' * filled}{self.RESET}"
         bar_empty = f"{self.DIM}{'░' * (self._progress_width - filled)}{self.RESET}"
@@ -1005,6 +1037,8 @@ class IndexingUI:
 
     def _clear_progress_area(self) -> None:
         """Clear progress bar lines from terminal. Must hold lock."""
+        if not self._tty:
+            return
         if self._progress_has_subline:
             self._stream.write("\033[1A\r\033[K\n\033[K\033[1A\r")
         else:
@@ -1179,6 +1213,16 @@ class FileProcessingContext:
 
     def _heartbeat_loop(self) -> None:
         """Background thread that updates heartbeat indicator."""
+        if not self.ui._tty:
+            # Non-TTY: only monitor for timeouts, skip animation
+            while not self._stop_event.is_set():
+                try:
+                    self._check_timeout()
+                except FileProcessingTimeoutError:
+                    break
+                time.sleep(self.heartbeat_interval)
+            return
+
         spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         idx = 0
 

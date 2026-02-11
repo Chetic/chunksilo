@@ -6,27 +6,41 @@ without needing a real terminal. No ML models or filesystem indexing required.
 """
 import io
 import logging
+import re
 import sys
 import threading
 import time
 
 import pytest
 
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
+
+class _FakeTTY(io.StringIO):
+    """StringIO that pretends to be a TTY for interactive output testing."""
+    def isatty(self):
+        return True
+
 
 def _make_ui(stream=None):
     """Create an IndexingUI with a local import (avoids module-level config init)."""
     from chunksilo.index import IndexingUI
-    return IndexingUI(stream=stream or io.StringIO())
+    return IndexingUI(stream=stream or _FakeTTY())
 
 
 @pytest.fixture
 def ui():
-    """Create an IndexingUI that writes to a StringIO buffer."""
+    """Create an IndexingUI that writes to a fake TTY buffer."""
     return _make_ui()
 
 
 def _output(ui) -> str:
-    """Return all output written so far."""
+    """Return all output written so far, with ANSI escape codes stripped."""
+    return _ANSI_RE.sub("", ui._stream.getvalue())
+
+
+def _raw_output(ui) -> str:
+    """Return all raw output written so far, including ANSI codes."""
     return ui._stream.getvalue()
 
 
@@ -387,21 +401,16 @@ class TestPrint:
 # =============================================================================
 
 
-class _FakeTTY(io.StringIO):
-    """StringIO that pretends to be a TTY for color testing."""
-    def isatty(self):
-        return True
-
-
-def _make_tty_ui():
-    """Create an IndexingUI with a fake TTY stream to enable colors."""
+def _make_non_tty_ui():
+    """Create an IndexingUI with a plain StringIO (non-TTY) stream."""
     from chunksilo.index import IndexingUI
-    return IndexingUI(stream=_FakeTTY())
+    return IndexingUI(stream=io.StringIO())
 
 
 class TestColorSupport:
-    def test_non_tty_has_no_color_codes(self, ui):
+    def test_non_tty_has_no_color_codes(self):
         """Non-TTY stream (StringIO) produces no ANSI color codes."""
+        ui = _make_non_tty_ui()
         assert ui.GREEN == ""
         assert ui.RESET == ""
         assert ui.BOLD == ""
@@ -409,7 +418,7 @@ class TestColorSupport:
 
     def test_tty_has_color_codes(self):
         """TTY stream produces ANSI color codes."""
-        ui = _make_tty_ui()
+        ui = _make_ui()
         assert ui.GREEN == "\033[32m"
         assert ui.RESET == "\033[0m"
         assert ui.BOLD == "\033[1m"
@@ -417,37 +426,37 @@ class TestColorSupport:
 
     def test_tty_step_done_has_green_suffix(self):
         """On TTY, step_done('done') includes green ANSI code."""
-        ui = _make_tty_ui()
+        ui = _make_ui()
         ui.step_start("Loading")
         time.sleep(0.05)
         ui.step_done()
-        output = ui._stream.getvalue()
+        output = _raw_output(ui)
         assert "\033[32mdone\033[0m" in output
 
     def test_tty_step_done_skipped_has_yellow(self):
         """On TTY, step_done('skipped') includes yellow ANSI code."""
-        ui = _make_tty_ui()
+        ui = _make_ui()
         ui.step_start("Check")
         time.sleep(0.05)
         ui.step_done("skipped")
-        output = ui._stream.getvalue()
+        output = _raw_output(ui)
         assert "\033[33mskipped\033[0m" in output
 
     def test_tty_step_done_interrupted_has_red(self):
         """On TTY, step_done('interrupted') includes red ANSI code."""
-        ui = _make_tty_ui()
+        ui = _make_ui()
         ui.step_start("Running")
         time.sleep(0.05)
         ui.step_done("interrupted")
-        output = ui._stream.getvalue()
+        output = _raw_output(ui)
         assert "\033[31minterrupted\033[0m" in output
 
     def test_tty_progress_bar_uses_block_chars(self):
         """On TTY, progress bar uses █ and ░ instead of # and -."""
-        ui = _make_tty_ui()
+        ui = _make_ui()
         ui.progress_start(10, "Files")
         ui.progress_update(5)
-        output = ui._stream.getvalue()
+        output = _raw_output(ui)
         assert "█" in output
         assert "░" in output
         assert "#" not in output
@@ -455,16 +464,16 @@ class TestColorSupport:
 
     def test_tty_success_has_bold_green(self):
         """On TTY, success() wraps message in bold green."""
-        ui = _make_tty_ui()
+        ui = _make_ui()
         ui.success("Done!")
-        output = ui._stream.getvalue()
+        output = _raw_output(ui)
         assert "\033[1;32mDone!\033[0m" in output
 
     def test_tty_error_has_red(self):
         """On TTY, error() wraps message in red."""
-        ui = _make_tty_ui()
+        ui = _make_ui()
         ui.error("Failed!")
-        output = ui._stream.getvalue()
+        output = _raw_output(ui)
         assert "\033[31mFailed!\033[0m" in output
 
 
@@ -476,12 +485,12 @@ class TestColorSupport:
 class TestSpinnerClearLine:
     def test_spinner_writes_include_clear_eol(self):
         """Spinner animation includes \\033[K to prevent traces."""
-        ui = _make_tty_ui()
+        ui = _make_ui()
         ui.step_start("Working")
         # Let spinner write at least one frame
         time.sleep(0.15)
         ui.step_done()
-        output = ui._stream.getvalue()
+        output = _raw_output(ui)
         # Spinner frames should include \033[K (clear to end of line)
         # Find a spinner character followed by the clear code
         spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -490,3 +499,54 @@ class TestSpinnerClearLine:
             for ch in spinner_chars
         )
         assert has_clear, "Spinner frames should include \\033[K to clear line remnants"
+
+
+# =============================================================================
+# Non-TTY (CI) mode tests
+# =============================================================================
+
+
+class TestNonTTYMode:
+    """In non-TTY mode (CI), output should be simple static lines with no animation."""
+
+    def test_step_no_spinner(self):
+        """Non-TTY step_start + step_done produces a single line, no spinner."""
+        ui = _make_non_tty_ui()
+        ui.step_start("Embedding 375 nodes")
+        time.sleep(0.15)
+        ui.step_done()
+        output = ui._stream.getvalue()
+        assert output == "Embedding 375 nodes... done\n"
+
+    def test_step_no_ansi_escapes(self):
+        """Non-TTY step output contains no ANSI escape codes."""
+        ui = _make_non_tty_ui()
+        ui.step_start("Loading")
+        ui.step_done("skipped")
+        output = ui._stream.getvalue()
+        assert "\033[" not in output
+        assert "\r" not in output
+
+    def test_progress_prints_milestones(self):
+        """Non-TTY progress prints at 10% intervals, not every update."""
+        ui = _make_non_tty_ui()
+        ui.progress_start(100, "Processing")
+        for _ in range(100):
+            ui.progress_update(1)
+        ui.progress_done()
+        output = ui._stream.getvalue()
+        lines = [l for l in output.strip().split("\n") if l]
+        # 0%, 10%, 20%, ... 100% = 11 lines
+        assert len(lines) == 11
+        assert "Processing [0/100] 0%" in lines[0]
+        assert "Processing [100/100] 100%" in lines[-1]
+
+    def test_progress_no_ansi_escapes(self):
+        """Non-TTY progress output contains no ANSI escape codes."""
+        ui = _make_non_tty_ui()
+        ui.progress_start(10, "Files")
+        ui.progress_update(10)
+        ui.progress_done()
+        output = ui._stream.getvalue()
+        assert "\033[" not in output
+        assert "\r" not in output
