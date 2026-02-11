@@ -10,6 +10,7 @@ import itertools
 import json
 import logging
 import os
+import signal
 import sqlite3
 import sys
 import threading
@@ -1955,6 +1956,7 @@ def load_files_parallel(
     timeout_enabled: bool = True,
     per_file_timeout: float = 300,
     heartbeat_interval: float = 2.0,
+    abort_ctl: "GracefulAbort | None" = None,
 ) -> Dict[str, Tuple[FileInfo, List[Any]]]:
     """Load files in parallel using ThreadPoolExecutor.
 
@@ -1966,6 +1968,7 @@ def load_files_parallel(
         timeout_enabled: Whether to enable per-file timeout
         per_file_timeout: Timeout in seconds per file
         heartbeat_interval: Heartbeat interval in seconds
+        abort_ctl: Optional GracefulAbort instance for Ctrl-C handling
 
     Returns:
         Dict mapping file path to (FileInfo, List[LlamaIndexDocument])
@@ -2000,6 +2003,11 @@ def load_files_parallel(
 
         # Collect results as they complete
         for future in as_completed(future_to_file):
+            if abort_ctl and abort_ctl.abort_requested:
+                for f in future_to_file:
+                    f.cancel()
+                break
+
             file_info = future_to_file[future]
             try:
                 result_file_info, docs = future.result(timeout=per_file_timeout + 10)
@@ -2011,6 +2019,46 @@ def load_files_parallel(
                 ui.progress_update()
 
     return file_docs
+
+
+class GracefulAbort:
+    """Two-stage Ctrl-C handler for the indexing pipeline.
+
+    First Ctrl-C:  sets abort flag and restores default SIGINT so a second
+                   Ctrl-C raises KeyboardInterrupt immediately.
+    """
+
+    def __init__(self, ui: "IndexingUI"):
+        self._abort = False
+        self._ui = ui
+        self._original_handler = None
+
+    @property
+    def abort_requested(self) -> bool:
+        return self._abort
+
+    def install(self) -> None:
+        """Register the custom SIGINT handler. Must be called from the main thread."""
+        self._original_handler = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT, self._handle_sigint)
+
+    def uninstall(self) -> None:
+        """Restore the original SIGINT handler."""
+        if self._original_handler is not None:
+            signal.signal(signal.SIGINT, self._original_handler)
+            self._original_handler = None
+
+    def _handle_sigint(self, signum, frame):
+        self._abort = True
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        self._ui.print(
+            f"\n{self._ui.YELLOW}Ctrl-C received. "
+            f"Finishing current batch and saving state...{self._ui.RESET}"
+        )
+        self._ui.print(
+            f"{self._ui.DIM}(Press Ctrl-C again to force quit immediately)"
+            f"{self._ui.RESET}"
+        )
 
 
 def build_index(
@@ -2047,6 +2095,9 @@ def build_index(
     index_config = load_index_config()
 
     with IndexingUI(verbose=verbose) as ui:
+        abort_ctl = GracefulAbort(ui)
+        abort_ctl.install()
+
         # Model caching
         ui.step_start("Checking embedding model cache")
         ensure_embedding_model_cached(cache_dir, offline=offline)
@@ -2086,6 +2137,11 @@ def build_index(
         Settings.embed_model = embed_model
         ui.step_done()
 
+        if abort_ctl.abort_requested:
+            abort_ctl.uninstall()
+            ui.print(f"{ui.YELLOW}Interrupted during initialization. No changes made.{ui.RESET}")
+            return
+
         # Configure Text Splitter using config values
         text_splitter = SentenceSplitter(
             chunk_size=index_config.chunk_size,
@@ -2115,6 +2171,8 @@ def build_index(
 
         ui.step_start("Scanning for changes")
         for file_info in data_source.iter_files(tracked_files=tracked_files):
+            if abort_ctl.abort_requested:
+                break
             found_files.add(file_info.path)
             existing_state = tracked_files.get(file_info.path)
 
@@ -2125,6 +2183,12 @@ def build_index(
             else:
                 new_count += 1
                 files_to_process.append(file_info)
+
+        if abort_ctl.abort_requested:
+            ui.step_done("interrupted")
+            abort_ctl.uninstall()
+            ui.print(f"{ui.YELLOW}Interrupted during scan. No changes made.{ui.RESET}")
+            return
 
         # Identify Deleted Files
         deleted_files = set(tracked_files.keys()) - found_files
@@ -2206,6 +2270,9 @@ def build_index(
             total_batches = (total_files + batch_size - 1) // batch_size
 
             for batch in batched(files_to_process, batch_size):
+                if abort_ctl.abort_requested:
+                    break
+
                 batch_num += 1
 
                 # Load files in this batch
@@ -2221,7 +2288,8 @@ def build_index(
                         max_workers=max_workers,
                         timeout_enabled=timeout_enabled,
                         per_file_timeout=per_file_timeout,
-                        heartbeat_interval=heartbeat_interval
+                        heartbeat_interval=heartbeat_interval,
+                        abort_ctl=abort_ctl,
                     )
 
                     for file_path, (file_info, docs) in file_docs.items():
@@ -2232,6 +2300,8 @@ def build_index(
                             file_doc_ids[file_path].append(doc.doc_id)
                 else:
                     for file_info in batch:
+                        if abort_ctl.abort_requested:
+                            break
                         file_path = Path(file_info.path)
 
                         try:
@@ -2306,6 +2376,26 @@ def build_index(
                     files_since_checkpoint = 0
                     last_checkpoint_time = time.time()
 
+                if abort_ctl.abort_requested:
+                    break
+
+            # Handle graceful abort after batch loop
+            if abort_ctl.abort_requested:
+                ui.progress_done()
+                ui.step_start("Saving checkpoint before exit")
+                STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+                index.storage_context.persist(persist_dir=str(STORAGE_DIR))
+                get_heading_store().flush()
+                ui.step_done()
+                processed = ui._progress_current
+                abort_ctl.uninstall()
+                ui.print(
+                    f"{ui.YELLOW}Indexing interrupted. "
+                    f"{processed} of {total_files} files processed. "
+                    f"Run again to continue.{ui.RESET}"
+                )
+                return
+
         # Final checkpoint
         STORAGE_DIR.mkdir(parents=True, exist_ok=True)
         ui.step_start("Persisting final index")
@@ -2317,6 +2407,7 @@ def build_index(
         build_bm25_index(index, STORAGE_DIR)
         ui.step_done()
 
+        abort_ctl.uninstall()
         ui.success(f"\nIndexing complete. {len(files_to_process)} files processed.")
 
 
