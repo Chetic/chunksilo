@@ -11,7 +11,18 @@ indexing:
   ## Per-directory defaults (applied to all directories unless overridden)
   # defaults:
   #   include: ["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx", "**/*.doc"]
-  #   exclude: []
+  #   exclude:
+  #     - "**/.git/**"
+  #     - "**/node_modules/**"
+  #     - "**/__pycache__/**"
+  #     - "**/.venv/**"
+  #     - "**/venv/**"
+  #     - "**/.tox/**"
+  #     - "**/.mypy_cache/**"
+  #     - "**/.pytest_cache/**"
+  #     - "**/.eggs/**"
+  #     - "**/*.egg-info/**"
+  #     - "**/.DS_Store"
   #   recursive: true
 
   ## Performance tuning

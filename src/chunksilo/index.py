@@ -88,6 +88,21 @@ logger = logging.getLogger(__name__)
 # Default file type patterns
 DEFAULT_INCLUDE_PATTERNS = ["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx", "**/*.doc"]
 
+# Default directory/file exclusion patterns — skip common noise directories
+DEFAULT_EXCLUDE_PATTERNS = [
+    "**/.git/**",
+    "**/node_modules/**",
+    "**/__pycache__/**",
+    "**/.venv/**",
+    "**/venv/**",
+    "**/.tox/**",
+    "**/.mypy_cache/**",
+    "**/.pytest_cache/**",
+    "**/.eggs/**",
+    "**/*.egg-info/**",
+    "**/.DS_Store",
+]
+
 
 @dataclass
 class DirectoryConfig:
@@ -95,7 +110,7 @@ class DirectoryConfig:
     path: Path
     enabled: bool = True
     include: List[str] = field(default_factory=lambda: DEFAULT_INCLUDE_PATTERNS.copy())
-    exclude: List[str] = field(default_factory=list)
+    exclude: List[str] = field(default_factory=lambda: DEFAULT_EXCLUDE_PATTERNS.copy())
     recursive: bool = True
 
 
@@ -136,7 +151,7 @@ def _parse_index_config(config_data: dict) -> IndexConfig:
     # Get defaults section
     defaults = config_data.get("defaults", {})
     default_include = defaults.get("include", DEFAULT_INCLUDE_PATTERNS.copy())
-    default_exclude = defaults.get("exclude", [])
+    default_exclude = defaults.get("exclude", DEFAULT_EXCLUDE_PATTERNS.copy())
     default_recursive = defaults.get("recursive", True)
 
     # Parse directories
@@ -387,8 +402,13 @@ class DataSource(ABC):
     """Abstract base class for data sources."""
 
     @abstractmethod
-    def iter_files(self) -> Iterator[FileInfo]:
-        """Yield FileInfo for each file in the source."""
+    def iter_files(self, tracked_files: Dict[str, dict] | None = None) -> Iterator[FileInfo]:
+        """Yield FileInfo for each file in the source.
+
+        Args:
+            tracked_files: Optional dict of previously tracked file states,
+                keyed by absolute path. Used for mtime-based fast pre-check.
+        """
         pass
 
     @abstractmethod
@@ -577,37 +597,87 @@ class LocalFileSystemSource(DataSource):
 
         return False
 
-    def iter_files(self) -> Iterator[FileInfo]:
-        """Yield FileInfo for each matching file in the source."""
+    def _should_skip_directory(self, dir_name: str) -> bool:
+        """Check if a directory should be pruned from os.walk traversal.
+
+        Handles patterns of the form **/<pattern>/** by checking the directory name.
+        """
+        import fnmatch
+
+        for pattern in self.config.exclude:
+            if pattern.startswith('**/') and pattern.endswith('/**'):
+                dir_pattern = pattern[3:-3]  # e.g., "node_modules", ".git", "*venv*"
+                if fnmatch.fnmatch(dir_name, dir_pattern):
+                    return True
+        return False
+
+    def iter_files(self, tracked_files: Dict[str, dict] | None = None) -> Iterator[FileInfo]:
+        """Yield FileInfo for each matching file in the source.
+
+        Args:
+            tracked_files: Optional dict of previously tracked file states,
+                keyed by absolute path. Used for mtime-based fast pre-check.
+        """
         if self.config.recursive:
-            walker = os.walk(self.base_dir)
+            # topdown=True (default) allows pruning dirs in-place
+            for root, dirs, files in os.walk(self.base_dir):
+                # Prune excluded directories in-place to prevent descent
+                dirs[:] = [d for d in dirs if not self._should_skip_directory(d)]
+
+                root_path = Path(root)
+                for file in files:
+                    file_path = root_path / file
+                    if not self._matches_patterns(file_path):
+                        continue
+                    try:
+                        yield self._create_file_info(file_path, tracked_files)
+                    except (OSError, IOError) as e:
+                        logger.warning(f"Could not access file {file_path}: {e}")
+                        continue
         else:
             # Non-recursive: only top-level files
             try:
                 top_files = [
                     f for f in self.base_dir.iterdir() if f.is_file()
                 ]
-                walker = [(str(self.base_dir), [], [f.name for f in top_files])]
             except OSError as e:
                 logger.warning(f"Could not list directory {self.base_dir}: {e}")
                 return
 
-        for root, _, files in walker:
-            for file in files:
-                file_path = Path(root) / file
-
-                # Check patterns
-                if not self._matches_patterns(file_path):
+            for f in top_files:
+                if not self._matches_patterns(f):
                     continue
-
                 try:
-                    yield self._create_file_info(file_path)
+                    yield self._create_file_info(f, tracked_files)
                 except (OSError, IOError) as e:
-                    logger.warning(f"Could not access file {file_path}: {e}")
+                    logger.warning(f"Could not access file {f}: {e}")
                     continue
 
-    def _create_file_info(self, file_path: Path) -> FileInfo:
-        """Create FileInfo with source directory context."""
+    def _create_file_info(
+        self,
+        file_path: Path,
+        tracked_files: Dict[str, dict] | None = None,
+    ) -> FileInfo:
+        """Create FileInfo with source directory context.
+
+        If tracked_files is provided and the file's mtime is unchanged,
+        reuses the cached hash to avoid reading the entire file.
+        """
+        abs_path = str(file_path.absolute())
+        mtime = file_path.stat().st_mtime
+
+        # Fast path: reuse cached hash when mtime is unchanged
+        if tracked_files is not None:
+            cached = tracked_files.get(abs_path)
+            if cached is not None and cached.get("last_modified") == mtime:
+                return FileInfo(
+                    path=abs_path,
+                    hash=cached["hash"],
+                    last_modified=mtime,
+                    source_dir=str(self.base_dir.absolute()),
+                )
+
+        # Slow path: compute MD5
         hasher = hashlib.md5()
         with open(file_path, "rb") as f:
             buf = f.read(65536)
@@ -616,9 +686,9 @@ class LocalFileSystemSource(DataSource):
                 buf = f.read(65536)
 
         return FileInfo(
-            path=str(file_path.absolute()),
+            path=abs_path,
             hash=hasher.hexdigest(),
-            last_modified=file_path.stat().st_mtime,
+            last_modified=mtime,
             source_dir=str(self.base_dir.absolute()),
         )
 
@@ -723,12 +793,12 @@ class MultiDirectoryDataSource(DataSource):
                 self.unavailable_dirs.append(dir_config)
                 logger.warning(f"Directory unavailable, skipping: {dir_config.path}")
 
-    def iter_files(self) -> Iterator[FileInfo]:
+    def iter_files(self, tracked_files: Dict[str, dict] | None = None) -> Iterator[FileInfo]:
         """Iterate over files from all available sources."""
         seen_paths: Set[str] = set()
 
         for source in self.sources:
-            for file_info in source.iter_files():
+            for file_info in source.iter_files(tracked_files=tracked_files):
                 # Deduplicate in case of overlapping mounts
                 if file_info.path not in seen_paths:
                     seen_paths.add(file_info.path)
@@ -1986,7 +2056,7 @@ def build_index(
         modified_count = 0
 
         ui.step_start("Scanning for changes")
-        for file_info in data_source.iter_files():
+        for file_info in data_source.iter_files(tracked_files=tracked_files):
             found_files.add(file_info.path)
             existing_state = tracked_files.get(file_info.path)
 
