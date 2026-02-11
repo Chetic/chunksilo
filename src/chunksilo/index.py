@@ -891,6 +891,10 @@ class IndexingUI:
         self._progress_heartbeat = ""
         self._progress_has_subline = False
         self._progress_last_pct = -1  # last printed percentage (non-TTY)
+        self._progress_substep = ""
+        self._progress_substep_stop = threading.Event()
+        self._progress_substep_thread: threading.Thread | None = None
+        self._progress_substep_idx = 0
 
         # Output suppression state (populated by _suppress_output)
         self._orig_stdout = None
@@ -906,6 +910,8 @@ class IndexingUI:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self._step_message is not None:
             self.step_done("interrupted")
+        if self._progress_substep:
+            self.progress_substep_done()
         if self._progress_active or self._progress_paused:
             self._progress_active = True
             self._progress_paused = False
@@ -1020,6 +1026,58 @@ class IndexingUI:
             self._progress_has_subline = False
             self._render_progress()
 
+    def progress_substep_start(self, message: str) -> None:
+        """Show a substep message on the progress bar sub-line with spinner."""
+        with self._lock:
+            self._progress_substep = message
+            self._progress_file = ""
+            self._progress_phase = ""
+            self._progress_heartbeat = ""
+            self._progress_substep_stop.clear()
+            self._progress_substep_idx = 0
+            if not self._tty:
+                # Print current progress context + substep on one line
+                pct_int = 0
+                if self._progress_total > 0:
+                    pct_int = int(self._progress_current / self._progress_total * 100)
+                self._stream.write(
+                    f"{self._progress_desc} "
+                    f"[{self._progress_current}/{self._progress_total}] "
+                    f"{pct_int}% \u2014 {message}... "
+                )
+                self._stream.flush()
+                return
+            self._render_progress()
+        self._progress_substep_thread = threading.Thread(
+            target=self._substep_spin, daemon=True
+        )
+        self._progress_substep_thread.start()
+
+    def progress_substep_done(self) -> None:
+        """Clear the substep message from the progress bar sub-line."""
+        self._progress_substep_stop.set()
+        if self._progress_substep_thread:
+            self._progress_substep_thread.join()
+            self._progress_substep_thread = None
+        with self._lock:
+            self._progress_substep = ""
+            self._progress_heartbeat = ""
+            if not self._tty:
+                self._stream.write("done\n")
+                self._stream.flush()
+                return
+            self._render_progress()
+
+    def _substep_spin(self) -> None:
+        """Animate spinner on the progress sub-line for substep."""
+        while not self._progress_substep_stop.is_set():
+            with self._lock:
+                if self._progress_substep:
+                    self._progress_heartbeat = self._SPINNER_CHARS[self._progress_substep_idx]
+                    self._render_progress()
+            self._progress_substep_idx = (self._progress_substep_idx + 1) % len(self._SPINNER_CHARS)
+            self._progress_substep_stop.wait(0.1)
+
     def progress_done(self) -> None:
         """Exit progress bar mode."""
         with self._lock:
@@ -1084,8 +1142,14 @@ class IndexingUI:
         )
         self._stream.write(f"\r\033[K{line1}")
 
-        # Line 2: current file
-        if self._progress_file:
+        # Line 2: substep message (priority) or current file
+        if self._progress_substep:
+            subline = f"  {self.DIM}{self._progress_substep}{self.RESET}"
+            if self._progress_heartbeat:
+                subline += f" {self.CYAN}{self._progress_heartbeat}{self.RESET}"
+            self._stream.write(f"\n\033[K{subline}")
+            self._progress_has_subline = True
+        elif self._progress_file:
             file_display = Path(self._progress_file).name
             if len(file_display) > 50:
                 file_display = "..." + file_display[-47:]
@@ -2150,10 +2214,6 @@ def build_index(
             for batch in batched(files_to_process, batch_size):
                 batch_num += 1
 
-                # Resume progress bar if paused from previous batch
-                if batch_num > 1:
-                    ui.progress_resume()
-
                 # Load files in this batch
                 accumulated_docs = []
                 doc_to_file_mapping = {}
@@ -2205,17 +2265,14 @@ def build_index(
                         finally:
                             ui.progress_update()
 
-                # Pause progress bar for embedding steps
-                ui.progress_pause()
-
                 # Batch embedding
                 if accumulated_docs:
-                    ui.step_start(f"Converting {len(accumulated_docs)} documents to nodes")
+                    ui.progress_substep_start(f"Converting {len(accumulated_docs)} documents to nodes")
                     nodes = text_splitter.get_nodes_from_documents(accumulated_docs)
-                    ui.step_done()
+                    ui.progress_substep_done()
 
                     batch_label = f" (batch {batch_num}/{total_batches})" if total_batches > 1 else ""
-                    ui.step_start(f"Embedding {len(nodes)} nodes{batch_label}")
+                    ui.progress_substep_start(f"Embedding {len(nodes)} nodes{batch_label}")
 
                     # Pre-compute embeddings in bulk via FastEmbed ONNX directly,
                     # bypassing LlamaIndex's per-batch instrumentation overhead.
@@ -2229,7 +2286,7 @@ def build_index(
                         node.embedding = emb
 
                     index.insert_nodes(nodes)
-                    ui.step_done()
+                    ui.progress_substep_done()
 
                 # Batch update state
                 state_updates = []
