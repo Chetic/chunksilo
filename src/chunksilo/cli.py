@@ -46,6 +46,8 @@ def main():
                         help="Download required ML models, then exit")
     parser.add_argument("--dump-defaults", action="store_true",
                         help="Print all default configuration values as YAML, then exit")
+    parser.add_argument("--list-files", action="store_true",
+                        help="List all indexed file paths, then exit")
 
     args = parser.parse_args()
 
@@ -61,6 +63,23 @@ def main():
         return
 
     config_path = Path(args.config) if args.config else None
+
+    if args.list_files:
+        from .cfgload import load_config
+        from .index import IngestionState
+
+        cfg = load_config(config_path)
+        state_db = Path(cfg["storage"]["storage_dir"]) / "ingestion_state.db"
+        if not state_db.exists():
+            print("No index found. Run chunksilo --build-index first.", file=sys.stderr)
+            sys.exit(1)
+        paths = sorted(IngestionState(state_db).get_all_files().keys())
+        if args.json:
+            print(json.dumps(paths, indent=2))
+        else:
+            for p in paths:
+                print(p)
+        return
 
     if args.build_index or args.download_models:
         # Suppress 3rd-party native output when IndexingUI owns the terminal
@@ -78,7 +97,7 @@ def main():
         return
 
     if not args.query:
-        parser.error("query is required (or use --build-index / --download-models)")
+        parser.error("query is required (or use --build-index / --list-files / --download-models)")
 
     from .search import run_search
 
