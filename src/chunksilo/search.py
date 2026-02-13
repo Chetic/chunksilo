@@ -1222,8 +1222,12 @@ def run_search(
             except Exception as e:
                 logger.error(f"Error during Confluence search: {e}")
 
+        # Cap remote source candidates to match local vector search count
+        # so they don't flood the reranking pool
+        embed_top_k = config["retrieval"]["embed_top_k"]
+
         if confluence_nodes:
-            nodes.extend(confluence_nodes)
+            nodes.extend(confluence_nodes[:embed_top_k])
 
         # Search Jira (with timeout)
         jira_nodes: list[NodeWithScore] = []
@@ -1240,7 +1244,7 @@ def run_search(
                 logger.error(f"Error during Jira search: {e}")
 
         if jira_nodes:
-            nodes.extend(jira_nodes)
+            nodes.extend(jira_nodes[:embed_top_k])
 
         # Apply date filtering
         if date_from or date_to:
