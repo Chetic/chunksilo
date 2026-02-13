@@ -113,6 +113,7 @@ class DirectoryConfig:
     include: List[str] = field(default_factory=lambda: DEFAULT_INCLUDE_PATTERNS.copy())
     exclude: List[str] = field(default_factory=lambda: DEFAULT_EXCLUDE_PATTERNS.copy())
     recursive: bool = True
+    case_sensitive: bool = False
 
 
 @dataclass
@@ -154,6 +155,7 @@ def _parse_index_config(config_data: dict) -> IndexConfig:
     default_include = defaults.get("include", DEFAULT_INCLUDE_PATTERNS.copy())
     default_exclude = defaults.get("exclude", DEFAULT_EXCLUDE_PATTERNS.copy())
     default_recursive = defaults.get("recursive", True)
+    default_case_sensitive = defaults.get("case_sensitive", False)
 
     # Parse directories
     directories: List[DirectoryConfig] = []
@@ -170,6 +172,7 @@ def _parse_index_config(config_data: dict) -> IndexConfig:
                 include=default_include.copy(),
                 exclude=default_exclude.copy(),
                 recursive=default_recursive,
+                case_sensitive=default_case_sensitive,
             )
         elif isinstance(entry, dict):
             # Full directory config object
@@ -183,6 +186,7 @@ def _parse_index_config(config_data: dict) -> IndexConfig:
                 include=entry.get("include", default_include.copy()),
                 exclude=entry.get("exclude", default_exclude.copy()),
                 recursive=entry.get("recursive", default_recursive),
+                case_sensitive=entry.get("case_sensitive", default_case_sensitive),
             )
         else:
             raise ValueError(f"Invalid directory entry: {entry}")
@@ -562,29 +566,37 @@ class LocalFileSystemSource(DataSource):
     def _matches_patterns(self, file_path: Path) -> bool:
         """Check if file matches include patterns and doesn't match exclude patterns.
 
-        Uses Path.match() which supports ** glob patterns for directory matching.
+        Uses PurePosixPath.match() for glob pattern matching.
         For directory exclusion patterns like **/*venv*/**, checks each path component.
+        When case_sensitive is False (default), matching is case-insensitive.
         """
         import fnmatch
+        from pathlib import PurePosixPath
 
         try:
             rel_path = file_path.relative_to(self.base_dir)
         except ValueError:
             rel_path = Path(file_path.name)
 
+        ci = not self.config.case_sensitive
+        abs_str = str(file_path).lower() if ci else str(file_path)
+        rel_str = str(rel_path).lower() if ci else str(rel_path)
+        name = file_path.name.lower() if ci else file_path.name
+
         # Check exclude patterns first
         for pattern in self.config.exclude:
+            pat = pattern.lower() if ci else pattern
             # Handle directory exclusion patterns (e.g., **/*venv*/**, **/node_modules/**)
             # by checking if any directory component matches
             if pattern.startswith('**/') and pattern.endswith('/**'):
                 # Extract the directory pattern (e.g., *venv* or node_modules)
-                dir_pattern = pattern[3:-3]  # Remove **/ prefix and /** suffix
+                dir_pattern = pat[3:-3]  # Remove **/ prefix and /** suffix
                 for part in rel_path.parts[:-1]:  # Check all directory components (not filename)
-                    if fnmatch.fnmatch(part, dir_pattern):
+                    if fnmatch.fnmatch(part.lower() if ci else part, dir_pattern):
                         return False
             else:
                 # Standard pattern matching
-                if rel_path.match(pattern) or file_path.name == pattern:
+                if PurePosixPath(rel_str).match(pat) or name == pat:
                     return False
 
         # Check include patterns
@@ -592,8 +604,8 @@ class LocalFileSystemSource(DataSource):
             return True
 
         for pattern in self.config.include:
-            # Path.match() supports ** for recursive directory matching
-            if rel_path.match(pattern) or file_path.match(pattern):
+            pat = pattern.lower() if ci else pattern
+            if PurePosixPath(rel_str).match(pat) or PurePosixPath(abs_str).match(pat):
                 return True
 
         return False

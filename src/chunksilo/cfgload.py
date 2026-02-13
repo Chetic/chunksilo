@@ -59,6 +59,7 @@ _DEFAULTS: dict[str, Any] = {
                 "**/.DS_Store",
             ],
             "recursive": True,
+            "case_sensitive": False,
         },
         "chunk_size": 512,
         "chunk_overlap": 50,

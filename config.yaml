@@ -24,6 +24,7 @@ indexing:
   #     - "**/*.egg-info/**"
   #     - "**/.DS_Store"
   #   recursive: true
+  #   case_sensitive: false
 
   ## Performance tuning
   # batch_size: 200
