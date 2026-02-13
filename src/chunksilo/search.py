@@ -345,6 +345,40 @@ def _preprocess_query(query: str) -> str:
     return processed if processed else original_query
 
 
+def _extract_quoted_phrases(query: str) -> tuple[list[str], str]:
+    """Extract double-quoted phrases from query.
+
+    Returns (list of required phrases, query with quotes removed but words kept).
+    Unmatched quotes are left as-is.
+    """
+    phrases = re.findall(r'"([^"]+)"', query)
+    # Remove quotes but keep the words for embedding/reranking
+    cleaned = re.sub(r'"([^"]+)"', r'\1', query)
+    return [p.strip() for p in phrases if p.strip()], cleaned
+
+
+def _docstore_phrase_search(
+    index, phrases: list[str], max_results: int = 100
+) -> list[NodeWithScore]:
+    """Scan the docstore for chunks containing ALL required phrases.
+
+    Returns matching chunks as NodeWithScore with score 0.0 (the reranker
+    will assign proper scores).
+    """
+    lowered = [p.lower() for p in phrases]
+    matches: list[NodeWithScore] = []
+
+    for _doc_id, node in index.docstore.docs.items():
+        content = (node.get_content() or "").lower()
+        if all(p in content for p in lowered):
+            matches.append(NodeWithScore(node=node, score=0.0))
+            if len(matches) >= max_results:
+                break
+
+    logger.info(f"Docstore phrase search found {len(matches)} chunks for {phrases}")
+    return matches
+
+
 def _prepare_confluence_query_terms(query: str) -> list[str]:
     """Prepare query terms for Confluence CQL search."""
     words = query.strip().lower().split()
@@ -1124,7 +1158,8 @@ def run_search(
     start_time = time.time()
 
     try:
-        enhanced_query = _preprocess_query(query)
+        required_phrases, clean_query = _extract_quoted_phrases(query)
+        enhanced_query = _preprocess_query(clean_query)
 
         # Load index
         index = load_llamaindex_index(config)
@@ -1143,10 +1178,35 @@ def run_search(
                 if bm25_matches:
                     matched_files = _format_bm25_matches(bm25_matches, config)
                     logger.info(f"BM25 matched {len(matched_files)} files (from {len(bm25_matches)} candidates)")
+                # Also query BM25 with each quoted phrase individually
+                if required_phrases:
+                    seen_uris = {f["uri"] for f in matched_files}
+                    for phrase in required_phrases:
+                        try:
+                            phrase_matches = bm25_retriever.retrieve(phrase)
+                            if phrase_matches:
+                                for fm in _format_bm25_matches(phrase_matches, config):
+                                    if fm["uri"] not in seen_uris:
+                                        matched_files.append(fm)
+                                        seen_uris.add(fm["uri"])
+                        except Exception:
+                            pass
             except Exception as e:
                 logger.error(f"BM25 search failed: {e}")
 
         nodes = vector_nodes
+
+        # Stage 1c: Docstore exact-phrase search
+        if required_phrases:
+            rerank_candidates = config["retrieval"]["rerank_candidates"]
+            phrase_nodes = _docstore_phrase_search(index, required_phrases, max_results=rerank_candidates)
+            if phrase_nodes:
+                # Deduplicate against vector search results
+                seen_ids = {n.node.node_id for n in nodes}
+                for pn in phrase_nodes:
+                    if pn.node.node_id not in seen_ids:
+                        nodes.append(pn)
+                        seen_ids.add(pn.node.node_id)
 
         # Search Confluence (with timeout)
         confluence_nodes: list[NodeWithScore] = []
@@ -1265,6 +1325,16 @@ def run_search(
                 node for node in nodes
                 if rerank_scores.get(id(node), 0.0) >= score_threshold
             ]
+
+        # Filter by required quoted phrases
+        if required_phrases:
+            lowered_phrases = [p.lower() for p in required_phrases]
+            before_count = len(nodes)
+            nodes = [
+                node for node in nodes
+                if all(p in (node.node.get_content() or "").lower() for p in lowered_phrases)
+            ]
+            logger.info(f"Phrase filter: {before_count} -> {len(nodes)} nodes for {required_phrases}")
 
         # Format chunks
         chunks = []
