@@ -487,15 +487,25 @@ def _extract_markdown_headings(text: str) -> List[dict]:
     return headings
 
 
-def _extract_pdf_headings_from_outline(pdf_path: Path) -> List[dict]:
+def _extract_pdf_headings_from_outline(
+    pdf_path: Path,
+    timeout_event: threading.Event | None = None,
+    max_seconds: float = 60.0,
+) -> List[dict]:
     """Extract headings from PDF outline/bookmarks (TOC).
 
     Returns list of dicts with text, position (estimated), level.
     Position is approximate based on cumulative page character counts.
     Falls back to empty list if PDF has no outline or extraction fails.
 
+    Args:
+        pdf_path: Path to the PDF file
+        timeout_event: Optional threading.Event set when processing should stop
+        max_seconds: Wall-clock safety net in seconds (default 60)
+
     Returns:
-        List of dicts with keys: text (str), position (int), level (int)
+        List of dicts with keys: text (str), position (int), level (int).
+        Returns partial results on timeout.
     """
     try:
         from pypdf import PdfReader
@@ -523,12 +533,34 @@ def _extract_pdf_headings_from_outline(pdf_path: Path) -> List[dict]:
 
         flat = flatten_outline(outline)
         headings = []
+        start_time = time.time()
+        # Cache page text lengths to avoid redundant extract_text() calls
+        page_text_lengths: Dict[int, int] = {}
+
         for title, page_num, level in flat:
+            # Check for timeout
+            if timeout_event is not None and timeout_event.is_set():
+                logger.warning(
+                    f"PDF heading extraction timed out for {pdf_path}, "
+                    f"returning {len(headings)} partial headings"
+                )
+                return headings
+            if time.time() - start_time >= max_seconds:
+                logger.warning(
+                    f"PDF heading extraction exceeded {max_seconds}s wall-clock "
+                    f"for {pdf_path}, returning {len(headings)} partial headings"
+                )
+                return headings
+
             # Estimate position by accumulating text from previous pages
             position = 0
             for page_idx in range(page_num):
                 if page_idx < len(reader.pages):
-                    position += len(reader.pages[page_idx].extract_text() or "")
+                    if page_idx not in page_text_lengths:
+                        page_text_lengths[page_idx] = len(
+                            reader.pages[page_idx].extract_text() or ""
+                        )
+                    position += page_text_lengths[page_idx]
 
             headings.append({
                 "text": title.strip(),
@@ -541,6 +573,50 @@ def _extract_pdf_headings_from_outline(pdf_path: Path) -> List[dict]:
     except Exception as e:
         logger.warning(f"Failed to extract PDF outline from {pdf_path}: {e}")
         return []
+
+
+def _split_docx_with_timeout(
+    docx_path: Path,
+    ctx: "FileProcessingContext | None",
+    timeout_seconds: float,
+) -> List[LlamaIndexDocument]:
+    """Run split_docx_into_heading_documents() in a worker thread with a hard timeout.
+
+    Returns the loaded documents, or an empty list if the call times out.
+    """
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(split_docx_into_heading_documents, docx_path, ctx)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except Exception as e:
+            future.cancel()
+            if "TimeoutError" in type(e).__name__ or isinstance(e, TimeoutError):
+                logger.warning(
+                    f"DOCX processing timed out after {timeout_seconds:.0f}s: {docx_path}"
+                )
+                return []
+            raise
+
+
+def _load_data_with_timeout(
+    reader: SimpleDirectoryReader, timeout_seconds: float
+) -> List[LlamaIndexDocument]:
+    """Run reader.load_data() in a worker thread with a hard timeout.
+
+    Returns the loaded documents, or an empty list if the call times out.
+    """
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(reader.load_data)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except Exception as e:
+            future.cancel()
+            if "TimeoutError" in type(e).__name__ or isinstance(e, TimeoutError):
+                logger.warning(
+                    f"load_data() timed out after {timeout_seconds:.0f}s"
+                )
+                return []
+            raise
 
 
 class LocalFileSystemSource(DataSource):
@@ -717,6 +793,9 @@ class LocalFileSystemSource(DataSource):
         if file_path.suffix.lower() == ".docx":
             if ctx:
                 ctx.set_phase("Parsing DOCX")
+            remaining = ctx.remaining_seconds() if ctx else None
+            if remaining is not None:
+                return _split_docx_with_timeout(file_path, ctx, remaining)
             return split_docx_into_heading_documents(file_path, ctx)
         elif file_path.suffix.lower() == ".doc":
             # Convert .doc to .docx using LibreOffice, then process
@@ -733,7 +812,11 @@ class LocalFileSystemSource(DataSource):
             try:
                 if ctx:
                     ctx.set_phase("Parsing converted DOCX")
-                docs = split_docx_into_heading_documents(docx_path, ctx)
+                remaining = ctx.remaining_seconds() if ctx else None
+                if remaining is not None:
+                    docs = _split_docx_with_timeout(docx_path, ctx, remaining)
+                else:
+                    docs = split_docx_into_heading_documents(docx_path, ctx)
                 # Update metadata to point to original .doc file
                 for doc in docs:
                     doc.metadata["file_path"] = str(file_path)
@@ -749,7 +832,11 @@ class LocalFileSystemSource(DataSource):
             reader = SimpleDirectoryReader(
                 input_files=[str(file_path)],
             )
-            docs = reader.load_data()
+            remaining = ctx.remaining_seconds() if ctx else None
+            if remaining is not None:
+                docs = _load_data_with_timeout(reader, remaining)
+            else:
+                docs = reader.load_data()
             # Ensure dates are visible to LLM (remove from exclusion list)
             for doc in docs:
                 if hasattr(doc, 'excluded_llm_metadata_keys') and doc.excluded_llm_metadata_keys:
@@ -773,8 +860,13 @@ class LocalFileSystemSource(DataSource):
 
             # Extract headings for PDF files and store separately
             if file_path.suffix.lower() == ".pdf":
-                headings = _extract_pdf_headings_from_outline(file_path)
+                timeout_event = ctx._timeout_event if ctx else None
+                headings = _extract_pdf_headings_from_outline(
+                    file_path, timeout_event=timeout_event
+                )
                 get_heading_store().set_headings(str(file_path), headings)
+                if ctx:
+                    ctx.check_timeout()
 
             # Apply metadata exclusions
             for doc in docs:
@@ -888,6 +980,7 @@ class IndexingUI:
 
         # Step/spinner state
         self._step_message: str | None = None
+        self._step_original_message: str | None = None
         self._step_stop = threading.Event()
         self._step_thread: threading.Thread | None = None
 
@@ -923,6 +1016,7 @@ class IndexingUI:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self._step_message is not None:
             self.step_done("interrupted")
+        self._step_original_message = None
         if self._progress_substep:
             self.progress_substep_done()
         if self._progress_active or self._progress_paused:
@@ -938,6 +1032,7 @@ class IndexingUI:
         """Begin an animated step: prints 'message... ⠋' with spinner."""
         with self._lock:
             self._step_message = message
+            self._step_original_message = message
             self._step_stop.clear()
             if not self._tty:
                 self._write(f"{message}... ")
@@ -946,15 +1041,26 @@ class IndexingUI:
         self._step_thread = threading.Thread(target=self._step_spin, daemon=True)
         self._step_thread.start()
 
+    def step_update(self, message: str) -> None:
+        """Update the step message while the spinner continues."""
+        with self._lock:
+            if self._step_message is not None:
+                self._step_message = message
+
     def step_done(self, suffix: str = "done") -> None:
-        """Complete the current step: replaces spinner with suffix."""
+        """Complete the current step: replaces spinner with suffix.
+
+        Uses the original step_start message for the final line so that
+        dynamic updates (e.g. file counts) don't appear in the completed line.
+        """
         self._step_stop.set()
         if self._step_thread:
             self._step_thread.join()
             self._step_thread = None
         with self._lock:
-            msg = self._step_message or ""
+            msg = self._step_original_message or self._step_message or ""
             self._step_message = None
+            self._step_original_message = None
             if not self._tty:
                 self._write(f"{suffix}\n")
                 return
@@ -1338,10 +1444,40 @@ class FileProcessingContext:
         self.ui.progress_set_file(self.file_path, phase)
 
         # Check for timeout
-        self._check_timeout()
+        self.check_timeout()
+
+    def check_timeout(self) -> None:
+        """Check if processing has exceeded timeout (main-thread safe).
+
+        Checks both the _timeout_event (set by heartbeat thread) and
+        elapsed wall-clock time. Raises FileProcessingTimeoutError if
+        either indicates a timeout.
+        """
+        if self.timeout_seconds is None or self._start_time is None:
+            return
+
+        if self._timeout_event.is_set():
+            elapsed = time.time() - self._start_time
+            raise FileProcessingTimeoutError(
+                f"File processing timed out after {elapsed:.1f}s: {self.file_path}"
+            )
+
+        elapsed = time.time() - self._start_time
+        if elapsed > self.timeout_seconds:
+            self._timeout_event.set()
+            raise FileProcessingTimeoutError(
+                f"File processing timed out after {elapsed:.1f}s: {self.file_path}"
+            )
+
+    def remaining_seconds(self) -> float | None:
+        """Return seconds remaining before timeout, or None if no timeout set."""
+        if self.timeout_seconds is None or self._start_time is None:
+            return None
+        remaining = self.timeout_seconds - (time.time() - self._start_time)
+        return max(0.0, remaining)
 
     def _check_timeout(self) -> None:
-        """Check if processing has exceeded timeout."""
+        """Check if processing has exceeded timeout (used by heartbeat thread)."""
         if self.timeout_seconds is None or self._start_time is None:
             return
 
@@ -2182,9 +2318,13 @@ def build_index(
         modified_count = 0
 
         ui.step_start("Scanning for changes")
+        scan_count = 0
         for file_info in data_source.iter_files(tracked_files=tracked_files):
             if abort_ctl.abort_requested:
                 break
+            scan_count += 1
+            if scan_count % 100 == 0:
+                ui.step_update(f"Scanning for changes ({scan_count:,} files)")
             found_files.add(file_info.path)
             existing_state = tracked_files.get(file_info.path)
 
@@ -2292,54 +2432,24 @@ def build_index(
                 doc_to_file_mapping = {}
                 file_doc_ids = {}
 
-                if enable_parallel and len(batch) > 1:
-                    file_docs = load_files_parallel(
-                        batch,
-                        data_source,
-                        ui,
-                        max_workers=max_workers,
-                        timeout_enabled=timeout_enabled,
-                        per_file_timeout=per_file_timeout,
-                        heartbeat_interval=heartbeat_interval,
-                        abort_ctl=abort_ctl,
-                    )
+                workers = max_workers if enable_parallel else 1
+                file_docs = load_files_parallel(
+                    batch,
+                    data_source,
+                    ui,
+                    max_workers=workers,
+                    timeout_enabled=timeout_enabled,
+                    per_file_timeout=per_file_timeout,
+                    heartbeat_interval=heartbeat_interval,
+                    abort_ctl=abort_ctl,
+                )
 
-                    for file_path, (file_info, docs) in file_docs.items():
-                        file_doc_ids[file_path] = []
-                        for doc in docs:
-                            accumulated_docs.append(doc)
-                            doc_to_file_mapping[doc.doc_id] = file_info
-                            file_doc_ids[file_path].append(doc.doc_id)
-                else:
-                    for file_info in batch:
-                        if abort_ctl.abort_requested:
-                            break
-                        file_path = Path(file_info.path)
-
-                        try:
-                            with FileProcessingContext(
-                                str(file_path),
-                                ui,
-                                timeout_seconds=per_file_timeout if timeout_enabled else None,
-                                heartbeat_interval=heartbeat_interval
-                            ) as ctx:
-                                ctx.set_phase("Loading file")
-                                docs = data_source.load_file(file_info, ctx)
-
-                                file_doc_ids[file_info.path] = []
-                                for doc in docs:
-                                    accumulated_docs.append(doc)
-                                    doc_to_file_mapping[doc.doc_id] = file_info
-                                    file_doc_ids[file_info.path].append(doc.doc_id)
-
-                        except FileProcessingTimeoutError as e:
-                            logger.error(f"Timeout: {e}")
-                            continue
-                        except Exception as e:
-                            logger.error(f"Error loading {file_path}: {e}")
-                            continue
-                        finally:
-                            ui.progress_update()
+                for file_path, (file_info, docs) in file_docs.items():
+                    file_doc_ids[file_path] = []
+                    for doc in docs:
+                        accumulated_docs.append(doc)
+                        doc_to_file_mapping[doc.doc_id] = file_info
+                        file_doc_ids[file_path].append(doc.doc_id)
 
                 # Batch embedding
                 if accumulated_docs:

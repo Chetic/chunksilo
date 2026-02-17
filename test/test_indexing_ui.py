@@ -10,6 +10,7 @@ import re
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -558,3 +559,286 @@ class TestNonTTYMode:
         output = ui._stream.getvalue()
         assert "\033[" not in output
         assert "\r" not in output
+
+
+# =============================================================================
+# step_update() tests (Issue #38)
+# =============================================================================
+
+
+class TestStepUpdate:
+    def test_step_update_changes_spinner_message(self, ui):
+        """step_update changes the message shown by the spinner."""
+        ui.step_start("Scanning for changes")
+        time.sleep(0.15)
+        ui.step_update("Scanning for changes (100 files)")
+        time.sleep(0.15)
+        output = _output(ui)
+        assert "100 files" in output
+        ui.step_done()
+
+    def test_step_update_noop_when_no_active_step(self, ui):
+        """step_update is a no-op when no step is active."""
+        ui.step_update("Should not crash")
+        assert ui._step_message is None
+
+    def test_step_done_uses_original_message(self, ui):
+        """step_done uses the original step_start message, not the updated one."""
+        ui.step_start("Scanning for changes")
+        time.sleep(0.15)
+        ui.step_update("Scanning for changes (500 files)")
+        time.sleep(0.15)
+        ui.step_done("3 new")
+        output = _output(ui)
+        # The final line should use the original message
+        assert "Scanning for changes... 3 new" in output
+        # The final \r-written line (last line) should not contain "500 files"
+        # On TTY, \r overwrites the line so we check the last \r-segment
+        raw = ui._stream.getvalue()
+        last_segment = raw.rsplit("\r", 1)[-1]
+        last_segment_clean = _ANSI_RE.sub("", last_segment)
+        assert "500 files" not in last_segment_clean
+        assert "Scanning for changes... 3 new" in last_segment_clean
+
+    def test_step_done_clears_original_message(self, ui):
+        """step_done clears both _step_message and _step_original_message."""
+        ui.step_start("Loading")
+        ui.step_done()
+        assert ui._step_message is None
+        assert ui._step_original_message is None
+
+    def test_step_update_non_tty(self):
+        """step_update on non-TTY is a no-op (message not re-printed)."""
+        ui = _make_non_tty_ui()
+        ui.step_start("Scanning")
+        ui.step_update("Scanning (200 files)")
+        ui.step_done("done")
+        output = ui._stream.getvalue()
+        # Non-TTY prints "Scanning... done\n" — no dynamic update
+        assert output == "Scanning... done\n"
+
+
+# =============================================================================
+# PDF heading extraction timeout tests (Issue #39)
+# =============================================================================
+
+
+class TestPdfHeadingExtraction:
+    def test_timeout_event_stops_extraction(self):
+        """_extract_pdf_headings_from_outline respects timeout_event."""
+        from unittest.mock import MagicMock, patch
+
+        from chunksilo.index import _extract_pdf_headings_from_outline
+
+        # Create a mock PDF reader with an outline
+        mock_reader = MagicMock()
+        mock_item_1 = MagicMock()
+        mock_item_1.title = "Chapter 1"
+        mock_item_2 = MagicMock()
+        mock_item_2.title = "Chapter 2"
+        mock_reader.outline = [mock_item_1, mock_item_2]
+        mock_reader.get_destination_page_number.return_value = 0
+        mock_reader.pages = []
+
+        # Set timeout_event before calling — should return empty
+        timeout_event = threading.Event()
+        timeout_event.set()
+
+        with patch("pypdf.PdfReader", return_value=mock_reader):
+            headings = _extract_pdf_headings_from_outline(
+                Path("/fake/doc.pdf"), timeout_event=timeout_event
+            )
+
+        # Should return 0 headings because timeout was already set
+        assert len(headings) == 0
+
+    def test_page_text_caching_avoids_redundant_calls(self):
+        """Page text is extracted once per page, not once per heading."""
+        from unittest.mock import MagicMock, patch
+
+        from chunksilo.index import _extract_pdf_headings_from_outline
+
+        mock_reader = MagicMock()
+        # 3 headings, all on page 2 (so pages 0 and 1 must be read)
+        items = []
+        for i in range(3):
+            item = MagicMock()
+            item.title = f"Heading {i}"
+            items.append(item)
+        mock_reader.outline = items
+        mock_reader.get_destination_page_number.return_value = 2
+
+        mock_page_0 = MagicMock()
+        mock_page_0.extract_text.return_value = "Page zero text"
+        mock_page_1 = MagicMock()
+        mock_page_1.extract_text.return_value = "Page one text"
+        mock_page_2 = MagicMock()
+        mock_page_2.extract_text.return_value = "Page two text"
+        mock_reader.pages = [mock_page_0, mock_page_1, mock_page_2]
+
+        with patch("pypdf.PdfReader", return_value=mock_reader):
+            headings = _extract_pdf_headings_from_outline(Path("/fake/doc.pdf"))
+
+        assert len(headings) == 3
+        # Each page should only be extracted once despite 3 headings
+        assert mock_page_0.extract_text.call_count == 1
+        assert mock_page_1.extract_text.call_count == 1
+
+    def test_wall_clock_safety_net(self):
+        """Extraction stops when wall-clock max_seconds is exceeded."""
+        from unittest.mock import MagicMock, patch
+
+        from chunksilo.index import _extract_pdf_headings_from_outline
+
+        mock_reader = MagicMock()
+        items = []
+        for i in range(100):
+            item = MagicMock()
+            item.title = f"Heading {i}"
+            items.append(item)
+        mock_reader.outline = items
+        mock_reader.get_destination_page_number.return_value = 0
+        mock_reader.pages = []
+
+        with patch("pypdf.PdfReader", return_value=mock_reader):
+            # max_seconds=0 should return immediately
+            headings = _extract_pdf_headings_from_outline(
+                Path("/fake/doc.pdf"), max_seconds=0
+            )
+
+        assert len(headings) == 0
+
+
+# =============================================================================
+# FileProcessingContext timeout tests (Issue #39)
+# =============================================================================
+
+
+class TestFileProcessingContextTimeout:
+    def test_check_timeout_raises_on_expired(self):
+        """check_timeout raises FileProcessingTimeoutError when time is up."""
+        from chunksilo.index import FileProcessingContext, FileProcessingTimeoutError
+
+        ui = _make_ui()
+        ui.progress_start(1)
+        ctx = FileProcessingContext("test.pdf", ui, timeout_seconds=0.01)
+        ctx._start_time = time.time() - 1  # pretend 1 second has passed
+        ctx._timeout_event = threading.Event()
+
+        with pytest.raises(FileProcessingTimeoutError):
+            ctx.check_timeout()
+
+    def test_check_timeout_raises_when_event_set(self):
+        """check_timeout raises when _timeout_event is already set."""
+        from chunksilo.index import FileProcessingContext, FileProcessingTimeoutError
+
+        ui = _make_ui()
+        ui.progress_start(1)
+        ctx = FileProcessingContext("test.pdf", ui, timeout_seconds=300)
+        ctx._start_time = time.time()
+        ctx._timeout_event = threading.Event()
+        ctx._timeout_event.set()
+
+        with pytest.raises(FileProcessingTimeoutError):
+            ctx.check_timeout()
+
+    def test_remaining_seconds_returns_positive(self):
+        """remaining_seconds returns positive value when time remains."""
+        from chunksilo.index import FileProcessingContext
+
+        ui = _make_ui()
+        ui.progress_start(1)
+        ctx = FileProcessingContext("test.pdf", ui, timeout_seconds=300)
+        ctx._start_time = time.time()
+
+        remaining = ctx.remaining_seconds()
+        assert remaining is not None
+        assert remaining > 290
+
+    def test_remaining_seconds_returns_none_without_timeout(self):
+        """remaining_seconds returns None when no timeout is configured."""
+        from chunksilo.index import FileProcessingContext
+
+        ui = _make_ui()
+        ui.progress_start(1)
+        ctx = FileProcessingContext("test.pdf", ui, timeout_seconds=None)
+        ctx._start_time = time.time()
+
+        assert ctx.remaining_seconds() is None
+
+    def test_remaining_seconds_clamps_to_zero(self):
+        """remaining_seconds returns 0 when timeout has passed."""
+        from chunksilo.index import FileProcessingContext
+
+        ui = _make_ui()
+        ui.progress_start(1)
+        ctx = FileProcessingContext("test.pdf", ui, timeout_seconds=1)
+        ctx._start_time = time.time() - 10  # 10 seconds ago
+
+        assert ctx.remaining_seconds() == 0.0
+
+
+# =============================================================================
+# _load_data_with_timeout tests (Issue #39)
+# =============================================================================
+
+
+class TestLoadDataWithTimeout:
+    def test_returns_docs_on_success(self):
+        """_load_data_with_timeout returns docs when load_data succeeds."""
+        from unittest.mock import MagicMock
+        from chunksilo.index import _load_data_with_timeout
+
+        mock_reader = MagicMock()
+        mock_reader.load_data.return_value = ["doc1", "doc2"]
+
+        result = _load_data_with_timeout(mock_reader, timeout_seconds=5.0)
+        assert result == ["doc1", "doc2"]
+
+    def test_returns_empty_on_timeout(self):
+        """_load_data_with_timeout returns [] when load_data hangs."""
+        from unittest.mock import MagicMock
+        from chunksilo.index import _load_data_with_timeout
+
+        mock_reader = MagicMock()
+        mock_reader.load_data.side_effect = lambda: time.sleep(10)
+
+        result = _load_data_with_timeout(mock_reader, timeout_seconds=0.1)
+        assert result == []
+
+
+# =============================================================================
+# _split_docx_with_timeout tests (Issue #39)
+# =============================================================================
+
+
+class TestSplitDocxWithTimeout:
+    def test_returns_docs_on_success(self):
+        """_split_docx_with_timeout returns docs when processing succeeds."""
+        from unittest.mock import patch, MagicMock
+        from chunksilo.index import _split_docx_with_timeout
+
+        mock_doc = MagicMock()
+        with patch(
+            "chunksilo.index.split_docx_into_heading_documents",
+            return_value=[mock_doc],
+        ):
+            result = _split_docx_with_timeout(Path("/fake/doc.docx"), None, 5.0)
+
+        assert result == [mock_doc]
+
+    def test_returns_empty_on_timeout(self):
+        """_split_docx_with_timeout returns [] when processing hangs."""
+        from unittest.mock import patch
+        from chunksilo.index import _split_docx_with_timeout
+
+        def hang(*args, **kwargs):
+            time.sleep(10)
+
+        with patch(
+            "chunksilo.index.split_docx_into_heading_documents",
+            side_effect=hang,
+        ):
+            result = _split_docx_with_timeout(Path("/fake/doc.docx"), None, 0.1)
+
+        assert result == []
