@@ -75,6 +75,7 @@ _DEFAULTS: dict[str, Any] = {
             "per_file_seconds": 300,  # 5 minutes per file
             "doc_conversion_seconds": 90,  # 90 seconds for .doc conversion
             "heartbeat_interval_seconds": 2,
+            "scan_item_seconds": 30,  # timeout for stat/hash/walk during scanning
         },
         "logging": {
             "log_slow_files": True,

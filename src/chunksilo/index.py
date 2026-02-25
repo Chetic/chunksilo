@@ -10,6 +10,7 @@ import itertools
 import json
 import logging
 import os
+import queue
 import signal
 import sqlite3
 import sys
@@ -575,48 +576,28 @@ def _extract_pdf_headings_from_outline(
         return []
 
 
-def _split_docx_with_timeout(
-    docx_path: Path,
-    ctx: "FileProcessingContext | None",
-    timeout_seconds: float,
-) -> List[LlamaIndexDocument]:
-    """Run split_docx_into_heading_documents() in a worker thread with a hard timeout.
+_SCAN_TIMEOUT_SENTINEL = object()
 
-    Returns the loaded documents, or an empty list if the call times out.
+
+def _run_with_timeout(fn, timeout_seconds: float, default=_SCAN_TIMEOUT_SENTINEL):
+    """Run *fn* in a background thread, returning *default* on timeout.
+
+    If *fn* raises an exception it is re-raised in the caller.
+    On timeout the pool is shut down without waiting so the caller is not
+    blocked by a still-running filesystem call.
     """
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(split_docx_into_heading_documents, docx_path, ctx)
-        try:
-            return future.result(timeout=timeout_seconds)
-        except Exception as e:
-            future.cancel()
-            if "TimeoutError" in type(e).__name__ or isinstance(e, TimeoutError):
-                logger.warning(
-                    f"DOCX processing timed out after {timeout_seconds:.0f}s: {docx_path}"
-                )
-                return []
-            raise
-
-
-def _load_data_with_timeout(
-    reader: SimpleDirectoryReader, timeout_seconds: float
-) -> List[LlamaIndexDocument]:
-    """Run reader.load_data() in a worker thread with a hard timeout.
-
-    Returns the loaded documents, or an empty list if the call times out.
-    """
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(reader.load_data)
-        try:
-            return future.result(timeout=timeout_seconds)
-        except Exception as e:
-            future.cancel()
-            if "TimeoutError" in type(e).__name__ or isinstance(e, TimeoutError):
-                logger.warning(
-                    f"load_data() timed out after {timeout_seconds:.0f}s"
-                )
-                return []
-            raise
+    pool = ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(fn)
+    try:
+        result = future.result(timeout=timeout_seconds)
+        pool.shutdown(wait=False)
+        return result
+    except Exception as exc:
+        future.cancel()
+        pool.shutdown(wait=False, cancel_futures=True)
+        if "TimeoutError" in type(exc).__name__ or isinstance(exc, TimeoutError):
+            return default
+        raise
 
 
 class LocalFileSystemSource(DataSource):
@@ -627,17 +608,31 @@ class LocalFileSystemSource(DataSource):
         self.base_dir = config.path
 
     def is_available(self) -> bool:
-        """Check if the directory is available and accessible."""
-        try:
-            if not self.base_dir.exists():
+        """Check if the directory is available and accessible.
+
+        Runs with a timeout to avoid hanging on unresponsive network mounts.
+        """
+        timeout = cfgload.get("indexing.timeout.scan_item_seconds", 30)
+
+        def _check():
+            try:
+                if not self.base_dir.exists():
+                    return False
+                if not self.base_dir.is_dir():
+                    return False
+                # Try to list directory to verify access (important for network mounts)
+                next(self.base_dir.iterdir(), None)
+                return True
+            except (OSError, PermissionError):
                 return False
-            if not self.base_dir.is_dir():
-                return False
-            # Try to list directory to verify access (important for network mounts)
-            next(self.base_dir.iterdir(), None)
-            return True
-        except (OSError, PermissionError):
-            return False
+
+        result = _run_with_timeout(_check, timeout_seconds=timeout, default=False)
+        if result is False and timeout > 0:
+            # Distinguish genuine "not a dir" from timeout — log only for timeout
+            # (the sentinel default=False means we can't distinguish here, but
+            # _run_with_timeout already logged nothing; let callers log.)
+            pass
+        return result
 
     def _matches_patterns(self, file_path: Path) -> bool:
         """Check if file matches include patterns and doesn't match exclude patterns.
@@ -700,6 +695,43 @@ class LocalFileSystemSource(DataSource):
                     return True
         return False
 
+    def _walk_with_timeout(self):
+        """Yield (root, dirs, files) tuples from os.walk with per-iteration timeout.
+
+        Runs os.walk in a daemon thread, feeding results through a queue.
+        If no result arrives within scan_item_seconds, the walk is considered
+        stalled and iteration stops.
+        """
+        timeout = cfgload.get("indexing.timeout.scan_item_seconds", 30)
+        q: queue.Queue = queue.Queue()
+        _sentinel = None  # signals end of iteration
+
+        def _producer():
+            try:
+                for entry in os.walk(self.base_dir):
+                    q.put(entry)
+                q.put(_sentinel)
+            except Exception as exc:
+                q.put(exc)
+
+        t = threading.Thread(target=_producer, daemon=True)
+        t.start()
+
+        while True:
+            try:
+                item = q.get(timeout=timeout)
+            except queue.Empty:
+                logger.warning(
+                    f"os.walk() stalled for {timeout}s on {self.base_dir}, "
+                    "aborting directory scan"
+                )
+                return
+            if item is _sentinel:
+                return
+            if isinstance(item, Exception):
+                raise item
+            yield item
+
     def iter_files(self, tracked_files: Dict[str, dict] | None = None) -> Iterator[FileInfo]:
         """Yield FileInfo for each matching file in the source.
 
@@ -708,8 +740,7 @@ class LocalFileSystemSource(DataSource):
                 keyed by absolute path. Used for mtime-based fast pre-check.
         """
         if self.config.recursive:
-            # topdown=True (default) allows pruning dirs in-place
-            for root, dirs, files in os.walk(self.base_dir):
+            for root, dirs, files in self._walk_with_timeout():
                 # Prune excluded directories in-place to prevent descent
                 dirs[:] = [d for d in dirs if not self._should_skip_directory(d)]
 
@@ -720,7 +751,7 @@ class LocalFileSystemSource(DataSource):
                         continue
                     try:
                         yield self._create_file_info(file_path, tracked_files)
-                    except (OSError, IOError) as e:
+                    except (OSError, IOError, TimeoutError) as e:
                         logger.warning(f"Could not access file {file_path}: {e}")
                         continue
         else:
@@ -738,11 +769,35 @@ class LocalFileSystemSource(DataSource):
                     continue
                 try:
                     yield self._create_file_info(f, tracked_files)
-                except (OSError, IOError) as e:
+                except (OSError, IOError, TimeoutError) as e:
                     logger.warning(f"Could not access file {f}: {e}")
                     continue
 
     def _create_file_info(
+        self,
+        file_path: Path,
+        tracked_files: Dict[str, dict] | None = None,
+    ) -> FileInfo:
+        """Create FileInfo with timeout protection against stalled mounts.
+
+        Delegates to _create_file_info_inner in a background thread so that a
+        blocking stat() or read() cannot hang the scan indefinitely.
+
+        Raises TimeoutError if the operation exceeds scan_item_seconds.
+        """
+        timeout = cfgload.get("indexing.timeout.scan_item_seconds", 30)
+        result = _run_with_timeout(
+            lambda: self._create_file_info_inner(file_path, tracked_files),
+            timeout_seconds=timeout,
+        )
+        if result is _SCAN_TIMEOUT_SENTINEL:
+            logger.warning(
+                f"Timed out after {timeout}s accessing file {file_path}, skipping"
+            )
+            raise TimeoutError(f"stat/hash timed out for {file_path}")
+        return result
+
+    def _create_file_info_inner(
         self,
         file_path: Path,
         tracked_files: Dict[str, dict] | None = None,
@@ -787,15 +842,30 @@ class LocalFileSystemSource(DataSource):
         ctx: "FileProcessingContext | None" = None
     ) -> List[LlamaIndexDocument]:
         file_path = Path(file_info.path)
-        if not file_path.exists():
-            logger.warning(f"Skipping disappeared file: {file_path}")
+        exists_timeout = cfgload.get("indexing.timeout.scan_item_seconds", 30)
+        exists_result = _run_with_timeout(
+            file_path.exists, timeout_seconds=exists_timeout, default=False,
+        )
+        if not exists_result:
+            if exists_result is False:
+                logger.warning(f"Skipping disappeared file: {file_path}")
             return []
         if file_path.suffix.lower() == ".docx":
             if ctx:
                 ctx.set_phase("Parsing DOCX")
             remaining = ctx.remaining_seconds() if ctx else None
             if remaining is not None:
-                return _split_docx_with_timeout(file_path, ctx, remaining)
+                result = _run_with_timeout(
+                    lambda: split_docx_into_heading_documents(file_path, ctx),
+                    timeout_seconds=remaining,
+                    default=None,
+                )
+                if result is None:
+                    logger.warning(
+                        f"DOCX processing timed out after {remaining:.0f}s: {file_path}"
+                    )
+                    return []
+                return result
             return split_docx_into_heading_documents(file_path, ctx)
         elif file_path.suffix.lower() == ".doc":
             # Convert .doc to .docx using LibreOffice, then process
@@ -814,7 +884,16 @@ class LocalFileSystemSource(DataSource):
                     ctx.set_phase("Parsing converted DOCX")
                 remaining = ctx.remaining_seconds() if ctx else None
                 if remaining is not None:
-                    docs = _split_docx_with_timeout(docx_path, ctx, remaining)
+                    result = _run_with_timeout(
+                        lambda: split_docx_into_heading_documents(docx_path, ctx),
+                        timeout_seconds=remaining,
+                        default=None,
+                    )
+                    if result is None:
+                        logger.warning(
+                            f"DOCX processing timed out after {remaining:.0f}s: {docx_path}"
+                        )
+                    docs = result if result is not None else []
                 else:
                     docs = split_docx_into_heading_documents(docx_path, ctx)
                 # Update metadata to point to original .doc file
@@ -834,7 +913,16 @@ class LocalFileSystemSource(DataSource):
             )
             remaining = ctx.remaining_seconds() if ctx else None
             if remaining is not None:
-                docs = _load_data_with_timeout(reader, remaining)
+                result = _run_with_timeout(
+                    reader.load_data,
+                    timeout_seconds=remaining,
+                    default=None,
+                )
+                if result is None:
+                    logger.warning(
+                        f"load_data() timed out after {remaining:.0f}s"
+                    )
+                docs = result if result is not None else []
             else:
                 docs = reader.load_data()
             # Ensure dates are visible to LLM (remove from exclusion list)

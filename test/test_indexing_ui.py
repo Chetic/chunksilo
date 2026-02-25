@@ -779,58 +779,57 @@ class TestFileProcessingContextTimeout:
 
 
 # =============================================================================
-# _load_data_with_timeout tests (Issue #39)
+# _run_with_timeout integration tests for load_data / DOCX (Issue #39)
 # =============================================================================
 
 
 class TestLoadDataWithTimeout:
     def test_returns_docs_on_success(self):
-        """_load_data_with_timeout returns docs when load_data succeeds."""
+        """_run_with_timeout returns docs when load_data succeeds."""
         from unittest.mock import MagicMock
-        from chunksilo.index import _load_data_with_timeout
+        from chunksilo.index import _run_with_timeout
 
         mock_reader = MagicMock()
         mock_reader.load_data.return_value = ["doc1", "doc2"]
 
-        result = _load_data_with_timeout(mock_reader, timeout_seconds=5.0)
+        result = _run_with_timeout(mock_reader.load_data, timeout_seconds=5.0, default=None)
         assert result == ["doc1", "doc2"]
 
-    def test_returns_empty_on_timeout(self):
-        """_load_data_with_timeout returns [] when load_data hangs."""
+    def test_returns_default_on_timeout(self):
+        """_run_with_timeout returns default when load_data hangs."""
         from unittest.mock import MagicMock
-        from chunksilo.index import _load_data_with_timeout
+        from chunksilo.index import _run_with_timeout
 
         mock_reader = MagicMock()
         mock_reader.load_data.side_effect = lambda: time.sleep(10)
 
-        result = _load_data_with_timeout(mock_reader, timeout_seconds=0.1)
-        assert result == []
-
-
-# =============================================================================
-# _split_docx_with_timeout tests (Issue #39)
-# =============================================================================
+        result = _run_with_timeout(mock_reader.load_data, timeout_seconds=0.1, default=None)
+        assert result is None
 
 
 class TestSplitDocxWithTimeout:
     def test_returns_docs_on_success(self):
-        """_split_docx_with_timeout returns docs when processing succeeds."""
+        """_run_with_timeout returns docs when DOCX processing succeeds."""
         from unittest.mock import patch, MagicMock
-        from chunksilo.index import _split_docx_with_timeout
+        from chunksilo.index import _run_with_timeout
 
         mock_doc = MagicMock()
         with patch(
             "chunksilo.index.split_docx_into_heading_documents",
             return_value=[mock_doc],
-        ):
-            result = _split_docx_with_timeout(Path("/fake/doc.docx"), None, 5.0)
+        ) as mock_split:
+            result = _run_with_timeout(
+                lambda: mock_split(Path("/fake/doc.docx"), None),
+                timeout_seconds=5.0,
+                default=None,
+            )
 
         assert result == [mock_doc]
 
-    def test_returns_empty_on_timeout(self):
-        """_split_docx_with_timeout returns [] when processing hangs."""
+    def test_returns_default_on_timeout(self):
+        """_run_with_timeout returns default when DOCX processing hangs."""
         from unittest.mock import patch
-        from chunksilo.index import _split_docx_with_timeout
+        from chunksilo.index import _run_with_timeout
 
         def hang(*args, **kwargs):
             time.sleep(10)
@@ -838,7 +837,11 @@ class TestSplitDocxWithTimeout:
         with patch(
             "chunksilo.index.split_docx_into_heading_documents",
             side_effect=hang,
-        ):
-            result = _split_docx_with_timeout(Path("/fake/doc.docx"), None, 0.1)
+        ) as mock_split:
+            result = _run_with_timeout(
+                lambda: mock_split(Path("/fake/doc.docx"), None),
+                timeout_seconds=0.1,
+                default=None,
+            )
 
-        assert result == []
+        assert result is None
