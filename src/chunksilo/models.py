@@ -26,7 +26,7 @@ def _get_cached_model_path(cache_dir: Path, model_name: str) -> Path | None:
                 )
                 return Path(model_dir).resolve()
     except (ImportError, Exception):
-        pass
+        logger.debug("Could not resolve cached model path for %s", model_name, exc_info=True)
     return None
 
 
@@ -72,4 +72,4 @@ def configure_offline_mode(offline: bool, cache_dir: Path) -> None:
         from huggingface_hub import constants
         constants.HF_HUB_OFFLINE = offline
     except ImportError:
-        pass
+        logger.debug("huggingface_hub.constants not available for offline patching")

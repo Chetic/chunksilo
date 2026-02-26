@@ -150,7 +150,7 @@ def split_docx_into_heading_documents(
         if core_props.modified:
             last_modified_date = core_props.modified.strftime("%Y-%m-%d")
     except Exception:
-        pass  # Fall back to filesystem dates
+        logger.debug("Could not read DOCX core properties for %s, using filesystem dates", docx_path, exc_info=True)
 
     # First pass: Extract all headings with positions for hierarchy metadata
     if ctx:
@@ -260,6 +260,7 @@ def split_docx_into_heading_documents(
         try:
             full_text = "\n".join(p.text for p in doc.paragraphs).strip()
         except Exception:
+            logger.debug("Failed to extract paragraph text from %s", docx_path, exc_info=True)
             full_text = ""
 
         if full_text:

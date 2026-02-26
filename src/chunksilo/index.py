@@ -1081,6 +1081,7 @@ def _verify_model_cache_exists(cache_dir: Path) -> bool:
 
         return False
     except Exception:
+        logger.debug("Exception during model cache verification", exc_info=True)
         return False
 
 

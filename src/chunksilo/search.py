@@ -144,6 +144,7 @@ def _resolve_file_uri(file_path: str, config: dict[str, Any]) -> str | None:
 
         return f"file://{file_path_obj.resolve()}"
     except Exception:
+        logger.debug("Failed to resolve file URI for %r", file_path, exc_info=True)
         return None
 
 
@@ -999,6 +1000,7 @@ def _parse_iso8601_to_date(iso_string: str) -> str | None:
         dt = datetime.fromisoformat(normalized)
         return dt.strftime("%Y-%m-%d")
     except Exception:
+        logger.debug("Failed to parse date: %r", iso_string, exc_info=True)
         return None
 
 
@@ -1148,7 +1150,7 @@ def run_search(
                                         matched_files.append(fm)
                                         seen_uris.add(fm["uri"])
                         except Exception:
-                            pass
+                            logger.debug("BM25 phrase retrieval failed for %r", phrase, exc_info=True)
             except Exception as e:
                 logger.error(f"BM25 search failed: {e}")
 
