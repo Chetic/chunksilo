@@ -16,7 +16,6 @@ from docx import Document
 from llama_index.core import Document as LlamaIndexDocument
 
 from . import cfgload
-from .index import EXCLUDED_EMBED_METADATA_KEYS, EXCLUDED_LLM_METADATA_KEYS, get_heading_store
 
 if TYPE_CHECKING:
     from .ui import FileProcessingContext
@@ -117,6 +116,9 @@ def split_docx_into_heading_documents(
         docx_path: Path to DOCX file
         ctx: Optional processing context for progress updates and timeout
     """
+    # Lazy import to avoid circular dependency (index.py imports docx_utils)
+    from .index import EXCLUDED_EMBED_METADATA_KEYS, EXCLUDED_LLM_METADATA_KEYS, get_heading_store
+
     docs: list[LlamaIndexDocument] = []
 
     if ctx:
