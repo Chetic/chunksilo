@@ -25,7 +25,7 @@ class _FakeTTY(io.StringIO):
 
 def _make_ui(stream=None):
     """Create an IndexingUI with a local import (avoids module-level config init)."""
-    from chunksilo.index import IndexingUI
+    from chunksilo.ui import IndexingUI
     return IndexingUI(stream=stream or _FakeTTY())
 
 
@@ -285,7 +285,7 @@ class TestOutputSuppression:
 
     def test_verbose_skips_suppression(self):
         """verbose=True leaves stdout/stderr untouched."""
-        from chunksilo.index import IndexingUI
+        from chunksilo.ui import IndexingUI
         stream = io.StringIO()
         ui = IndexingUI(stream=stream, verbose=True)
         orig_stdout = sys.stdout
@@ -412,7 +412,7 @@ class TestPrint:
 
 def _make_non_tty_ui():
     """Create an IndexingUI with a plain StringIO (non-TTY) stream."""
-    from chunksilo.index import IndexingUI
+    from chunksilo.ui import IndexingUI
     return IndexingUI(stream=io.StringIO())
 
 
@@ -717,7 +717,7 @@ class TestPdfHeadingExtraction:
 class TestFileProcessingContextTimeout:
     def test_check_timeout_raises_on_expired(self):
         """check_timeout raises FileProcessingTimeoutError when time is up."""
-        from chunksilo.index import FileProcessingContext, FileProcessingTimeoutError
+        from chunksilo.ui import FileProcessingContext, FileProcessingTimeoutError
 
         ui = _make_ui()
         ui.progress_start(1)
@@ -730,7 +730,7 @@ class TestFileProcessingContextTimeout:
 
     def test_check_timeout_raises_when_event_set(self):
         """check_timeout raises when _timeout_event is already set."""
-        from chunksilo.index import FileProcessingContext, FileProcessingTimeoutError
+        from chunksilo.ui import FileProcessingContext, FileProcessingTimeoutError
 
         ui = _make_ui()
         ui.progress_start(1)
@@ -744,7 +744,7 @@ class TestFileProcessingContextTimeout:
 
     def test_remaining_seconds_returns_positive(self):
         """remaining_seconds returns positive value when time remains."""
-        from chunksilo.index import FileProcessingContext
+        from chunksilo.ui import FileProcessingContext
 
         ui = _make_ui()
         ui.progress_start(1)
@@ -757,7 +757,7 @@ class TestFileProcessingContextTimeout:
 
     def test_remaining_seconds_returns_none_without_timeout(self):
         """remaining_seconds returns None when no timeout is configured."""
-        from chunksilo.index import FileProcessingContext
+        from chunksilo.ui import FileProcessingContext
 
         ui = _make_ui()
         ui.progress_start(1)
@@ -768,7 +768,7 @@ class TestFileProcessingContextTimeout:
 
     def test_remaining_seconds_clamps_to_zero(self):
         """remaining_seconds returns 0 when timeout has passed."""
-        from chunksilo.index import FileProcessingContext
+        from chunksilo.ui import FileProcessingContext
 
         ui = _make_ui()
         ui.progress_start(1)

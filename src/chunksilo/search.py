@@ -43,6 +43,7 @@ if ConfluenceReader is not None:
         pass
 
 from .cfgload import load_config
+from .models import _get_cached_model_path, resolve_flashrank_model_name, configure_offline_mode
 
 logger = logging.getLogger(__name__)
 
@@ -90,19 +91,6 @@ CONFLUENCE_STOPWORDS = frozenset({
     "this", "that", "these", "those", "here", "there", "all", "any", "each", "some", "no", "not",
     "about", "into", "over", "after", "before", "between", "under", "again", "just", "only", "also",
 })
-
-
-def _setup_offline_mode(config: dict[str, Any]) -> None:
-    """Configure offline mode for HuggingFace libraries if enabled."""
-    offline_mode = config["retrieval"]["offline"]
-    if offline_mode:
-        os.environ["HF_HUB_OFFLINE"] = "1"
-        os.environ["TRANSFORMERS_OFFLINE"] = "1"
-        os.environ["HF_DATASETS_OFFLINE"] = "1"
-        cache_dir_abs = Path(config["storage"]["model_cache_dir"]).resolve()
-        os.environ["HF_HOME"] = str(cache_dir_abs)
-        os.environ["HF_HUB_CACHE"] = str(cache_dir_abs)
-        os.environ["HF_DATASETS_CACHE"] = str(cache_dir_abs)
 
 
 def _setup_ssl(config: dict[str, Any]) -> str | None:
@@ -196,28 +184,6 @@ def _char_offset_to_line(char_offset: int | None, line_offsets: list[int] | None
     return left + 1
 
 
-def _get_cached_model_path(cache_dir: Path, model_name: str) -> Path | None:
-    """Get the cached model directory path using huggingface_hub's snapshot_download."""
-    try:
-        from huggingface_hub import snapshot_download
-        from fastembed import TextEmbedding
-        models = TextEmbedding.list_supported_models()
-        model_info = [m for m in models if m.get("model") == model_name]
-        if model_info:
-            hf_source = model_info[0].get("sources", {}).get("hf")
-            if hf_source:
-                cache_dir_abs = cache_dir.resolve()
-                model_dir = snapshot_download(
-                    repo_id=hf_source,
-                    local_files_only=True,
-                    cache_dir=str(cache_dir_abs)
-                )
-                return Path(model_dir).resolve()
-    except (ImportError, Exception):
-        pass
-    return None
-
-
 def _ensure_embed_model(config: dict[str, Any]) -> None:
     """Ensure the embedding model is initialized."""
     global _embed_model_initialized
@@ -261,22 +227,11 @@ def _ensure_reranker(config: dict[str, Any]):
             "flashrank is required for reranking. Install with: pip install chunksilo"
         ) from exc
 
-    model_name = config["retrieval"]["rerank_model_name"]
+    raw_model_name = config["retrieval"]["rerank_model_name"]
     cache_dir = Path(config["storage"]["model_cache_dir"])
     offline_mode = config["retrieval"]["offline"]
 
-    model_mapping = {
-        "cross-encoder/ms-marco-MiniLM-L-6-v2": "ms-marco-MiniLM-L-12-v2",
-        "ms-marco-MiniLM-L-6-v2": "ms-marco-MiniLM-L-12-v2",
-    }
-    if model_name in model_mapping:
-        model_name = model_mapping[model_name]
-    elif model_name.startswith("cross-encoder/"):
-        base_name = model_name.replace("cross-encoder/", "")
-        if "L-6" in base_name:
-            model_name = base_name.replace("L-6", "L-12")
-        else:
-            model_name = base_name
+    model_name = resolve_flashrank_model_name(raw_model_name)
 
     try:
         _reranker_model = Ranker(model_name=model_name, cache_dir=str(cache_dir))
@@ -1152,7 +1107,10 @@ def run_search(
     config = _init_config(config_path) if config_path else _get_config()
 
     # Setup environment on first call
-    _setup_offline_mode(config)
+    configure_offline_mode(
+        config["retrieval"]["offline"],
+        Path(config["storage"]["model_cache_dir"]),
+    )
     _setup_ssl(config)
 
     start_time = time.time()
