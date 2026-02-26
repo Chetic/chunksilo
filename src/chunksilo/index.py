@@ -855,7 +855,12 @@ class LocalFileSystemSource(DataSource):
             remaining = ctx.remaining_seconds() if ctx else None
             if remaining is not None:
                 result = _run_with_timeout(
-                    lambda: split_docx_into_heading_documents(file_path, ctx),
+                    lambda: split_docx_into_heading_documents(
+                        file_path, ctx,
+                        heading_store=get_heading_store(),
+                        excluded_embed_metadata_keys=EXCLUDED_EMBED_METADATA_KEYS,
+                        excluded_llm_metadata_keys=EXCLUDED_LLM_METADATA_KEYS,
+                    ),
                     timeout_seconds=remaining,
                     default=None,
                 )
@@ -865,7 +870,12 @@ class LocalFileSystemSource(DataSource):
                     )
                     return []
                 return result
-            return split_docx_into_heading_documents(file_path, ctx)
+            return split_docx_into_heading_documents(
+                        file_path, ctx,
+                        heading_store=get_heading_store(),
+                        excluded_embed_metadata_keys=EXCLUDED_EMBED_METADATA_KEYS,
+                        excluded_llm_metadata_keys=EXCLUDED_LLM_METADATA_KEYS,
+                    )
         elif file_path.suffix.lower() == ".doc":
             # Convert .doc to .docx using LibreOffice, then process
             if ctx:
@@ -884,7 +894,12 @@ class LocalFileSystemSource(DataSource):
                 remaining = ctx.remaining_seconds() if ctx else None
                 if remaining is not None:
                     result = _run_with_timeout(
-                        lambda: split_docx_into_heading_documents(docx_path, ctx),
+                        lambda: split_docx_into_heading_documents(
+                            docx_path, ctx,
+                            heading_store=get_heading_store(),
+                            excluded_embed_metadata_keys=EXCLUDED_EMBED_METADATA_KEYS,
+                            excluded_llm_metadata_keys=EXCLUDED_LLM_METADATA_KEYS,
+                        ),
                         timeout_seconds=remaining,
                         default=None,
                     )
@@ -894,7 +909,12 @@ class LocalFileSystemSource(DataSource):
                         )
                     docs = result if result is not None else []
                 else:
-                    docs = split_docx_into_heading_documents(docx_path, ctx)
+                    docs = split_docx_into_heading_documents(
+                        docx_path, ctx,
+                        heading_store=get_heading_store(),
+                        excluded_embed_metadata_keys=EXCLUDED_EMBED_METADATA_KEYS,
+                        excluded_llm_metadata_keys=EXCLUDED_LLM_METADATA_KEYS,
+                    )
                 # Update metadata to point to original .doc file
                 for doc in docs:
                     doc.metadata["file_path"] = str(file_path)

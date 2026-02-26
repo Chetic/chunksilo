@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from docx import Document
 from llama_index.core import Document as LlamaIndexDocument
@@ -108,16 +108,23 @@ def _convert_doc_to_docx(doc_path: Path, timeout: float = 60) -> Path | None:
 
 def split_docx_into_heading_documents(
     docx_path: Path,
-    ctx: FileProcessingContext | None = None
+    ctx: FileProcessingContext | None = None,
+    *,
+    heading_store: Any = None,
+    excluded_embed_metadata_keys: list[str] | None = None,
+    excluded_llm_metadata_keys: list[str] | None = None,
 ) -> list[LlamaIndexDocument]:
     """Split DOCX into documents by heading with progress updates.
 
     Args:
         docx_path: Path to DOCX file
         ctx: Optional processing context for progress updates and timeout
+        heading_store: HeadingStore instance for persisting heading metadata
+        excluded_embed_metadata_keys: Keys to exclude from embedding text
+        excluded_llm_metadata_keys: Keys to exclude from LLM context
     """
-    # Lazy import to avoid circular dependency (index.py imports docx_utils)
-    from .index import EXCLUDED_EMBED_METADATA_KEYS, EXCLUDED_LLM_METADATA_KEYS, get_heading_store
+    _excluded_embed = excluded_embed_metadata_keys or []
+    _excluded_llm = excluded_llm_metadata_keys or []
 
     docs: list[LlamaIndexDocument] = []
 
@@ -174,9 +181,10 @@ def split_docx_into_heading_documents(
         char_position += len(para.text) + 1  # +1 for newline
 
     # Store headings separately to avoid metadata size issues during chunking
-    if ctx:
-        ctx.set_phase("Storing heading metadata")
-    get_heading_store().set_headings(str(docx_path), all_headings)
+    if heading_store is not None:
+        if ctx:
+            ctx.set_phase("Storing heading metadata")
+        heading_store.set_headings(str(docx_path), all_headings)
 
     # Second pass: Split by heading (existing logic)
     if ctx:
@@ -225,8 +233,8 @@ def split_docx_into_heading_documents(
         docs.append(LlamaIndexDocument(
             text=text,
             metadata=metadata,
-            excluded_embed_metadata_keys=EXCLUDED_EMBED_METADATA_KEYS,
-            excluded_llm_metadata_keys=EXCLUDED_LLM_METADATA_KEYS,
+            excluded_embed_metadata_keys=_excluded_embed,
+            excluded_llm_metadata_keys=_excluded_llm,
         ))
 
     for para in doc.paragraphs:
@@ -267,8 +275,8 @@ def split_docx_into_heading_documents(
             docs.append(LlamaIndexDocument(
                 text=full_text,
                 metadata=metadata,
-                excluded_embed_metadata_keys=EXCLUDED_EMBED_METADATA_KEYS,
-                excluded_llm_metadata_keys=EXCLUDED_LLM_METADATA_KEYS,
+                excluded_embed_metadata_keys=_excluded_embed,
+                excluded_llm_metadata_keys=_excluded_llm,
             ))
 
     logger.info(
