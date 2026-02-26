@@ -1090,6 +1090,246 @@ def _apply_recency_boost(
     return boosted_nodes
 
 
+def _retrieve_vector_nodes(
+    index, query: str, required_phrases: list[str], config: dict[str, Any]
+) -> list[NodeWithScore]:
+    """Stage 1a+1c: Vector search plus docstore exact-phrase search."""
+    embed_top_k = config["retrieval"]["embed_top_k"]
+    retriever = index.as_retriever(similarity_top_k=embed_top_k)
+    nodes = retriever.retrieve(query)
+
+    if required_phrases:
+        rerank_candidates = config["retrieval"]["rerank_candidates"]
+        phrase_nodes = _docstore_phrase_search(index, required_phrases, max_results=rerank_candidates)
+        if phrase_nodes:
+            seen_ids = {n.node.node_id for n in nodes}
+            for pn in phrase_nodes:
+                if pn.node.node_id not in seen_ids:
+                    nodes.append(pn)
+                    seen_ids.add(pn.node.node_id)
+
+    return nodes
+
+
+def _retrieve_bm25_matches(
+    query: str, required_phrases: list[str], config: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Stage 1b: BM25 file name search."""
+    matched_files: list[dict[str, Any]] = []
+    bm25_retriever = _ensure_bm25_retriever(config)
+    if not bm25_retriever:
+        return matched_files
+
+    try:
+        bm25_matches = bm25_retriever.retrieve(query)
+        if bm25_matches:
+            matched_files = _format_bm25_matches(bm25_matches, config)
+            logger.info(f"BM25 matched {len(matched_files)} files (from {len(bm25_matches)} candidates)")
+        if required_phrases:
+            seen_uris = {f["uri"] for f in matched_files}
+            for phrase in required_phrases:
+                try:
+                    phrase_matches = bm25_retriever.retrieve(phrase)
+                    if phrase_matches:
+                        for fm in _format_bm25_matches(phrase_matches, config):
+                            if fm["uri"] not in seen_uris:
+                                matched_files.append(fm)
+                                seen_uris.add(fm["uri"])
+                except Exception:
+                    logger.debug("BM25 phrase retrieval failed for %r", phrase, exc_info=True)
+    except Exception as e:
+        logger.error(f"BM25 search failed: {e}")
+
+    return matched_files
+
+
+def _retrieve_remote_sources(
+    query: str, config: dict[str, Any]
+) -> list[NodeWithScore]:
+    """Search Confluence and Jira with timeout protection."""
+    remote_nodes: list[NodeWithScore] = []
+    embed_top_k = config["retrieval"]["embed_top_k"]
+
+    # Confluence
+    confluence_timeout = config["confluence"]["timeout"]
+    if config["confluence"]["url"]:
+        try:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_search_confluence, query, config)
+                confluence_nodes = future.result(timeout=confluence_timeout)
+            logger.info(f"Confluence search returned {len(confluence_nodes)} entries")
+            remote_nodes.extend(confluence_nodes[:embed_top_k])
+        except FuturesTimeoutError:
+            logger.warning(f"Confluence search timed out after {confluence_timeout}s")
+        except Exception as e:
+            logger.error(f"Error during Confluence search: {e}")
+
+    # Jira
+    jira_timeout = config["jira"]["timeout"]
+    if config["jira"]["url"]:
+        try:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_search_jira, query, config)
+                jira_nodes = future.result(timeout=jira_timeout)
+            logger.info(f"Jira search returned {len(jira_nodes)} entries")
+            remote_nodes.extend(jira_nodes[:embed_top_k])
+        except FuturesTimeoutError:
+            logger.warning(f"Jira search timed out after {jira_timeout}s")
+        except Exception as e:
+            logger.error(f"Error during Jira search: {e}")
+
+    return remote_nodes
+
+
+def _rerank_nodes(
+    nodes: list[NodeWithScore], query: str, config: dict[str, Any]
+) -> tuple[list[NodeWithScore], dict[int, float]]:
+    """Stage 2: Rerank nodes using FlashRank and return (nodes, scores)."""
+    rerank_top_k = config["retrieval"]["rerank_top_k"]
+    rerank_scores: dict[int, float] = {}
+
+    if not nodes:
+        return nodes, rerank_scores
+
+    rerank_limit = max(1, min(rerank_top_k, len(nodes)))
+    try:
+        reranker = _ensure_reranker(config)
+        passages = [{"text": node.node.get_content() or ""} for node in nodes]
+
+        from flashrank import RerankRequest
+        rerank_request = RerankRequest(query=query, passages=passages)
+        reranked_results = reranker.rerank(rerank_request)
+
+        # Build text-to-node mapping for fallback text matching
+        text_to_indices: dict[str, list[tuple[int, NodeWithScore]]] = {}
+        for idx, node in enumerate(nodes):
+            node_text = node.node.get_content() or ""
+            if node_text not in text_to_indices:
+                text_to_indices[node_text] = []
+            text_to_indices[node_text].append((idx, node))
+
+        reranked_nodes = []
+        seen_indices: set[int] = set()
+        for result in reranked_results:
+            score = result.get("score", 0.0)
+            result_idx = result.get("id")
+
+            # Primary: match by index (flashrank returns original passage index)
+            if result_idx is not None and 0 <= result_idx < len(nodes):
+                if result_idx not in seen_indices:
+                    node = nodes[result_idx]
+                    reranked_nodes.append(node)
+                    rerank_scores[id(node)] = float(score)
+                    seen_indices.add(result_idx)
+            else:
+                # Fallback: match by text content
+                doc_text = result.get("text", "")
+                if doc_text in text_to_indices:
+                    for idx, node in text_to_indices[doc_text]:
+                        if idx not in seen_indices:
+                            reranked_nodes.append(node)
+                            rerank_scores[id(node)] = float(score)
+                            seen_indices.add(idx)
+                            break
+
+        # Add remaining unmatched nodes with minimum matched score
+        # This ensures Jira/Confluence results aren't dropped due to text mismatch
+        min_score = min(rerank_scores.values()) if rerank_scores else 0.0
+        for idx, node in enumerate(nodes):
+            if idx not in seen_indices:
+                reranked_nodes.append(node)
+                rerank_scores[id(node)] = min_score
+
+        nodes = reranked_nodes[:rerank_limit]
+    except Exception as e:
+        logger.error(f"Reranking failed, falling back to vector search order: {e}")
+        nodes = nodes[:rerank_limit]
+
+    return nodes, rerank_scores
+
+
+def _format_search_results(
+    nodes: list[NodeWithScore], rerank_scores: dict[int, float], config: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Build structured chunk dicts from scored nodes."""
+    chunks = []
+    for node in nodes:
+        metadata = dict(node.node.metadata or {})
+        chunk_text = node.node.get_content()
+
+        file_path = (
+            metadata.get("file_path")
+            or metadata.get("file_name")
+            or metadata.get("source")
+        )
+        original_source = metadata.get("source")
+
+        # Build heading path
+        headings = metadata.get("document_headings") or metadata.get("headings") or []
+        if not headings and file_path:
+            headings = get_heading_store().get_headings(str(file_path))
+        char_start = getattr(node.node, "start_char_idx", None)
+        heading_text = metadata.get("heading")
+        heading_path: list[str] = []
+        if isinstance(headings, list) and headings:
+            if heading_text is None and char_start is not None:
+                heading_text, heading_path = _build_heading_path(headings, char_start)
+        meta_heading_path = metadata.get("heading_path")
+        if not heading_path and meta_heading_path:
+            heading_path = list(meta_heading_path)
+        if heading_text and (not heading_path or heading_path[-1] != heading_text):
+            heading_path = heading_path + [heading_text] if heading_path else [heading_text]
+
+        # Build URI
+        source_uri = None
+        if original_source == "Confluence":
+            confluence_url = config["confluence"]["url"]
+            page_id = metadata.get("page_id")
+            if confluence_url and page_id:
+                source_uri = f"{confluence_url.rstrip('/')}/pages/viewpage.action?pageId={page_id}"
+            elif confluence_url:
+                title = metadata.get("title", metadata.get("file_name", ""))
+                if title:
+                    from urllib.parse import quote
+                    encoded_title = quote(title.replace(" ", "+"))
+                    source_uri = f"{confluence_url.rstrip('/')}/spaces/~{encoded_title}"
+        elif original_source == "Jira":
+            jira_url = config["jira"]["url"]
+            issue_key = metadata.get("issue_key")
+            if jira_url and issue_key:
+                source_uri = f"{jira_url.rstrip('/')}/browse/{issue_key}"
+        elif file_path:
+            source_uri = _resolve_file_uri(file_path, config)
+
+        page_number = (
+            metadata.get("page_label")
+            or metadata.get("page_number")
+            or metadata.get("page")
+        )
+
+        line_number = None
+        line_offsets = metadata.get("line_offsets")
+        if line_offsets and char_start is not None:
+            line_number = _char_offset_to_line(char_start, line_offsets)
+
+        location = {
+            "uri": source_uri,
+            "page": page_number,
+            "line": line_number,
+            "heading_path": heading_path if heading_path else None,
+        }
+
+        score_value = rerank_scores.get(id(node), getattr(node, "score", None))
+        chunk_data = {
+            "text": chunk_text,
+            "score": round(float(score_value), 3) if score_value is not None else 0.0,
+            "location": location,
+        }
+        chunks.append(chunk_data)
+
+    return chunks
+
+
 def run_search(
     query: str,
     date_from: str | None = None,
@@ -1111,7 +1351,6 @@ def run_search(
     """
     config = _init_config(config_path) if config_path else _get_config()
 
-    # Setup environment on first call
     configure_offline_mode(
         config["retrieval"]["offline"],
         Path(config["storage"]["model_cache_dir"]),
@@ -1124,98 +1363,19 @@ def run_search(
         required_phrases, clean_query = _extract_quoted_phrases(query)
         enhanced_query = _preprocess_query(clean_query)
 
-        # Load index
         index = load_llamaindex_index(config)
 
-        # Stage 1a: Vector search
-        embed_top_k = config["retrieval"]["embed_top_k"]
-        retriever = index.as_retriever(similarity_top_k=embed_top_k)
-        vector_nodes = retriever.retrieve(enhanced_query)
+        # Retrieval
+        nodes = _retrieve_vector_nodes(index, enhanced_query, required_phrases, config)
+        matched_files = _retrieve_bm25_matches(enhanced_query, required_phrases, config)
+        nodes.extend(_retrieve_remote_sources(enhanced_query, config))
 
-        # Stage 1b: BM25 file name search
-        matched_files: list[dict[str, Any]] = []
-        bm25_retriever = _ensure_bm25_retriever(config)
-        if bm25_retriever:
-            try:
-                bm25_matches = bm25_retriever.retrieve(enhanced_query)
-                if bm25_matches:
-                    matched_files = _format_bm25_matches(bm25_matches, config)
-                    logger.info(f"BM25 matched {len(matched_files)} files (from {len(bm25_matches)} candidates)")
-                # Also query BM25 with each quoted phrase individually
-                if required_phrases:
-                    seen_uris = {f["uri"] for f in matched_files}
-                    for phrase in required_phrases:
-                        try:
-                            phrase_matches = bm25_retriever.retrieve(phrase)
-                            if phrase_matches:
-                                for fm in _format_bm25_matches(phrase_matches, config):
-                                    if fm["uri"] not in seen_uris:
-                                        matched_files.append(fm)
-                                        seen_uris.add(fm["uri"])
-                        except Exception:
-                            logger.debug("BM25 phrase retrieval failed for %r", phrase, exc_info=True)
-            except Exception as e:
-                logger.error(f"BM25 search failed: {e}")
-
-        nodes = vector_nodes
-
-        # Stage 1c: Docstore exact-phrase search
-        if required_phrases:
-            rerank_candidates = config["retrieval"]["rerank_candidates"]
-            phrase_nodes = _docstore_phrase_search(index, required_phrases, max_results=rerank_candidates)
-            if phrase_nodes:
-                # Deduplicate against vector search results
-                seen_ids = {n.node.node_id for n in nodes}
-                for pn in phrase_nodes:
-                    if pn.node.node_id not in seen_ids:
-                        nodes.append(pn)
-                        seen_ids.add(pn.node.node_id)
-
-        # Search Confluence (with timeout)
-        confluence_nodes: list[NodeWithScore] = []
-        confluence_timeout = config["confluence"]["timeout"]
-        if config["confluence"]["url"]:
-            try:
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(_search_confluence, enhanced_query, config)
-                    confluence_nodes = future.result(timeout=confluence_timeout)
-                logger.info(f"Confluence search returned {len(confluence_nodes)} entries")
-            except FuturesTimeoutError:
-                logger.warning(f"Confluence search timed out after {confluence_timeout}s")
-            except Exception as e:
-                logger.error(f"Error during Confluence search: {e}")
-
-        # Cap remote source candidates to match local vector search count
-        # so they don't flood the reranking pool
-        embed_top_k = config["retrieval"]["embed_top_k"]
-
-        if confluence_nodes:
-            nodes.extend(confluence_nodes[:embed_top_k])
-
-        # Search Jira (with timeout)
-        jira_nodes: list[NodeWithScore] = []
-        jira_timeout = config["jira"]["timeout"]
-        if config["jira"]["url"]:
-            try:
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(_search_jira, enhanced_query, config)
-                    jira_nodes = future.result(timeout=jira_timeout)
-                logger.info(f"Jira search returned {len(jira_nodes)} entries")
-            except FuturesTimeoutError:
-                logger.warning(f"Jira search timed out after {jira_timeout}s")
-            except Exception as e:
-                logger.error(f"Error during Jira search: {e}")
-
-        if jira_nodes:
-            nodes.extend(jira_nodes[:embed_top_k])
-
-        # Apply date filtering
+        # Date filtering and recency boost
         if date_from or date_to:
             original_count = len(nodes)
             nodes = _filter_nodes_by_date(nodes, date_from, date_to)
             logger.info(f"Date filtering: {original_count} -> {len(nodes)} nodes")
 
-        # Apply recency boost
         recency_boost = config["retrieval"]["recency_boost"]
         recency_half_life = config["retrieval"]["recency_half_life_days"]
         if recency_boost > 0:
@@ -1227,65 +1387,10 @@ def run_search(
             logger.info(f"Capping rerank candidates: {len(nodes)} -> {rerank_candidates}")
             nodes = nodes[:rerank_candidates]
 
-        # Stage 2: Rerank
-        rerank_top_k = config["retrieval"]["rerank_top_k"]
-        rerank_scores: dict[int, float] = {}
-        if nodes:
-            rerank_limit = max(1, min(rerank_top_k, len(nodes)))
-            try:
-                reranker = _ensure_reranker(config)
-                passages = [{"text": node.node.get_content() or ""} for node in nodes]
+        # Rerank
+        nodes, rerank_scores = _rerank_nodes(nodes, enhanced_query, config)
 
-                from flashrank import RerankRequest
-                rerank_request = RerankRequest(query=enhanced_query, passages=passages)
-                reranked_results = reranker.rerank(rerank_request)
-
-                # Build text-to-node mapping for fallback text matching
-                text_to_indices: dict[str, list[tuple[int, NodeWithScore]]] = {}
-                for idx, node in enumerate(nodes):
-                    node_text = node.node.get_content() or ""
-                    if node_text not in text_to_indices:
-                        text_to_indices[node_text] = []
-                    text_to_indices[node_text].append((idx, node))
-
-                reranked_nodes = []
-                seen_indices: set[int] = set()
-                for result in reranked_results:
-                    score = result.get("score", 0.0)
-                    result_idx = result.get("id")
-
-                    # Primary: match by index (flashrank returns original passage index)
-                    if result_idx is not None and 0 <= result_idx < len(nodes):
-                        if result_idx not in seen_indices:
-                            node = nodes[result_idx]
-                            reranked_nodes.append(node)
-                            rerank_scores[id(node)] = float(score)
-                            seen_indices.add(result_idx)
-                    else:
-                        # Fallback: match by text content
-                        doc_text = result.get("text", "")
-                        if doc_text in text_to_indices:
-                            for idx, node in text_to_indices[doc_text]:
-                                if idx not in seen_indices:
-                                    reranked_nodes.append(node)
-                                    rerank_scores[id(node)] = float(score)
-                                    seen_indices.add(idx)
-                                    break
-
-                # Add remaining unmatched nodes with minimum matched score
-                # This ensures Jira/Confluence results aren't dropped due to text mismatch
-                min_score = min(rerank_scores.values()) if rerank_scores else 0.0
-                for idx, node in enumerate(nodes):
-                    if idx not in seen_indices:
-                        reranked_nodes.append(node)
-                        rerank_scores[id(node)] = min_score
-
-                nodes = reranked_nodes[:rerank_limit]
-            except Exception as e:
-                logger.error(f"Reranking failed, falling back to vector search order: {e}")
-                nodes = nodes[:rerank_limit]
-
-        # Filter by score threshold
+        # Post-rerank filtering
         score_threshold = config["retrieval"]["score_threshold"]
         if score_threshold > 0:
             nodes = [
@@ -1293,7 +1398,6 @@ def run_search(
                 if rerank_scores.get(id(node), 0.0) >= score_threshold
             ]
 
-        # Filter by required quoted phrases
         if required_phrases:
             lowered_phrases = [p.lower() for p in required_phrases]
             before_count = len(nodes)
@@ -1303,83 +1407,8 @@ def run_search(
             ]
             logger.info(f"Phrase filter: {before_count} -> {len(nodes)} nodes for {required_phrases}")
 
-        # Format chunks
-        chunks = []
-        for node in nodes:
-            metadata = dict(node.node.metadata or {})
-            chunk_text = node.node.get_content()
-
-            file_path = (
-                metadata.get("file_path")
-                or metadata.get("file_name")
-                or metadata.get("source")
-            )
-            original_source = metadata.get("source")
-
-            # Build heading path
-            headings = metadata.get("document_headings") or metadata.get("headings") or []
-            if not headings and file_path:
-                headings = get_heading_store().get_headings(str(file_path))
-            char_start = getattr(node.node, "start_char_idx", None)
-            heading_text = metadata.get("heading")
-            heading_path: list[str] = []
-            if isinstance(headings, list) and headings:
-                if heading_text is None and char_start is not None:
-                    heading_text, heading_path = _build_heading_path(headings, char_start)
-            meta_heading_path = metadata.get("heading_path")
-            if not heading_path and meta_heading_path:
-                heading_path = list(meta_heading_path)
-            if heading_text and (not heading_path or heading_path[-1] != heading_text):
-                heading_path = heading_path + [heading_text] if heading_path else [heading_text]
-
-            # Build URI
-            source_uri = None
-            if original_source == "Confluence":
-                confluence_url = config["confluence"]["url"]
-                page_id = metadata.get("page_id")
-                if confluence_url and page_id:
-                    source_uri = f"{confluence_url.rstrip('/')}/pages/viewpage.action?pageId={page_id}"
-                elif confluence_url:
-                    title = metadata.get("title", metadata.get("file_name", ""))
-                    if title:
-                        from urllib.parse import quote
-                        encoded_title = quote(title.replace(" ", "+"))
-                        source_uri = f"{confluence_url.rstrip('/')}/spaces/~{encoded_title}"
-            elif original_source == "Jira":
-                # Build Jira issue URI using standard browse URL format
-                jira_url = config["jira"]["url"]
-                issue_key = metadata.get("issue_key")
-                if jira_url and issue_key:
-                    source_uri = f"{jira_url.rstrip('/')}/browse/{issue_key}"
-            elif file_path:
-                source_uri = _resolve_file_uri(file_path, config)
-
-            page_number = (
-                metadata.get("page_label")
-                or metadata.get("page_number")
-                or metadata.get("page")
-            )
-
-            line_number = None
-            line_offsets = metadata.get("line_offsets")
-            if line_offsets and char_start is not None:
-                line_number = _char_offset_to_line(char_start, line_offsets)
-
-            location = {
-                "uri": source_uri,
-                "page": page_number,
-                "line": line_number,
-                "heading_path": heading_path if heading_path else None,
-            }
-
-            score_value = rerank_scores.get(id(node), getattr(node, "score", None))
-            chunk_data = {
-                "text": chunk_text,
-                "score": round(float(score_value), 3) if score_value is not None else 0.0,
-                "location": location,
-            }
-            chunks.append(chunk_data)
-
+        # Format results
+        chunks = _format_search_results(nodes, rerank_scores, config)
         elapsed = time.time() - start_time
 
         return {
