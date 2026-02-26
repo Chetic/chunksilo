@@ -37,6 +37,15 @@ def _parse_heading_level(style_name: str | None) -> int:
     return 1
 
 
+def _is_heading_style(style_name: str) -> bool:
+    """Check whether a DOCX style name represents a heading."""
+    return (
+        style_name.startswith("Heading")
+        or style_name.startswith("heading")
+        or "Heading" in style_name
+    )
+
+
 def _get_doc_temp_dir() -> Path:
     """Get the temporary directory for .doc conversion, creating it if needed."""
     storage_dir = Path(cfgload.get("storage.storage_dir", "./storage"))
@@ -164,13 +173,8 @@ def split_docx_into_heading_documents(
             ctx.set_phase(f"Extracting headings ({len(all_headings)} found)")
 
         style_name = getattr(para.style, "name", "") or ""
-        is_heading = (
-            style_name.startswith("Heading")
-            or style_name.startswith("heading")
-            or "Heading" in style_name
-        )
 
-        if is_heading and para.text.strip():
+        if _is_heading_style(style_name) and para.text.strip():
             heading_level = _parse_heading_level(style_name)
             all_headings.append({
                 "text": para.text.strip(),
@@ -239,13 +243,8 @@ def split_docx_into_heading_documents(
 
     for para in doc.paragraphs:
         style_name = getattr(para.style, "name", "") or ""
-        is_heading = (
-            style_name.startswith("Heading")
-            or style_name.startswith("heading")
-            or "Heading" in style_name
-        )
 
-        if is_heading and para.text.strip():
+        if _is_heading_style(style_name) and para.text.strip():
             flush_current()
             current_heading = para.text.strip()
             current_level = _parse_heading_level(style_name)
