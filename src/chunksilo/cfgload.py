@@ -7,9 +7,10 @@ Loads configuration from config.yaml, searching in standard locations.
 """
 import logging
 import os
-import yaml
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +161,7 @@ def load_config(config_path: Path | None = None) -> dict[str, Any]:
 
     logger.info("Using config: %s", path)
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         user_config = yaml.safe_load(f) or {}
 
     result = _deep_merge(_DEFAULTS, user_config)

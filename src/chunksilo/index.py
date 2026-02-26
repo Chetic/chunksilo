@@ -14,19 +14,21 @@ import queue
 import sqlite3
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Iterator
 from typing import Any
 
 from llama_index.core import (
-    VectorStoreIndex,
-    StorageContext,
+    Document as LlamaIndexDocument,
+)
+from llama_index.core import (
     Settings,
     SimpleDirectoryReader,
-    Document as LlamaIndexDocument,
+    StorageContext,
+    VectorStoreIndex,
     load_index_from_storage,
 )
 from llama_index.core.node_parser import SentenceSplitter
@@ -36,9 +38,10 @@ from llama_index.embeddings.fastembed import FastEmbedEmbedding
 # Load configuration from config.yaml
 from . import cfgload
 from .cfgload import load_config
-from .models import _get_cached_model_path, resolve_flashrank_model_name, configure_offline_mode
-from .ui import IndexingUI, FileProcessingTimeoutError, FileProcessingContext, GracefulAbort
-from .docx_utils import split_docx_into_heading_documents, _convert_doc_to_docx
+from .docx_utils import _convert_doc_to_docx, split_docx_into_heading_documents
+from .models import _get_cached_model_path, configure_offline_mode, resolve_flashrank_model_name
+from .ui import FileProcessingContext, FileProcessingTimeoutError, GracefulAbort, IndexingUI
+
 _config = load_config()
 
 # Configuration from config.yaml
@@ -222,7 +225,7 @@ class HeadingStore:
         """Load heading data from disk."""
         if self.store_path.exists():
             try:
-                with open(self.store_path, "r", encoding="utf-8") as f:
+                with open(self.store_path, encoding="utf-8") as f:
                     self._data = json.load(f)
             except Exception as e:
                 logger.warning(f"Failed to load heading store: {e}")
@@ -750,7 +753,7 @@ class LocalFileSystemSource(DataSource):
                         continue
                     try:
                         yield self._create_file_info(file_path, tracked_files)
-                    except (OSError, IOError, TimeoutError) as e:
+                    except (OSError, TimeoutError) as e:
                         logger.warning(f"Could not access file {file_path}: {e}")
                         continue
         else:
@@ -768,7 +771,7 @@ class LocalFileSystemSource(DataSource):
                     continue
                 try:
                     yield self._create_file_info(f, tracked_files)
-                except (OSError, IOError, TimeoutError) as e:
+                except (OSError, TimeoutError) as e:
                     logger.warning(f"Could not access file {f}: {e}")
                     continue
 
@@ -1168,7 +1171,7 @@ def ensure_rerank_model_cached(cache_dir: Path, offline: bool = False) -> Path:
     model_name = resolve_flashrank_model_name(RETRIEVAL_RERANK_MODEL_NAME)
 
     try:
-        reranker = Ranker(model_name=model_name, cache_dir=str(cache_dir_abs))
+        Ranker(model_name=model_name, cache_dir=str(cache_dir_abs))
         logger.info(f"FlashRank model '{model_name}' initialized successfully")
         return cache_dir_abs
     except Exception as exc:
@@ -1219,8 +1222,8 @@ def build_bm25_index(index, storage_dir: Path) -> None:
     This enables keyword matching for queries like 'cpp styleguide' to find
     files named 'cpp_styleguide.md'.
     """
-    from llama_index.retrievers.bm25 import BM25Retriever
     from llama_index.core.schema import TextNode
+    from llama_index.retrievers.bm25 import BM25Retriever
 
     logger.info("Building BM25 index for file name matching...")
 
@@ -1667,7 +1670,7 @@ def build_index(
                 )
                 if should_checkpoint:
                     index.storage_context.persist(persist_dir=str(STORAGE_DIR))
-                    with get_heading_store() as store:
+                    with get_heading_store():
                         pass  # Context manager will auto-flush
                     files_since_checkpoint = 0
                     last_checkpoint_time = time.time()

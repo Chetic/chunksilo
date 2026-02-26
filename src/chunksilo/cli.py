@@ -57,8 +57,9 @@ def main():
     logging.basicConfig(level=log_level, format="%(message)s", stream=sys.stderr)
 
     if args.dump_defaults:
-        from .cfgload import _DEFAULTS
         import yaml
+
+        from .cfgload import _DEFAULTS
         yaml.dump(_DEFAULTS, sys.stdout, default_flow_style=False, sort_keys=False)
         return
 

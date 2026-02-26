@@ -6,23 +6,26 @@ Core search pipeline for ChunkSilo.
 Contains all retrieval logic independent of the MCP server.
 Used by both the MCP server (server.py) and the CLI (cli.py).
 """
+import logging
+import math
 import os
 import re
 import time
-import math
-import logging
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from llama_index.core import StorageContext, load_index_from_storage, Settings
-from llama_index.core.schema import TextNode, NodeWithScore
+from llama_index.core import Settings, StorageContext, load_index_from_storage
+from llama_index.core.schema import NodeWithScore, TextNode
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
+
 from .index import get_heading_store
+
 try:
-    from llama_index.readers.confluence import ConfluenceReader
     import requests  # Available when llama-index-readers-confluence is installed
+    from llama_index.readers.confluence import ConfluenceReader
 except ImportError:
     ConfluenceReader = None
     requests = None
@@ -43,7 +46,7 @@ if ConfluenceReader is not None:
         pass
 
 from .cfgload import load_config
-from .models import _get_cached_model_path, resolve_flashrank_model_name, configure_offline_mode
+from .models import _get_cached_model_path, configure_offline_mode, resolve_flashrank_model_name
 
 logger = logging.getLogger(__name__)
 
