@@ -142,6 +142,14 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return result
 
 
+def _has_embedding_cache(cache_dir: Path) -> bool:
+    """True if ``cache_dir`` holds a HuggingFace-style embedding model cache."""
+    try:
+        return any(cache_dir.glob("models--*"))
+    except OSError:
+        return False
+
+
 def _resolve_bundled_models(config: dict[str, Any]) -> dict[str, Any]:
     """Transparently fall back to models bundled in the package.
 
@@ -150,16 +158,20 @@ def _resolve_bundled_models(config: dict[str, Any]) -> dict[str, Any]:
     offline mode. This lets a pip-installed wheel run in an air-gapped environment
     with zero extra configuration. A user-configured cache that already holds the
     models always wins, so explicit setups are never overridden.
-    """
-    embed_name = config["retrieval"]["embed_model_name"]
-    hf_dirname = f"models--{embed_name.replace('/', '--')}"
 
-    if not (_BUNDLED_MODELS_DIR / hf_dirname).exists():
-        return config  # No bundled models for this embedding model.
+    Detection looks for any HuggingFace-style ``models--*`` cache directory rather
+    than matching the configured embedding name: fastembed stores the model under
+    its upstream source repo (e.g. ``models--qdrant--bge-small-en-v1.5-onnx-q``),
+    not under the configured alias ``BAAI/bge-small-en-v1.5``.
+    """
+    if not _has_embedding_cache(_BUNDLED_MODELS_DIR):
+        return config  # No models bundled in this install.
 
     configured = Path(config["storage"]["model_cache_dir"]).expanduser()
-    if (configured / hf_dirname).exists():
-        return config  # Configured cache already has the models; respect it.
+    if configured.resolve() != _BUNDLED_MODELS_DIR.resolve() and _has_embedding_cache(
+        configured
+    ):
+        return config  # Configured cache already has models; respect it.
 
     result = copy.deepcopy(config)
     result["storage"]["model_cache_dir"] = str(_BUNDLED_MODELS_DIR)
