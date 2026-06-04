@@ -5,6 +5,7 @@ Shared configuration loading for ChunkSilo.
 
 Loads configuration from config.yaml, searching in standard locations.
 """
+import copy
 import logging
 import os
 from pathlib import Path
@@ -13,6 +14,10 @@ from typing import Any
 import yaml
 
 logger = logging.getLogger(__name__)
+
+# Retrieval models bundled inside the installed package (populated at wheel-build
+# time). Present in air-gapped wheel installs; absent in plain source checkouts.
+_BUNDLED_MODELS_DIR = Path(__file__).resolve().parent / "_bundled_models"
 
 
 def _find_config() -> Path:
@@ -137,6 +142,34 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return result
 
 
+def _resolve_bundled_models(config: dict[str, Any]) -> dict[str, Any]:
+    """Transparently fall back to models bundled in the package.
+
+    If the wheel ships the retrieval models and the configured cache directory
+    does not already contain them, point the cache at the bundled copy and enable
+    offline mode. This lets a pip-installed wheel run in an air-gapped environment
+    with zero extra configuration. A user-configured cache that already holds the
+    models always wins, so explicit setups are never overridden.
+    """
+    embed_name = config["retrieval"]["embed_model_name"]
+    hf_dirname = f"models--{embed_name.replace('/', '--')}"
+
+    if not (_BUNDLED_MODELS_DIR / hf_dirname).exists():
+        return config  # No bundled models for this embedding model.
+
+    configured = Path(config["storage"]["model_cache_dir"]).expanduser()
+    if (configured / hf_dirname).exists():
+        return config  # Configured cache already has the models; respect it.
+
+    result = copy.deepcopy(config)
+    result["storage"]["model_cache_dir"] = str(_BUNDLED_MODELS_DIR)
+    result["retrieval"]["offline"] = True
+    logger.info(
+        "Using bundled retrieval models at %s (offline mode)", _BUNDLED_MODELS_DIR
+    )
+    return result
+
+
 def load_config(config_path: Path | None = None) -> dict[str, Any]:
     """Load configuration from YAML file with defaults.
 
@@ -157,7 +190,7 @@ def load_config(config_path: Path | None = None) -> dict[str, Any]:
 
     if not path.exists():
         logger.info("Config file not found at %s; using built-in defaults", path)
-        return _DEFAULTS.copy()
+        return _resolve_bundled_models(_DEFAULTS.copy())
 
     logger.info("Using config: %s", path)
 
@@ -165,6 +198,7 @@ def load_config(config_path: Path | None = None) -> dict[str, Any]:
         user_config = yaml.safe_load(f) or {}
 
     result = _deep_merge(_DEFAULTS, user_config)
+    result = _resolve_bundled_models(result)
 
     # Cache result only for default path
     if config_path is None:

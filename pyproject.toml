@@ -43,6 +43,16 @@ dependencies = {file = ["requirements.txt"]}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# Bundle the retrieval models into the wheel so air-gapped installs work with no
+# network access. Populated at build time (see the publish job / prepare-common.sh).
+# The HuggingFace `blobs/` copies are excluded: with HF_HUB_DISABLE_SYMLINKS=1 the
+# `snapshots/` tree holds real files, so blobs would only duplicate the bytes.
+[tool.setuptools.package-data]
+chunksilo = ["_bundled_models/**/*"]
+
+[tool.setuptools.exclude-package-data]
+chunksilo = ["_bundled_models/**/blobs/**"]
+
 [tool.ruff]
 target-version = "py311"
 line-length = 120

@@ -251,6 +251,59 @@ jobs:
             packages/*.tar.gz
 
 
+  # Offline wheel: the same chunksilo wheel with the embedding + rerank models
+  # bundled in (~260 MB). Too large for public PyPI's 100 MB/file limit, so it is
+  # NEVER published there — it is attached to the GitHub Release for download into
+  # an air-gapped, self-hosted index (Artifactory). Installs with zero network.
+  build_offline_wheel:
+    needs: [prepare, release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set package version
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          sed -i "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
+          sed -i "s/^__version__ = .*/__version__ = \"$VERSION\"/" src/chunksilo/__init__.py
+
+      - name: Bundle retrieval models into the wheel
+        env:
+          # Prefer real files in snapshots/ over symlinks into blobs/ so the models
+          # survive being packed into a wheel (a zip cannot carry symlinks).
+          HF_HUB_DISABLE_SYMLINKS: "1"
+        run: |
+          # Install the exact dependency set the release used; no upgrades.
+          pip install --no-deps -r chunksilo-2.3.3-linux-x86_64.lock
+          BUNDLE=src/chunksilo/_bundled_models
+          PYTHONPATH=src python -m chunksilo.index --download-models \
+            --model-cache-dir "$BUNDLE"
+          # Belt-and-suspenders: materialize any remaining symlinks into real files
+          # (independent of the hf_hub version honoring HF_HUB_DISABLE_SYMLINKS),
+          # then drop the now-redundant blob store. exclude-package-data also keeps
+          # blobs/ out of the wheel in case anything is left behind.
+          find "$BUNDLE" -type l | while read -r link; do
+            target=$(readlink -f "$link"); rm "$link"; cp "$target" "$link"
+          done
+          find "$BUNDLE" -type d -name blobs -prune -exec rm -rf {} +
+
+      - name: Build offline wheel
+        run: |
+          pip install --no-deps build
+          python -m build --wheel
+          ls -lh dist/
+
+      - name: Attach offline wheel to the GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eo pipefail
+          gh release upload "v${{ needs.prepare.outputs.version }}" dist/*.whl --clobber
+
   publish_pypi:
     needs: [prepare, release]
     runs-on: ubuntu-latest
