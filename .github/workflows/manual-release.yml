@@ -293,7 +293,7 @@ jobs:
 
       - name: Build offline wheel
         run: |
-          pip install --no-deps build
+          pip install build
           python -m build --wheel
           ls -lh dist/
 
