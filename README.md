@@ -51,10 +51,11 @@ Requires Python 3.11 or later. Models are downloaded automatically on first run 
 
 ```bash
 pip install chunksilo
-
-# Or with Confluence and Jira support:
-pip install chunksilo[confluence,jira]
 ```
+
+Confluence and Jira support is included by default — just provide a config file
+to enable them. (`pip install chunksilo[confluence,jira]` still works as an alias
+for backward compatibility.)
 
 Then:
 1. **Create** a config file at `~/.config/chunksilo/config.yaml` (see [Configuration](#configuration))
@@ -184,7 +185,7 @@ All settings are optional and have sensible defaults.
 
 #### Confluence Settings (optional)
 
-> **Note:** Confluence integration requires the optional dependency. Install with: `pip install chunksilo[confluence]`
+> **Note:** Confluence support is installed by default; just set the values below to enable it.
 
 | Setting | Description |
 | :--- | :--- |
@@ -202,7 +203,7 @@ All settings are optional and have sensible defaults.
 
 #### Jira Settings (optional)
 
-> **Note:** Jira integration requires the optional dependency. Install with: `pip install chunksilo[jira]`
+> **Note:** Jira support is installed by default; just set the values below to enable it.
 
 | Setting | Description |
 | :--- | :--- |
@@ -377,8 +378,8 @@ Add to `mcp_settings.json` (typically in `~/.config/Code/User/globalStorage/roov
 - **Index missing**: Run `chunksilo --build-index` (PyPI install) or `./venv/bin/chunksilo --build-index` (offline bundle).
 - **Retrieval errors**: Check paths in your MCP client configuration.
 - **Offline mode**: PyPI installs default to `offline: false` (models auto-download). The offline bundle includes pre-downloaded models and sets `offline: true`. Set `retrieval.offline: true` in `config.yaml` to prevent network calls after initial model download.
-- **Confluence Integration**: Install with `pip install chunksilo[confluence]`, then set `confluence.url`, `confluence.username`, and `confluence.api_token` in `config.yaml`.
-- **Jira Integration**: Install with `pip install chunksilo[jira]`, then set `jira.url`, `jira.username`, and `jira.api_token` in `config.yaml`. Optionally configure `jira.projects` to restrict search to specific project keys.
+- **Confluence Integration**: Included by default — set `confluence.url`, `confluence.username`, and `confluence.api_token` in `config.yaml`.
+- **Jira Integration**: Included by default — set `jira.url`, `jira.username`, and `jira.api_token` in `config.yaml`. Optionally configure `jira.projects` to restrict search to specific project keys.
 - **Custom CA Bundle**: Set `ssl.ca_bundle_path` in `config.yaml` for custom certificates.
 - **Network mounts**: Unavailable directories are skipped with a warning; indexing continues with available directories.
 - **Legacy .doc files**: Requires LibreOffice to be installed for automatic conversion to .docx. If LibreOffice is not found, .doc files are skipped with a warning. Full heading extraction is supported.

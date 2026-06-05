@@ -291,6 +291,18 @@ jobs:
           done
           find "$BUNDLE" -type d -name blobs -prune -exec rm -rf {} +
 
+      - name: Pin the full dependency closure into the offline wheel
+        run: |
+          # Replace the range-based requirements with the exact pinned closure from
+          # the lock so the offline wheel's metadata names a single version for every
+          # transitive dependency. A plain `pip install chunksilo==<ver>` then has one
+          # candidate per package and resolves with no backtracking ("pip is looking
+          # at multiple versions ...") — no flags or lock file needed by the user.
+          # Only the offline wheel is pinned; the public PyPI wheel keeps its ranges.
+          grep -v '^#' chunksilo-2.3.3-linux-x86_64.lock \
+            | grep -E '^[A-Za-z0-9].*==' > requirements.txt
+          echo "Pinned $(wc -l < requirements.txt) dependencies into the offline wheel."
+
       - name: Build offline wheel
         run: |
           pip install build

@@ -48,7 +48,7 @@ indexing:
   #   slow_file_threshold_seconds: 30
 
 # Confluence integration (optional) - enables live search of Confluence pages
-# Install with: pip install chunksilo[confluence]
+# Installed by default; set the values below to enable.
 confluence:
   url: ""
   username: ""
@@ -57,7 +57,7 @@ confluence:
   # max_results: 30
 
 # Jira integration (optional) - enables live search of Jira issues
-# Install with: pip install chunksilo[jira]
+# Installed by default; set the values below to enable.
 jira:
   # Jira base URL (leave empty to disable)
   # Cloud: https://company.atlassian.net
