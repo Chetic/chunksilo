@@ -252,12 +252,18 @@ jobs:
 
 
   # Offline wheel: the same chunksilo wheel with the embedding + rerank models
-  # bundled in (~260 MB). Too large for public PyPI's 100 MB/file limit, so it is
+  # bundled in (~80 MB). Too large for public PyPI's 100 MB/file limit, so it is
   # NEVER published there — it is attached to the GitHub Release for download into
   # an air-gapped, self-hosted index (Artifactory). Installs with zero network.
   build_offline_wheel:
     needs: [prepare, release]
     runs-on: ubuntu-latest
+    env:
+      # The fully-pinned dependency closure of record. The version in the name is
+      # the closure BASELINE (established at 2.3.3), NOT the app version — the same
+      # closure ships across app releases until a dependency actually changes. To
+      # bump a dependency: regenerate the lock and update this one line.
+      LOCK_FILE: chunksilo-2.3.3-linux-x86_64.lock
     steps:
       - uses: actions/checkout@v4
 
@@ -278,7 +284,7 @@ jobs:
           HF_HUB_DISABLE_SYMLINKS: "1"
         run: |
           # Install the exact dependency set the release used; no upgrades.
-          pip install --no-deps -r chunksilo-2.3.3-linux-x86_64.lock
+          pip install --no-deps -r "$LOCK_FILE"
           BUNDLE=src/chunksilo/_bundled_models
           PYTHONPATH=src python -m chunksilo.index --download-models \
             --model-cache-dir "$BUNDLE"
@@ -293,15 +299,31 @@ jobs:
 
       - name: Pin the full dependency closure into the offline wheel
         run: |
+          set -euo pipefail
           # Replace the range-based requirements with the exact pinned closure from
           # the lock so the offline wheel's metadata names a single version for every
           # transitive dependency. A plain `pip install chunksilo==<ver>` then has one
           # candidate per package and resolves with no backtracking ("pip is looking
           # at multiple versions ...") — no flags or lock file needed by the user.
           # Only the offline wheel is pinned; the public PyPI wheel keeps its ranges.
-          grep -v '^#' chunksilo-2.3.3-linux-x86_64.lock \
-            | grep -E '^[A-Za-z0-9].*==' > requirements.txt
-          echo "Pinned $(wc -l < requirements.txt) dependencies into the offline wheel."
+          grep -v '^#' "$LOCK_FILE" | grep -E '^[A-Za-z0-9].*==' > requirements.txt
+
+          # Guard: fail loudly rather than ship a wheel with missing/empty deps if
+          # the lock is absent, renamed, or its format changes. The closure has ~140
+          # packages; require a sane minimum and a couple of sentinels that MUST be
+          # present (core runtime + the jira/confluence-by-default additions).
+          count=$(wc -l < requirements.txt)
+          echo "Pinned $count dependencies into the offline wheel."
+          if [ "$count" -lt 100 ]; then
+            echo "::error::Pinned dependency count ($count) is implausibly low — '$LOCK_FILE' is missing, empty, or malformed." >&2
+            exit 1
+          fi
+          for sentinel in fastembed flashrank jira llama-index-readers-confluence; do
+            grep -qiE "^${sentinel}==" requirements.txt || {
+              echo "::error::Expected '$sentinel==' in the pinned closure but it is absent — check '$LOCK_FILE'." >&2
+              exit 1
+            }
+          done
 
       - name: Build offline wheel
         run: |

@@ -1,19 +1,27 @@
-# Fully-pinned transitive dependency lock for chunksilo 2.3.3
+# Fully-pinned transitive dependency lock — the closure OF RECORD for chunksilo.
 #
-# Derived from the exact wheels/sdists bundled in the official release:
+# The "2.3.3" in this file's name is the closure BASELINE, not the app version:
+# the same dependency set ships across app releases (2.3.x, 2.4.x, ...) until a
+# dependency actually changes. The CI offline-wheel build bakes this exact closure
+# into the wheel's metadata, and the air-gapped Artifactory is provisioned from it.
+#
+# Derived from the exact wheels/sdists bundled in the official 2.3.3 release:
 #   asset:    chunksilo-2.3.3-manylinux_2_34_x86_64.tar.gz  (dependencies/)
 #   digest:   sha256:6d00e7b2a216932e6032ab7d4dae8e901a34cd819161135256520d2d7aa0fd2d
 #   platform: manylinux_2_34 x86_64 / CPython 3.11
 #   includes: base deps + 'confluence' and 'jira' extras (as the release bundles them)
 #
-# Reproduce the release's exact dependency set:
+# Reproduce the exact dependency set:
 #   pip install --no-deps -r chunksilo-2.3.3-linux-x86_64.lock
+#
+# To change a dependency: regenerate this closure, update the LOCK_FILE reference
+# in .github/workflows/manual-release.yml, and re-provision the offline store.
 #
 # Notes:
 #  - No --hash lines: versions come from bundled wheel filenames, not a hashed index.
 #  - Linux/x86_64/py3.11 closure: some pins are platform-specific and won't
 #    resolve on macOS/Windows or other Python versions.
-#  - chunksilo==2.3.3 itself is the app, not listed as a dependency.
+#  - chunksilo itself is the app, not listed as a dependency.
 #
 aiohappyeyeballs==2.6.1
 aiohttp==3.13.2
