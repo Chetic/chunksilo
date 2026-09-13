@@ -48,6 +48,7 @@ if ConfluenceReader is not None:
 
 from .cfgload import load_config
 from .models import _get_cached_model_path, configure_offline_mode, resolve_flashrank_model_name
+from .shareuri import build_share_mappings, to_share_uris
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +179,44 @@ def _resolve_file_uri(file_path: str, config: dict[str, Any]) -> str | None:
     except Exception:
         logger.debug("Failed to resolve file URI for %r", file_path, exc_info=True)
         return None
+
+
+# Keyed by config object identity: the server holds one config for its
+# lifetime, so this builds once; a test handing in a fresh dict just rebuilds.
+_share_mappings_cache: tuple[Any, tuple] | None = None
+
+
+def _get_share_mappings(config: dict[str, Any]):
+    global _share_mappings_cache
+    cached = _share_mappings_cache
+    if cached is not None and cached[0] is config:
+        return cached[1]
+    mappings = build_share_mappings(config)
+    _share_mappings_cache = (config, mappings)
+    return mappings
+
+
+def _resolve_result_uris(
+    file_path: str, config: dict[str, Any]
+) -> tuple[str | None, str | None]:
+    """``(uri, unc)`` to present for a result path - never touching the disk.
+
+    A file covered by a ``shares`` mapping is presented as the share location
+    the user actually knows: an ``smb://`` URI plus the Windows UNC form.
+    Everything else keeps the local ``file://`` URI, which is exactly right
+    for a same-machine client.
+    """
+    try:
+        normalized = _normalize_result_path(file_path, config)
+        if normalized is None:
+            return None, None
+        share = to_share_uris(normalized, _get_share_mappings(config))
+        if share is not None:
+            return share
+        return _file_uri(normalized), None
+    except Exception:
+        logger.debug("Failed to resolve result URIs for %r", file_path, exc_info=True)
+        return None, None
 
 
 def _build_heading_path(headings: list[dict], char_start: int | None) -> tuple[str | None, list[str]]:
@@ -313,9 +352,12 @@ def _format_bm25_matches(bm25_nodes: list[NodeWithScore], config: dict[str, Any]
             continue
         metadata = node.node.metadata or {}
         file_path = metadata.get("file_path", "")
-        source_uri = _resolve_file_uri(file_path, config) if file_path else None
+        source_uri, source_unc = (
+            _resolve_result_uris(file_path, config) if file_path else (None, None)
+        )
         matched_files.append({
             "uri": source_uri,
+            "unc": source_unc,
             "score": round(float(node.score), 4),
         })
     return matched_files[:5]
@@ -1309,8 +1351,9 @@ def _format_search_results(
         if heading_text and (not heading_path or heading_path[-1] != heading_text):
             heading_path = heading_path + [heading_text] if heading_path else [heading_text]
 
-        # Build URI
+        # Build URI (plus the Windows UNC form for share-covered files)
         source_uri = None
+        source_unc = None
         if original_source == "Confluence":
             confluence_url = config["confluence"]["url"]
             page_id = metadata.get("page_id")
@@ -1328,7 +1371,7 @@ def _format_search_results(
             if jira_url and issue_key:
                 source_uri = f"{jira_url.rstrip('/')}/browse/{issue_key}"
         elif file_path:
-            source_uri = _resolve_file_uri(file_path, config)
+            source_uri, source_unc = _resolve_result_uris(file_path, config)
 
         page_number = (
             metadata.get("page_label")
@@ -1343,6 +1386,7 @@ def _format_search_results(
 
         location = {
             "uri": source_uri,
+            "unc": source_unc,
             "page": page_number,
             "line": line_number,
             "heading_path": heading_path if heading_path else None,

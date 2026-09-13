@@ -256,6 +256,39 @@ class TestURIBuilding:
     def test_empty_path(self):
         assert _resolve_file_uri("", self.CONFIG) is None
 
+    SHARE_CONFIG = {
+        "indexing": {"directories": []},
+        "shares": [{"prefix": "/mnt/docs", "unc": "//nas/docs"}],
+    }
+
+    def test_share_mapping_no_filesystem_access(self, monkeypatch):
+        """The share-location mapping is pure config string work; it may not
+        stat either - it runs for the same fifteen results per query."""
+        def explode(*_args, **_kwargs):
+            raise AssertionError("URI building must not touch the filesystem")
+
+        monkeypatch.setattr(os, "stat", explode)
+        monkeypatch.setattr(os, "lstat", explode)
+        monkeypatch.setattr(os.path, "realpath", explode)
+        monkeypatch.setattr(Path, "exists", explode)
+        monkeypatch.setattr(Path, "resolve", explode)
+
+        from chunksilo.search import _resolve_result_uris
+
+        assert _resolve_result_uris("/mnt/docs/spec.pdf", self.SHARE_CONFIG) == (
+            "smb://nas/docs/spec.pdf",
+            "\\\\nas\\docs\\spec.pdf",
+        )
+
+    def test_uncovered_path_keeps_the_file_uri_exactly(self):
+        """No share covering a path: the file:// URI, byte-for-byte."""
+        from chunksilo.search import _resolve_result_uris
+
+        assert _resolve_result_uris("/opt/notes/spec.pdf", self.SHARE_CONFIG) == (
+            "file:///opt/notes/spec.pdf",
+            None,
+        )
+
     def test_confluence_uri_with_page_id(self):
         """Test Confluence URL generation with page_id"""
         with patch.dict(os.environ, {"CONFLUENCE_URL": "https://wiki.example.com"}):

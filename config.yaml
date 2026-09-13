@@ -104,3 +104,11 @@ retrieval:
 storage:
   storage_dir: "./storage"
   model_cache_dir: "./models"
+
+# Network shares (optional): present files indexed from a mounted share at the
+# share's own location - an smb:// URI plus the Windows UNC path - instead of
+# the local mount path, so clients on other machines get a location they can
+# open. Longest matching prefix wins; files under no prefix keep file:// URIs.
+# shares:
+#   - prefix: "/mnt/docs"          # local mount point as listed in indexing.directories
+#     unc: "//nas/docs"            # the same tree as clients reach it

@@ -155,6 +155,12 @@ _DEFAULTS: dict[str, Any] = {
         "storage_dir": "./storage",
         "model_cache_dir": "./models",
     },
+    # Present files indexed from a mounted network share at the share's own
+    # location (an smb:// URI plus the Windows UNC path) instead of the
+    # server-local mount path, so a client on another machine gets a location
+    # it can open. Uncovered files keep their file:// URIs.
+    # [{prefix: "/mnt/docs", unc: "//nas/docs"}]
+    "shares": [],
 }
 
 # Options that no longer exist, mapped to what replaced them. A config file
