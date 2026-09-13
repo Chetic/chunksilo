@@ -1,3 +1,4 @@
+import contextlib
 import os
 import shutil
 import sqlite3
@@ -126,3 +127,202 @@ def test_incremental_ingestion(test_env):
     (data_dir / "doc2.txt").unlink()
     build_index()
     check_db_count(db_path, 1)
+
+
+# ===========================================================================
+# Files must not be reprocessed on every run
+#
+# Three ways a build used to lose a file's state row and re-index it forever:
+# it extracted no text, its directory was unavailable, or it could not be
+# stat'd. All three showed up in production as "untouched files keep being
+# re-indexed".
+# ===========================================================================
+
+class _LogSink(logging.Handler):
+    """Collects records from chunksilo.index.
+
+    Not a StreamHandler on purpose: IndexingUI mutes root StreamHandlers while
+    it owns the terminal, which silences pytest's caplog for the whole build.
+    """
+
+    def __init__(self):
+        super().__init__(level=logging.DEBUG)
+        self.messages: list[str] = []
+
+    def emit(self, record):
+        self.messages.append(record.getMessage())
+
+    @property
+    def text(self) -> str:
+        return "\n".join(self.messages)
+
+
+@contextlib.contextmanager
+def capture_index_log():
+    sink = _LogSink()
+    log = logging.getLogger("chunksilo.index")
+    previous = log.level
+    log.setLevel(logging.DEBUG)
+    log.addHandler(sink)
+    try:
+        yield sink
+    finally:
+        log.removeHandler(sink)
+        log.setLevel(previous)
+
+
+def _tracked(db_path):
+    """{path: (hash, doc_ids)} from the state DB."""
+    with sqlite3.connect(db_path) as conn:
+        return {
+            row[0]: (row[1], row[2])
+            for row in conn.execute("SELECT path, hash, doc_ids FROM files")
+        }
+
+
+def test_file_yielding_no_documents_is_recorded_once(test_env):
+    """A file that extracts no text gets a state row and is not retried.
+
+    Without this it is dropped from the state DB every run, looks new on the
+    next one, and is reprocessed forever.
+    """
+    data_dir, _storage_dir, db_path = test_env
+    create_file(data_dir, "empty.txt", "some text")
+    real_load = index.LocalFileSystemSource.load_file
+
+    def load_nothing(self, file_info, ctx=None):
+        if file_info.path.endswith("empty.txt"):
+            return []
+        return real_load(self, file_info, ctx)
+
+    with patch.object(index.LocalFileSystemSource, "load_file", load_nothing):
+        build_index()
+        row = _tracked(db_path).get(str((data_dir / "empty.txt").absolute()))
+        assert row is not None, "empty file must still be tracked"
+        assert row[1] == "", "an empty load stores no doc ids"
+
+        with capture_index_log() as log:
+            build_index()
+        assert "Reprocessing" not in log.text
+        assert "Indexing new file" not in log.text
+
+
+def test_failed_file_is_retried(test_env):
+    """A file that could not be read gets no state row, so it is retried."""
+    data_dir, _storage_dir, db_path = test_env
+    create_file(data_dir, "boom.txt", "some text")
+
+    def load_boom(self, file_info, ctx=None):
+        raise OSError("mount went away")
+
+    with patch.object(index.LocalFileSystemSource, "load_file", load_boom):
+        build_index()
+    assert str((data_dir / "boom.txt").absolute()) not in _tracked(db_path)
+
+
+def test_unavailable_directory_does_not_delete_its_files(test_env):
+    """One unreachable directory must not wipe its files from the index.
+
+    This is the destructive case: a laggy network mount used to prune the whole
+    tree, which forced a full re-index on the following run. (When *every*
+    directory is unavailable build_index bails out before touching anything;
+    the damage needed a mixed config, which is what this sets up.)
+    """
+    data_dir, _storage_dir, db_path = test_env
+    other_dir = data_dir.parent / "other"
+    other_dir.mkdir()
+    create_file(data_dir, "doc1.txt", "This is document 1.")
+    create_file(other_dir, "doc2.txt", "This is document 2.")
+
+    two_dirs = IndexConfig(
+        directories=[DirectoryConfig(path=data_dir), DirectoryConfig(path=other_dir)],
+        chunk_size=512,
+        chunk_overlap=100,
+    )
+    real_is_available = index.LocalFileSystemSource.is_available
+
+    def only_other_available(self):
+        if self.base_dir == data_dir:
+            self.scan_status.fail("availability check timed out after 30s")
+            return False
+        return real_is_available(self)
+
+    with patch("chunksilo.index.load_index_config", return_value=two_dirs):
+        build_index()
+        assert len(_tracked(db_path)) == 2
+
+        with patch.object(
+            index.LocalFileSystemSource, "is_available", only_other_available
+        ), capture_index_log() as log:
+            build_index()
+
+    assert len(_tracked(db_path)) == 2, "the mount was down, not the file"
+    assert "did not see" in log.text
+
+
+def test_stalled_walk_does_not_delete_its_files(test_env):
+    """A directory walk that stalls halfway must not prune what it never reached."""
+    data_dir, _storage_dir, db_path = test_env
+    create_file(data_dir, "doc1.txt", "This is document 1.")
+    create_file(data_dir, "doc2.txt", "This is document 2.")
+    build_index()
+    assert len(_tracked(db_path)) == 2
+
+    def stalled_walk(self, on_event=None):
+        # Yield nothing and report the scan as incomplete, as the real
+        # _walk_with_timeout does when os.walk() stops responding.
+        self.scan_status.fail("directory walk stalled after 30s")
+        return iter(())
+
+    with patch.object(index.LocalFileSystemSource, "_walk_with_timeout", stalled_walk):
+        build_index()
+
+    assert len(_tracked(db_path)) == 2
+
+
+def test_unreadable_file_is_not_treated_as_deleted(test_env):
+    """A file whose stat/hash fails is kept, not pruned and re-added next run."""
+    data_dir, _storage_dir, db_path = test_env
+    create_file(data_dir, "doc1.txt", "This is document 1.")
+    create_file(data_dir, "doc2.txt", "This is document 2.")
+    build_index()
+    before = _tracked(db_path)
+    assert len(before) == 2
+
+    real_create = index.LocalFileSystemSource._create_file_info
+
+    def flaky_create(self, file_path, tracked_files=None):
+        if file_path.name == "doc2.txt":
+            raise OSError("stale file handle")
+        return real_create(self, file_path, tracked_files)
+
+    with patch.object(index.LocalFileSystemSource, "_create_file_info", flaky_create):
+        build_index()
+
+    assert _tracked(db_path) == before
+
+
+def test_genuinely_deleted_file_is_still_pruned(test_env):
+    """Withholding deletions must not stop real deletions from being applied."""
+    data_dir, _storage_dir, db_path = test_env
+    create_file(data_dir, "doc1.txt", "This is document 1.")
+    create_file(data_dir, "doc2.txt", "This is document 2.")
+    build_index()
+    assert len(_tracked(db_path)) == 2
+
+    (data_dir / "doc2.txt").unlink()
+    build_index()
+    assert len(_tracked(db_path)) == 1
+
+
+def test_reprocess_reason_is_logged(test_env):
+    """Every reprocessed file says why, so a re-index loop is diagnosable."""
+    data_dir, _storage_dir, _db_path = test_env
+    create_file(data_dir, "doc1.txt", "This is document 1.")
+    build_index()
+
+    create_file(data_dir, "doc1.txt", "This is document 1, edited.")
+    with capture_index_log() as log:
+        build_index()
+    assert "Reprocessing" in log.text
+    assert "content changed" in log.text

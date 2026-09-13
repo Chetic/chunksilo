@@ -14,7 +14,7 @@ import sqlite3
 import threading
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -280,6 +280,53 @@ class FileInfo:
     source_dir: str = ""  # Tracks which configured directory this file came from
 
 
+@dataclass
+class FileCandidate:
+    """A discovered file before hashing.
+
+    Revision grouping needs every file's mtime before it can decide which
+    files to index at all, and hashing is far too expensive to spend on
+    files that grouping will then discard - they have no state row, so no
+    mtime fast path saves them.
+    Hence the scan runs in two phases: stat-only candidates first, full
+    FileInfo only for the keepers.
+    """
+    path: str
+    mtime: float
+    source_dir: str = ""
+
+
+@dataclass
+class ScanEvent:
+    """A file or directory the scan saw but will not index. Diagnostic only."""
+
+    kind: str  # "excluded_file" | "pruned_dir" | "unreadable_file"
+    path: str  # absolute
+    pattern: str | None = None  # deciding pattern, when one exists
+
+
+@dataclass
+class ScanStatus:
+    """Health of one directory scan.
+
+    A file missing from a scan means one of two very different things: it was
+    deleted, or the scan could not look. Pruning on the second is destructive -
+    the file's chunks are dropped from the index and its state row removed, so
+    the next run re-indexes it from scratch, and a laggy network mount turns
+    that into a permanent re-index loop. Deletions are therefore withheld
+    whenever a scan was not clean.
+    """
+
+    complete: bool = True
+    reason: str = ""
+    unreadable: set[str] = field(default_factory=set)
+
+    def fail(self, reason: str) -> None:
+        self.complete = False
+        if not self.reason:
+            self.reason = reason
+
+
 class IngestionState:
     """Manages the state of ingested files using a SQLite database."""
 
@@ -420,6 +467,27 @@ class DataSource(ABC):
             ctx: Optional processing context for progress updates and timeout
         """
         pass
+
+    def unscanned_roots(self) -> dict[str, str]:
+        """Directory roots not fully enumerated by the last scan -> reason."""
+        return {}
+
+    def unreadable_paths(self) -> set[str]:
+        """Paths the last scan could not stat or hash."""
+        return set()
+
+
+def _owning_root(path: str, roots: dict[str, str]) -> str | None:
+    """The root in ``roots`` that contains ``path``, or None.
+
+    Plain prefix matching on the absolute paths the state DB stores; a trailing
+    separator is required so ``/data`` does not claim ``/data-archive``.
+    """
+    for root in roots:
+        if path == root or path.startswith(root.rstrip(os.sep) + os.sep):
+            return root
+    return None
+
 
 
 def _compute_line_offsets(text: str) -> list[int]:
@@ -596,11 +664,14 @@ class LocalFileSystemSource(DataSource):
     def __init__(self, config: DirectoryConfig):
         self.config = config
         self.base_dir = config.path
+        self.scan_status = ScanStatus()
 
     def is_available(self) -> bool:
         """Check if the directory is available and accessible.
 
         Runs with a timeout to avoid hanging on unresponsive network mounts.
+        A timeout is recorded on ``scan_status`` so callers can tell it apart
+        from a directory that is genuinely gone.
         """
         timeout = cfgload.get("indexing.scan_item_seconds")
 
@@ -613,23 +684,38 @@ class LocalFileSystemSource(DataSource):
                 # Try to list directory to verify access (important for network mounts)
                 next(self.base_dir.iterdir(), None)
                 return True
-            except (OSError, PermissionError):
-                return False
+            except (OSError, PermissionError) as exc:
+                return exc
 
-        result = _run_with_timeout(_check, timeout_seconds=timeout, default=False)
-        if result is False and timeout > 0:
-            # Distinguish genuine "not a dir" from timeout — log only for timeout
-            # (the sentinel default=False means we can't distinguish here, but
-            # _run_with_timeout already logged nothing; let callers log.)
-            pass
-        return result
+        result = _run_with_timeout(_check, timeout_seconds=timeout)
+        if result is _SCAN_TIMEOUT_SENTINEL:
+            logger.warning(
+                "Availability check for %s timed out after %ss", self.base_dir, timeout
+            )
+            self.scan_status.fail(f"availability check timed out after {timeout}s")
+            return False
+        if isinstance(result, BaseException):
+            logger.warning("Cannot access %s: %s", self.base_dir, result)
+            self.scan_status.fail(f"not accessible: {result}")
+            return False
+        return bool(result)
 
     def _matches_patterns(self, file_path: Path) -> bool:
-        """Check if file matches include patterns and doesn't match exclude patterns.
+        """Check if file matches include patterns and doesn't match exclude patterns."""
+        return self._match_decision(file_path)[0]
+
+    def _match_decision(self, file_path: Path) -> tuple[bool, str | None]:
+        """Match verdict plus the pattern that decided it.
 
         Uses PurePosixPath.match() for glob pattern matching.
         For directory exclusion patterns like **/*venv*/**, checks each path component.
         When case_sensitive is False (default), matching is case-insensitive.
+
+        Returns:
+            (False, pattern) - excluded by that pattern (as written in config)
+            (True, pattern)  - matched that include pattern
+            (True, None)     - no include patterns configured, everything passes
+            (False, None)    - no include pattern matched
         """
         import fnmatch
         from pathlib import PurePosixPath
@@ -654,27 +740,33 @@ class LocalFileSystemSource(DataSource):
                 dir_pattern = pat[3:-3]  # Remove **/ prefix and /** suffix
                 for part in rel_path.parts[:-1]:  # Check all directory components (not filename)
                     if fnmatch.fnmatch(part.lower() if ci else part, dir_pattern):
-                        return False
+                        return False, pattern
             else:
                 # Standard pattern matching
                 if PurePosixPath(rel_str).match(pat) or name == pat:
-                    return False
+                    return False, pattern
 
         # Check include patterns
         if not self.config.include:
-            return True
+            return True, None
 
         for pattern in self.config.include:
             pat = pattern.lower() if ci else pattern
             if PurePosixPath(rel_str).match(pat) or PurePosixPath(abs_str).match(pat):
-                return True
+                return True, pattern
 
-        return False
+        return False, None
 
     def _should_skip_directory(self, dir_name: str) -> bool:
-        """Check if a directory should be pruned from os.walk traversal.
+        """Check if a directory should be pruned from os.walk traversal."""
+        return self._directory_skip_pattern(dir_name) is not None
 
-        Handles patterns of the form **/<pattern>/** by checking the directory name.
+    def _directory_skip_pattern(self, dir_name: str) -> str | None:
+        """The exclude pattern that prunes this directory from os.walk, or None.
+
+        Handles patterns of the form **/<pattern>/** by checking the directory
+        name. Unlike file matching, this has always been case-sensitive
+        regardless of the case_sensitive setting.
         """
         import fnmatch
 
@@ -682,15 +774,23 @@ class LocalFileSystemSource(DataSource):
             if pattern.startswith('**/') and pattern.endswith('/**'):
                 dir_pattern = pattern[3:-3]  # e.g., "node_modules", ".git", "*venv*"
                 if fnmatch.fnmatch(dir_name, dir_pattern):
-                    return True
-        return False
+                    return pattern
+        return None
 
-    def _walk_with_timeout(self):
+    def _walk_with_timeout(
+        self, on_event: Callable[["ScanEvent"], None] | None = None
+    ):
         """Yield (root, dirs, files) tuples from os.walk with per-iteration timeout.
 
         Runs os.walk in a daemon thread, feeding results through a queue.
+        Excluded directories are pruned inside the walker thread, before
+        os.walk descends - pruning from the consumer side would race the
+        producer, which walks ahead of consumption.
         If no result arrives within scan_item_seconds, the walk is considered
         stalled and iteration stops.
+
+        on_event, when given, receives a ScanEvent per pruned directory. It
+        may be invoked from the walker thread.
         """
         timeout = cfgload.get("indexing.scan_item_seconds")
         q: queue.Queue = queue.Queue()
@@ -698,8 +798,21 @@ class LocalFileSystemSource(DataSource):
 
         def _producer():
             try:
-                for entry in os.walk(self.base_dir):
-                    q.put(entry)
+                for root, dirs, files in os.walk(self.base_dir):
+                    kept_dirs = []
+                    for d in dirs:
+                        skip_pattern = self._directory_skip_pattern(d)
+                        if skip_pattern is None:
+                            kept_dirs.append(d)
+                        elif on_event is not None:
+                            on_event(ScanEvent(
+                                "pruned_dir",
+                                str((Path(root) / d).absolute()),
+                                skip_pattern,
+                            ))
+                    # Prune in-place to prevent descent
+                    dirs[:] = kept_dirs
+                    q.put((root, dirs, files))
                 q.put(_sentinel)
             except Exception as exc:
                 q.put(exc)
@@ -715,6 +828,9 @@ class LocalFileSystemSource(DataSource):
                     f"os.walk() stalled for {timeout}s on {self.base_dir}, "
                     "aborting directory scan"
                 )
+                # The rest of the tree was never visited: anything already
+                # indexed under it must not be mistaken for deleted.
+                self.scan_status.fail(f"directory walk stalled after {timeout}s")
                 return
             if item is _sentinel:
                 return
@@ -729,21 +845,45 @@ class LocalFileSystemSource(DataSource):
             tracked_files: Optional dict of previously tracked file states,
                 keyed by absolute path. Used for mtime-based fast pre-check.
         """
-        if self.config.recursive:
-            for root, dirs, files in self._walk_with_timeout():
-                # Prune excluded directories in-place to prevent descent
-                dirs[:] = [d for d in dirs if not self._should_skip_directory(d)]
+        for candidate in self.iter_candidates():
+            try:
+                yield self.file_info_for(candidate, tracked_files)
+            except (OSError, TimeoutError):
+                continue
 
+    def iter_candidates(
+        self, *, on_event: Callable[[ScanEvent], None] | None = None
+    ) -> Iterator[FileCandidate]:
+        """Yield a stat-only FileCandidate for each matching file.
+
+        Resets scan_status; file_info_for failures accumulate into the same
+        status afterwards, so together the two phases report one scan.
+
+        on_event, when given, receives a ScanEvent for every file or directory
+        the scan saw but skipped. Diagnostics only; the indexing path never
+        sets it.
+        """
+        self.scan_status = ScanStatus()
+
+        if self.config.recursive:
+            for root, dirs, files in self._walk_with_timeout(on_event=on_event):
                 root_path = Path(root)
                 for file in files:
                     file_path = root_path / file
-                    if not self._matches_patterns(file_path):
+                    matched, pattern = self._match_decision(file_path)
+                    if not matched:
+                        if on_event is not None:
+                            on_event(ScanEvent(
+                                "excluded_file", str(file_path.absolute()), pattern
+                            ))
                         continue
-                    try:
-                        yield self._create_file_info(file_path, tracked_files)
-                    except (OSError, TimeoutError) as e:
-                        logger.warning(f"Could not access file {file_path}: {e}")
-                        continue
+                    candidate = self._stat_candidate(file_path)
+                    if candidate is not None:
+                        yield candidate
+                    elif on_event is not None:
+                        on_event(ScanEvent(
+                            "unreadable_file", str(file_path.absolute())
+                        ))
         else:
             # Non-recursive: only top-level files
             try:
@@ -752,16 +892,63 @@ class LocalFileSystemSource(DataSource):
                 ]
             except OSError as e:
                 logger.warning(f"Could not list directory {self.base_dir}: {e}")
+                self.scan_status.fail(f"could not be listed: {e}")
                 return
 
             for f in top_files:
-                if not self._matches_patterns(f):
+                matched, pattern = self._match_decision(f)
+                if not matched:
+                    if on_event is not None:
+                        on_event(ScanEvent(
+                            "excluded_file", str(f.absolute()), pattern
+                        ))
                     continue
-                try:
-                    yield self._create_file_info(f, tracked_files)
-                except (OSError, TimeoutError) as e:
-                    logger.warning(f"Could not access file {f}: {e}")
-                    continue
+                candidate = self._stat_candidate(f)
+                if candidate is not None:
+                    yield candidate
+                elif on_event is not None:
+                    on_event(ScanEvent("unreadable_file", str(f.absolute())))
+
+    def _stat_candidate(self, file_path: Path) -> FileCandidate | None:
+        """Stat a file with timeout protection; None marks it unreadable."""
+        timeout = cfgload.get("indexing.scan_item_seconds")
+        try:
+            mtime = _run_with_timeout(
+                lambda: file_path.stat().st_mtime, timeout_seconds=timeout
+            )
+        except OSError as e:
+            logger.warning(f"Could not access file {file_path}: {e}")
+            self.scan_status.unreadable.add(str(file_path.absolute()))
+            return None
+        if mtime is _SCAN_TIMEOUT_SENTINEL:
+            logger.warning(
+                f"Timed out after {timeout}s accessing file {file_path}, skipping"
+            )
+            self.scan_status.unreadable.add(str(file_path.absolute()))
+            return None
+        return FileCandidate(
+            path=str(file_path.absolute()),
+            mtime=mtime,
+            source_dir=str(self.base_dir.absolute()),
+        )
+
+    def file_info_for(
+        self,
+        candidate: FileCandidate,
+        tracked_files: dict[str, dict] | None = None,
+    ) -> FileInfo:
+        """Full FileInfo (with content hash) for a candidate.
+
+        Records the file as unreadable and re-raises on failure, so a file
+        that vanishes or stalls between the two scan phases is withheld from
+        deletion exactly as if the walk had not seen it.
+        """
+        try:
+            return self._create_file_info(Path(candidate.path), tracked_files)
+        except (OSError, TimeoutError) as e:
+            logger.warning(f"Could not access file {candidate.path}: {e}")
+            self.scan_status.unreadable.add(candidate.path)
+            raise
 
     def _create_file_info(
         self,
@@ -825,6 +1012,14 @@ class LocalFileSystemSource(DataSource):
             last_modified=mtime,
             source_dir=str(self.base_dir.absolute()),
         )
+
+    def unscanned_roots(self) -> dict[str, str]:
+        if self.scan_status.complete:
+            return {}
+        return {str(self.base_dir.absolute()): self.scan_status.reason}
+
+    def unreadable_paths(self) -> set[str]:
+        return set(self.scan_status.unreadable)
 
     def load_file(
         self,
@@ -983,6 +1178,9 @@ class MultiDirectoryDataSource(DataSource):
         self.config = config
         self.sources: list[LocalFileSystemSource] = []
         self.unavailable_dirs: list[DirectoryConfig] = []
+        # Roots whose contents were not fully enumerated this run, with the
+        # reason. Deletions under them are withheld (see unscanned_roots).
+        self._unavailable_reasons: dict[str, str] = {}
 
         for dir_config in config.directories:
             if not dir_config.enabled:
@@ -996,18 +1194,65 @@ class MultiDirectoryDataSource(DataSource):
                 logger.info(f"Added directory source: {dir_config.path}")
             else:
                 self.unavailable_dirs.append(dir_config)
+                self._unavailable_reasons[str(dir_config.path.absolute())] = (
+                    source.scan_status.reason or "directory unavailable"
+                )
                 logger.warning(f"Directory unavailable, skipping: {dir_config.path}")
 
     def iter_files(self, tracked_files: dict[str, dict] | None = None) -> Iterator[FileInfo]:
         """Iterate over files from all available sources."""
+        for candidate in self.iter_candidates():
+            try:
+                yield self.file_info_for(candidate, tracked_files)
+            except (OSError, TimeoutError):
+                continue
+
+    def iter_candidates(self) -> Iterator[FileCandidate]:
+        """Stat-only candidates from all available sources."""
         seen_paths: set[str] = set()
 
         for source in self.sources:
-            for file_info in source.iter_files(tracked_files=tracked_files):
+            for candidate in source.iter_candidates():
                 # Deduplicate in case of overlapping mounts
-                if file_info.path not in seen_paths:
-                    seen_paths.add(file_info.path)
-                    yield file_info
+                if candidate.path not in seen_paths:
+                    seen_paths.add(candidate.path)
+                    yield candidate
+
+    def file_info_for(
+        self,
+        candidate: FileCandidate,
+        tracked_files: dict[str, dict] | None = None,
+    ) -> FileInfo:
+        """Full FileInfo via the source that owns the candidate."""
+        for source in self.sources:
+            if candidate.source_dir == str(source.base_dir.absolute()):
+                return source.file_info_for(candidate, tracked_files)
+
+        # Fallback: use first source (shouldn't happen normally)
+        if self.sources:
+            return self.sources[0].file_info_for(candidate, tracked_files)
+
+        raise ValueError(f"No source available for file: {candidate.path}")
+
+    def unscanned_roots(self) -> dict[str, str]:
+        """Directory roots that were not fully enumerated, mapped to the reason.
+
+        A root lands here when it was unavailable at startup or when its walk
+        stalled or could not be listed. Callers must not prune tracked files
+        under these roots.
+        """
+        roots = dict(self._unavailable_reasons)
+        for source in self.sources:
+            if not source.scan_status.complete:
+                roots[str(source.base_dir.absolute())] = source.scan_status.reason
+        return roots
+
+    def unreadable_paths(self) -> set[str]:
+        """Files that exist but could not be stat'd or hashed during this scan."""
+        paths: set[str] = set()
+        for source in self.sources:
+            paths |= source.scan_status.unreadable
+        return paths
 
     def load_file(
         self,
@@ -1303,6 +1548,22 @@ def calculate_optimal_batch_size(
         return min(batch_size, num_files)
 
 
+@dataclass
+class LoadOutcome:
+    """Result of attempting to load one file.
+
+    ``failed`` separates "extracted nothing" from "could not be read". An empty
+    but successful load is a final answer and gets a state row (with no doc ids)
+    so the file is not retried until it changes; a failure gets none, so the
+    next run tries again.
+    """
+
+    file_info: FileInfo
+    docs: list[Any] = field(default_factory=list)
+    failed: bool = False
+
+
+
 def load_files_parallel(
     files: list[FileInfo],
     data_source: DataSource,
@@ -1312,7 +1573,7 @@ def load_files_parallel(
     per_file_timeout: float = 300,
     heartbeat_interval: float = 2.0,
     abort_ctl: "GracefulAbort | None" = None,
-) -> dict[str, tuple[FileInfo, list[Any]]]:
+) -> dict[str, LoadOutcome]:
     """Load files in parallel using ThreadPoolExecutor.
 
     Args:
@@ -1326,11 +1587,13 @@ def load_files_parallel(
         abort_ctl: Optional GracefulAbort instance for Ctrl-C handling
 
     Returns:
-        Dict mapping file path to (FileInfo, list[LlamaIndexDocument])
+        Dict mapping file path to :class:`LoadOutcome`. Every attempted file is
+        present, including ones that extracted no text and ones that failed -
+        the caller needs both to decide whether to record state.
     """
-    file_docs = {}
+    file_docs: dict[str, LoadOutcome] = {}
 
-    def load_single_file(file_info: FileInfo):
+    def load_single_file(file_info: FileInfo) -> LoadOutcome:
         """Load a single file (executed in thread pool)."""
         try:
             with FileProcessingContext(
@@ -1341,13 +1604,13 @@ def load_files_parallel(
             ) as ctx:
                 ctx.set_phase("Loading file")
                 docs = data_source.load_file(file_info, ctx)
-                return file_info, docs
+                return LoadOutcome(file_info=file_info, docs=docs)
         except FileProcessingTimeoutError as e:
             logger.error(f"Timeout loading {file_info.path}: {e}")
-            return file_info, []
+            return LoadOutcome(file_info=file_info, failed=True)
         except Exception as e:
             logger.error(f"Error loading {file_info.path}: {e}")
-            return file_info, []
+            return LoadOutcome(file_info=file_info, failed=True)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all file loading tasks
@@ -1365,11 +1628,11 @@ def load_files_parallel(
 
             file_info = future_to_file[future]
             try:
-                result_file_info, docs = future.result(timeout=per_file_timeout + 10)
-                if docs:  # Only add if we got documents
-                    file_docs[result_file_info.path] = (result_file_info, docs)
+                outcome = future.result(timeout=per_file_timeout + 10)
+                file_docs[outcome.file_info.path] = outcome
             except Exception as e:
                 logger.error(f"Error retrieving result for {file_info.path}: {e}")
+                file_docs[file_info.path] = LoadOutcome(file_info=file_info, failed=True)
             finally:
                 ui.progress_update()
 
@@ -1480,22 +1743,57 @@ def build_index(
         new_count = 0
         modified_count = 0
 
+        # Phase 1: enumerate cheaply (stat only). Hashing happens in phase 2,
+        # and a file that fails either phase is recorded as unreadable so that
+        # its deletion is withheld below.
         ui.step_start("Scanning for changes")
         scan_count = 0
-        for file_info in data_source.iter_files(tracked_files=tracked_files):
+        candidates: list[FileCandidate] = []
+        for candidate in data_source.iter_candidates():
             if abort_ctl.abort_requested:
                 break
             scan_count += 1
             if scan_count % 100 == 0:
                 ui.step_update(f"Scanning for changes ({scan_count:,} files)")
+            candidates.append(candidate)
+
+        if abort_ctl.abort_requested:
+            ui.step_done("interrupted")
+            abort_ctl.uninstall()
+            ui.print(f"{ui.YELLOW}Interrupted during scan. No changes made.{ui.RESET}")
+            return
+
+        # Phase 2: hash the candidates.
+        hashed_count = 0
+        for candidate in candidates:
+            if abort_ctl.abort_requested:
+                break
+            hashed_count += 1
+            if hashed_count % 100 == 0:
+                ui.step_update(
+                    f"Scanning for changes ({hashed_count:,}/{len(candidates):,} files)"
+                )
+            try:
+                file_info = data_source.file_info_for(candidate, tracked_files)
+            except (OSError, TimeoutError):
+                continue  # recorded as unreadable; its deletion is withheld
             found_files.add(file_info.path)
             existing_state = tracked_files.get(file_info.path)
 
             if existing_state:
+                # Say why. A file that keeps reappearing here with no reason a
+                # human recognises is the signature of an indexing bug, and
+                # without this line there is nothing to go on.
                 if existing_state["hash"] != file_info.hash:
+                    reason = "content changed"
+                else:
+                    reason = ""
+                if reason:
+                    logger.info("Reprocessing %s: %s", file_info.path, reason)
                     modified_count += 1
                     files_to_process.append(file_info)
             else:
+                logger.debug("Indexing new file %s", file_info.path)
                 new_count += 1
                 files_to_process.append(file_info)
 
@@ -1505,8 +1803,30 @@ def build_index(
             ui.print(f"{ui.YELLOW}Interrupted during scan. No changes made.{ui.RESET}")
             return
 
-        # Identify Deleted Files
-        deleted_files = set(tracked_files.keys()) - found_files
+        # Identify Deleted Files. A path missing from the scan is only deleted
+        # if the scan could actually see where it lives; otherwise a stalled
+        # mount would wipe the whole tree from the index and force a full
+        # re-index on the next run.
+        missing = set(tracked_files.keys()) - found_files
+        unreadable = data_source.unreadable_paths()
+        unscanned = data_source.unscanned_roots()
+        withheld: dict[str, str] = {}
+        for path in missing:
+            if path in unreadable:
+                withheld[path] = "could not be read during this scan"
+                continue
+            root = _owning_root(path, unscanned)
+            if root is not None:
+                withheld[path] = f"{root} was not fully scanned ({unscanned[root]})"
+        deleted_files = missing - withheld.keys()
+
+        if withheld:
+            reasons = sorted(set(withheld.values()))
+            logger.warning(
+                "Keeping %d indexed file(s) that this scan did not see: %s",
+                len(withheld),
+                "; ".join(reasons),
+            )
 
         # Build summary suffix
         parts = []
@@ -1516,6 +1836,8 @@ def build_index(
             parts.append(f"{modified_count} modified")
         if deleted_files:
             parts.append(f"{len(deleted_files)} deleted")
+        if withheld:
+            parts.append(f"{len(withheld)} unseen (kept)")
         ui.step_done(", ".join(parts) if parts else "no changes")
 
         # Process deletions
@@ -1534,6 +1856,8 @@ def build_index(
             return
 
         # Process New/Modified Files
+        empty_files: list[str] = []
+        failed_files: list[str] = []
         if files_to_process:
             # Get configuration (0 disables the per-file timeout)
             per_file_timeout = cfgload.get("indexing.per_file_seconds")
@@ -1586,7 +1910,6 @@ def build_index(
 
                 # Load files in this batch
                 accumulated_docs = []
-                doc_to_file_mapping = {}
                 file_doc_ids = {}
 
                 workers = max_workers
@@ -1601,11 +1924,10 @@ def build_index(
                     abort_ctl=abort_ctl,
                 )
 
-                for file_path, (file_info, docs) in file_docs.items():
+                for file_path, outcome in file_docs.items():
                     file_doc_ids[file_path] = []
-                    for doc in docs:
+                    for doc in outcome.docs:
                         accumulated_docs.append(doc)
-                        doc_to_file_mapping[doc.doc_id] = file_info
                         file_doc_ids[file_path].append(doc.doc_id)
 
                 # Batch embedding
@@ -1631,12 +1953,20 @@ def build_index(
                     index.insert_nodes(nodes)
                     ui.progress_substep_done()
 
-                # Batch update state
+                # Batch update state. A file that yielded no documents still
+                # gets a row (with no doc ids): that is a final answer for this
+                # content, and skipping it would make the file look new on every
+                # subsequent run and be reprocessed forever. Failures get no row
+                # so that they are retried.
                 state_updates = []
-                for file_path, doc_ids in file_doc_ids.items():
-                    if doc_ids:
-                        file_info = doc_to_file_mapping[doc_ids[0]]
-                        state_updates.append((file_info, doc_ids))
+                for file_path, outcome in file_docs.items():
+                    if outcome.failed:
+                        failed_files.append(file_path)
+                        continue
+                    doc_ids = file_doc_ids.get(file_path, [])
+                    if not doc_ids:
+                        empty_files.append(file_path)
+                    state_updates.append((outcome.file_info, doc_ids))
 
                 if state_updates:
                     ingestion_state.update_file_states_batch(state_updates)
@@ -1688,4 +2018,24 @@ def build_index(
 
         abort_ctl.uninstall()
         ui.success(f"\nIndexing complete. {len(files_to_process)} files processed.")
+
+        if empty_files:
+            logger.info("Files that yielded no text: %s", ", ".join(empty_files[:20]))
+            ui.print(
+                f"{ui.YELLOW}{len(empty_files)} file(s) contained no extractable "
+                f"text and were recorded as empty; they will not be retried until "
+                f"they change. Re-run with --verbose to list them.{ui.RESET}"
+            )
+        if failed_files:
+            logger.warning("Files that failed to load: %s", ", ".join(failed_files[:20]))
+            ui.print(
+                f"{ui.YELLOW}{len(failed_files)} file(s) could not be read and will "
+                f"be retried on the next run. Re-run with --verbose to list them.{ui.RESET}"
+            )
+        if withheld:
+            ui.print(
+                f"{ui.YELLOW}{len(withheld)} indexed file(s) were kept even though "
+                f"this scan did not see them, because the scan was incomplete. They "
+                f"were NOT removed from the index. Re-run with --verbose to see why.{ui.RESET}"
+            )
 
