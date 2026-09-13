@@ -7,6 +7,7 @@ Usage:
     chunksilo "query text" [--date-from YYYY-MM-DD] [--date-to YYYY-MM-DD] [--config PATH] [--json]
     chunksilo --build-index [--config PATH]
     chunksilo --download-models [--config PATH]
+    chunksilo --check-files [PATH] [--config PATH] [--json]
 """
 import argparse
 import json
@@ -14,6 +15,23 @@ import logging
 import os
 import sys
 from pathlib import Path
+
+
+def _check_files(target: str | None, config_path: Path | None, as_json: bool) -> int:
+    """Dry-run the indexing file filters and print per-file verdicts."""
+    from . import filecheck
+    from . import index as index_module
+    from .cfgload import load_config
+
+    config = load_config(config_path)
+    index_module._config = config
+
+    report = filecheck.run_check(config, target=target)
+    if as_json:
+        print(json.dumps(filecheck.to_json(report), indent=2))
+    else:
+        filecheck.render_text(report)
+    return filecheck.exit_code(report)
 
 
 def main():
@@ -48,6 +66,11 @@ def main():
                         help="Print all default configuration values as YAML, then exit")
     parser.add_argument("--list-files", action="store_true",
                         help="List all indexed file paths, then exit")
+    parser.add_argument("--check-files", nargs="?", const=True, default=None,
+                        metavar="PATH",
+                        help="Dry-run the indexing file filters and report a verdict "
+                             "per file, without building the index. With PATH, "
+                             "explain that one file, then exit")
 
     args = parser.parse_args()
 
@@ -86,6 +109,12 @@ def main():
                 print(p)
         return
 
+    if args.check_files is not None:
+        if args.query:
+            parser.error("--check-files cannot be combined with a search query")
+        target = None if args.check_files is True else args.check_files
+        sys.exit(_check_files(target, config_path, args.json))
+
     if args.build_index or args.download_models:
         # Suppress 3rd-party native output when IndexingUI owns the terminal
         if not args.verbose:
@@ -102,7 +131,8 @@ def main():
         return
 
     if not args.query:
-        parser.error("query is required (or use --build-index / --list-files / --download-models)")
+        parser.error("query is required (or use --build-index / --list-files / "
+                     "--check-files / --download-models)")
 
     from .search import run_search
 
