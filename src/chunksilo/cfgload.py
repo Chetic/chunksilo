@@ -127,6 +127,9 @@ _DEFAULTS: dict[str, Any] = {
         "score_threshold": 0.1,
         "recency_boost": 0.3,
         "recency_half_life_days": 365,
+        # At most this many chunks of one document in the final results;
+        # freed slots go to the next-best other documents. 0 disables.
+        "max_chunks_per_doc": 2,
         "offline": False,
     },
     "confluence": {

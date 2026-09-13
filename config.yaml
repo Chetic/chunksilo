@@ -99,6 +99,7 @@ retrieval:
   # score_threshold: 0.1
   # recency_boost: 0.3
   # recency_half_life_days: 365
+  # max_chunks_per_doc: 2         # cap per document in the final results (0 disables)
 
 # Storage paths
 storage:

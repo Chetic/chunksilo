@@ -371,12 +371,25 @@ def _ensure_bm25_retriever(config: dict[str, Any]):
 
 
 def _format_bm25_matches(bm25_nodes: list[NodeWithScore], config: dict[str, Any]) -> list[dict[str, Any]]:
-    """Format BM25 file name matches for the response."""
+    """Format BM25 file name matches for the response.
+
+    Superseded revisions are dropped and each document group appears once
+    (best-scored member), so the short matched-files list is not spent on
+    many revisions of one document.
+    """
     matched_files = []
+    seen_groups: set[str] = set()
     for node in bm25_nodes:
         if node.score is None or node.score <= 0:
             continue
+        if _is_superseded(node):
+            continue
         metadata = node.node.metadata or {}
+        group = metadata.get("doc_group")
+        if group:
+            if group in seen_groups:
+                continue
+            seen_groups.add(group)
         file_path = metadata.get("file_path", "")
         source_uri, source_unc = (
             _resolve_result_uris(file_path, config) if file_path else (None, None)
@@ -1318,14 +1331,17 @@ def _retrieve_remote_sources(
 def _rerank_nodes(
     nodes: list[NodeWithScore], query: str, config: dict[str, Any]
 ) -> tuple[list[NodeWithScore], dict[int, float]]:
-    """Stage 2: Rerank nodes using FlashRank and return (nodes, scores)."""
-    rerank_top_k = config["retrieval"]["rerank_top_k"]
+    """Stage 2: Rerank nodes using FlashRank and return (nodes, scores).
+
+    Returns the FULL candidate list in rerank order - truncation to
+    rerank_top_k happens after per-document diversification in run_search,
+    which needs the lower-ranked candidates to backfill from.
+    """
     rerank_scores: dict[int, float] = {}
 
     if not nodes:
         return nodes, rerank_scores
 
-    rerank_limit = max(1, min(rerank_top_k, len(nodes)))
     try:
         reranker = _ensure_reranker(config)
         passages = [{"text": node.node.get_content() or ""} for node in nodes]
@@ -1374,12 +1390,77 @@ def _rerank_nodes(
                 reranked_nodes.append(node)
                 rerank_scores[id(node)] = min_score
 
-        nodes = reranked_nodes[:rerank_limit]
+        nodes = reranked_nodes
     except Exception as e:
         logger.error(f"Reranking failed, falling back to vector search order: {e}")
-        nodes = nodes[:rerank_limit]
 
     return nodes, rerank_scores
+
+
+def _is_superseded(node: NodeWithScore) -> bool:
+    return (node.node.metadata or {}).get("superseded") == "true"
+
+
+def _partition_superseded(nodes: list[NodeWithScore]) -> list[NodeWithScore]:
+    """Stable partition: current documents first, superseded revisions after.
+
+    Only relevant with indexing.versioning.index_superseded, where old
+    revisions stay in the index. They are demoted rather than dropped - being
+    findable when nothing current matches is the point of that mode.
+    """
+    if not any(_is_superseded(node) for node in nodes):
+        return nodes
+    fresh = [n for n in nodes if not _is_superseded(n)]
+    old = [n for n in nodes if _is_superseded(n)]
+    return fresh + old
+
+
+def _doc_key(node: NodeWithScore) -> str:
+    """Grouping key for diversification.
+
+    doc_group covers revisions of one document; chunks indexed before that
+    metadata existed fall back to per-file grouping. Remote sources emit one
+    node per page or issue with a unique file_name, so they group per item.
+    """
+    metadata = node.node.metadata or {}
+    return (
+        metadata.get("doc_group")
+        or metadata.get("file_path")
+        or metadata.get("file_name")
+        or node.node.node_id
+    )
+
+
+def _diversify_by_group(
+    nodes: list[NodeWithScore], top_k: int, max_per_doc: int
+) -> list[NodeWithScore]:
+    """Cap chunks per document in the final results, keeping rank order.
+
+    Walks the ranked list taking at most max_per_doc chunks per document,
+    then backfills with the skipped chunks (still in rank order) so top_k
+    stays full when fewer documents match than top_k requires. Applied even
+    when everything fits in top_k: another document's best chunk belongs
+    above the fourth chunk of the same document.
+    """
+    if max_per_doc <= 0:
+        return nodes[:top_k]
+
+    taken: list[NodeWithScore] = []
+    overflow: list[NodeWithScore] = []
+    per_doc: dict[str, int] = {}
+    for node in nodes:
+        key = _doc_key(node)
+        if per_doc.get(key, 0) < max_per_doc:
+            per_doc[key] = per_doc.get(key, 0) + 1
+            taken.append(node)
+        else:
+            overflow.append(node)
+        if len(taken) >= top_k:
+            break
+
+    if len(taken) < top_k:
+        taken.extend(overflow[: top_k - len(taken)])
+    return taken
 
 
 def _format_search_results(
@@ -1532,7 +1613,9 @@ def run_search(
         if recency_boost > 0:
             nodes = _apply_recency_boost(nodes, recency_boost, recency_half_life)
 
-        # Cap candidates before reranking
+        # Cap candidates before reranking; superseded revisions go to the
+        # back first so the cap trims them before current documents.
+        nodes = _partition_superseded(nodes)
         rerank_candidates = config["retrieval"]["rerank_candidates"]
         if len(nodes) > rerank_candidates:
             logger.info(f"Capping rerank candidates: {len(nodes)} -> {rerank_candidates}")
@@ -1560,6 +1643,14 @@ def run_search(
                 if all(p in (node.node.get_content() or "").lower() for p in lowered_phrases)
             ]
             logger.info(f"Phrase filter: {before_count} -> {len(nodes)} nodes for {required_phrases}")
+
+        # Vary the results across documents: demote superseded revisions,
+        # then cap chunks per document so one document (or its many
+        # revisions) cannot fill the whole top-k.
+        nodes = _partition_superseded(nodes)
+        rerank_top_k = config["retrieval"]["rerank_top_k"]
+        max_per_doc = config["retrieval"]["max_chunks_per_doc"]
+        nodes = _diversify_by_group(nodes, rerank_top_k, max_per_doc)
 
         # Format results
         chunks = _format_search_results(nodes, rerank_scores, config)
