@@ -35,7 +35,7 @@ from llama_index.core.schema import MetadataMode
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
 # Load configuration from config.yaml
-from . import cfgload
+from . import cfgload, revisions
 from .cfgload import DEFAULT_EXCLUDE_PATTERNS, DEFAULT_INCLUDE_PATTERNS, load_config
 from .docx_utils import _convert_doc_to_docx, cleanup_conversion_dir, split_docx_into_heading_documents
 from .models import _get_cached_model_path, configure_offline_mode, resolve_flashrank_model_name
@@ -74,6 +74,9 @@ EXCLUDED_EMBED_METADATA_KEYS = [
     "last_modified_date",# temporal, not semantic
     "doc_ids",           # internal tracking
     "hash",              # internal tracking
+    "doc_group",         # revision-group key, not semantic
+    "doc_id",            # document ID, not semantic
+    "superseded",        # revision status, not semantic
 ]
 
 # These keys are excluded from the LLM context to save context window
@@ -83,6 +86,9 @@ EXCLUDED_LLM_METADATA_KEYS = [
     "doc_ids",           # internal tracking
     "file_path",         # usually redundant if file_name is present
     "source",            # usually redundant
+    "doc_group",         # revision-group key, not for the LLM
+    "doc_id",            # document ID, surfaced via result formatting instead
+    "superseded",        # revision status, not for the LLM
 ]
 
 logger = logging.getLogger(__name__)
@@ -1476,9 +1482,15 @@ def build_bm25_index(index, storage_dir: Path) -> None:
         seen_files.add(file_path)
 
         tokens = tokenize_filename(file_name)
+        node_metadata = {"file_name": file_name, "file_path": file_path}
+        # Revision metadata, so filename matches can be deduped per document
+        # and superseded revisions dropped from the matched-files list.
+        node_metadata.update(
+            {key: metadata[key] for key in ("doc_group", "superseded") if key in metadata}
+        )
         filename_nodes.append(TextNode(
             text=" ".join(tokens),
-            metadata={"file_name": file_name, "file_path": file_path},
+            metadata=node_metadata,
             id_=f"bm25_{file_path}"
         ))
 
@@ -1743,9 +1755,10 @@ def build_index(
         new_count = 0
         modified_count = 0
 
-        # Phase 1: enumerate cheaply (stat only). Hashing happens in phase 2,
-        # and a file that fails either phase is recorded as unreadable so that
-        # its deletion is withheld below.
+        # Phase 1: enumerate cheaply (stat only), so revision grouping can
+        # discard files before they cost a hash - skipped files never get a
+        # state row, so no mtime fast path would save them. A file that fails
+        # either phase is recorded as unreadable so its deletion is withheld.
         ui.step_start("Scanning for changes")
         scan_count = 0
         candidates: list[FileCandidate] = []
@@ -1763,15 +1776,46 @@ def build_index(
             ui.print(f"{ui.YELLOW}Interrupted during scan. No changes made.{ui.RESET}")
             return
 
-        # Phase 2: hash the candidates.
+        revision_policy = revisions.RevisionPolicy.from_config(_config)
+        grouping = revisions.partition(
+            [(c.path, c.mtime) for c in candidates], revision_policy
+        )
+        for path, pattern in sorted(grouping.review_copies.items()):
+            logger.info("Skipping review copy %s (matched %r)", path, pattern)
+        if not revision_policy.index_superseded:
+            for path in sorted(grouping.superseded):
+                group = grouping.group_of.get(path, "")
+                logger.info(
+                    "Skipping superseded revision %s (latest in group: %s)",
+                    path,
+                    grouping.latest_of_group.get(group, "?"),
+                )
+        skipped_superseded = (
+            0 if revision_policy.index_superseded else len(grouping.superseded)
+        )
+
+        # Files whose chunks carry a superseded stamp from a previous run.
+        # Comparing the stamp against this scan's verdict lets flag flips
+        # (index_superseded toggled, a newer sibling arriving or vanishing,
+        # versioning disabled) propagate without a state-schema change.
+        currently_flagged: set[str] = set()
+        for doc in index.docstore.docs.values():
+            metadata = doc.metadata or {}
+            if metadata.get("superseded") == "true" and metadata.get("file_path"):
+                currently_flagged.add(metadata["file_path"])
+
+        # Phase 2: hash only the keepers.
+        kept = set(grouping.keep)
         hashed_count = 0
         for candidate in candidates:
             if abort_ctl.abort_requested:
                 break
+            if candidate.path not in kept:
+                continue
             hashed_count += 1
             if hashed_count % 100 == 0:
                 ui.step_update(
-                    f"Scanning for changes ({hashed_count:,}/{len(candidates):,} files)"
+                    f"Scanning for changes ({hashed_count:,}/{len(kept):,} files)"
                 )
             try:
                 file_info = data_source.file_info_for(candidate, tracked_files)
@@ -1786,6 +1830,10 @@ def build_index(
                 # without this line there is nothing to go on.
                 if existing_state["hash"] != file_info.hash:
                     reason = "content changed"
+                elif (file_info.path in grouping.superseded) != (
+                    file_info.path in currently_flagged
+                ):
+                    reason = "revision status changed"
                 else:
                     reason = ""
                 if reason:
@@ -1838,6 +1886,10 @@ def build_index(
             parts.append(f"{len(deleted_files)} deleted")
         if withheld:
             parts.append(f"{len(withheld)} unseen (kept)")
+        if skipped_superseded:
+            parts.append(f"{skipped_superseded} superseded (skipped)")
+        if grouping.review_copies:
+            parts.append(f"{len(grouping.review_copies)} review copies (skipped)")
         ui.step_done(", ".join(parts) if parts else "no changes")
 
         # Process deletions
@@ -1926,7 +1978,18 @@ def build_index(
 
                 for file_path, outcome in file_docs.items():
                     file_doc_ids[file_path] = []
+                    group = grouping.group_of.get(file_path)
+                    doc_id = grouping.doc_id_of.get(file_path)
+                    superseded = file_path in grouping.superseded
                     for doc in outcome.docs:
+                        if group:
+                            doc.metadata["doc_group"] = group
+                        if doc_id:
+                            doc.metadata["doc_id"] = doc_id
+                        if superseded:
+                            # Stored as a string: node metadata is flattened
+                            # into the BM25 corpus and the docstore.
+                            doc.metadata["superseded"] = "true"
                         accumulated_docs.append(doc)
                         file_doc_ids[file_path].append(doc.doc_id)
 
@@ -2037,5 +2100,16 @@ def build_index(
                 f"{ui.YELLOW}{len(withheld)} indexed file(s) were kept even though "
                 f"this scan did not see them, because the scan was incomplete. They "
                 f"were NOT removed from the index. Re-run with --verbose to see why.{ui.RESET}"
+            )
+        if skipped_superseded or grouping.review_copies:
+            details = []
+            if skipped_superseded:
+                details.append(f"{skipped_superseded} superseded revision(s)")
+            if grouping.review_copies:
+                details.append(f"{len(grouping.review_copies)} review copy file(s)")
+            ui.print(
+                f"{ui.YELLOW}{' and '.join(details)} were not indexed. Re-run with "
+                f"--verbose to list them; see indexing.versioning in config.yaml "
+                f"to adjust.{ui.RESET}"
             )
 

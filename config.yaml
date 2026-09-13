@@ -39,6 +39,18 @@ indexing:
   ## Diagnostics
   # slow_file_threshold_seconds: 30   # warn when one file takes longer than this
 
+  ## Revision handling: group ad-hoc document revisions (".../PB3/Spec.docx",
+  ## "Spec PB3.docx", "Spec_v2.pdf") and index only the newest per group,
+  ## by file modification time. Review-comment copies are never indexed.
+  # versioning:
+  #   enabled: true
+  #   doc_id_patterns: []           # e.g. ['\b(DOC-\d{5})\b'] - files sharing an
+  #                                 # extracted document ID group together
+  #   review_copy_patterns: ['\breview\b']  # replaces the defaults (review, comments,
+  #                                 # kommentarer, granskning, copy, kopia); [] disables
+  #   extra_revision_tokens: []     # extra token regex fragments, e.g. ['draft\d+']
+  #   index_superseded: false       # index older revisions too, demoted in results
+
 # Confluence integration (optional) - enables live search of Confluence pages
 # Installed by default; set the values below to enable.
 confluence:

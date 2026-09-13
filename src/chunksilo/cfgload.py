@@ -67,6 +67,19 @@ DEFAULT_EXCLUDE_PATTERNS = [
     "**/.DS_Store",
 ]
 
+# Filename markers of copies made to collect review comments, matched
+# case-insensitively against the filename without its extension. Setting
+# indexing.versioning.review_copy_patterns replaces this list wholesale;
+# [] turns detection off.
+DEFAULT_REVIEW_COPY_PATTERNS = [
+    r"\breview\b",
+    r"\bcomments?\b",
+    r"\bkommentar(?:er)?\b",
+    r"\bgranskning\b",
+    r"\bcopy\b",  # "Copy of Spec", "Spec - Copy (2)"
+    r"\bkopia\b",  # "Kopia av Spec", "Spec - kopia"
+]
+
 _DEFAULTS: dict[str, Any] = {
     "indexing": {
         "directories": ["./data"],
@@ -85,6 +98,25 @@ _DEFAULTS: dict[str, Any] = {
         "per_file_seconds": 300,  # give up on a single file; 0 disables
         "scan_item_seconds": 30,  # timeout for stat/hash/walk during scanning
         "slow_file_threshold_seconds": 30,  # warn when one file takes longer
+        "versioning": {
+            # Group files that are revisions of one document (revision-named
+            # directories or filename tokens like "Spec PB3.docx") and index
+            # only the newest member of each group, by modification time.
+            "enabled": True,
+            # Regexes tried in order against the full path; files sharing an
+            # extracted document ID form one group. The first capture group
+            # (or the whole match) is the ID. Empty = group by normalized
+            # name/path only.
+            "doc_id_patterns": [],
+            # Extra revision-token regex fragments (case-insensitive), added
+            # to the built-in grammar for directory names and filename
+            # suffixes alike.
+            "extra_revision_tokens": [],
+            "review_copy_patterns": DEFAULT_REVIEW_COPY_PATTERNS,
+            # Index older revisions too, stamped superseded and ranked below
+            # current documents in results.
+            "index_superseded": False,
+        },
     },
     "retrieval": {
         "embed_model_name": "BAAI/bge-small-en-v1.5",
