@@ -7,46 +7,53 @@ Returns raw document chunks for the calling LLM to synthesize.
 import argparse
 import asyncio
 import logging
+import logging.handlers
 import os
-from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-# Log file configuration
-LOG_FILE = "mcp.log"
-LOG_MAX_SIZE_MB = 10
-LOG_MAX_SIZE_BYTES = LOG_MAX_SIZE_MB * 1024 * 1024
+# Log file configuration. The log lives in the storage directory - never the
+# CWD, which on a mis-started service could be inside an indexed tree - and
+# is private: it records what was searched.
+LOG_FILE_NAME = "mcp.log"
+LOG_MAX_SIZE_BYTES = 10 * 1024 * 1024
+LOG_BACKUP_COUNT = 5
 
 # Module-level state (set during initialization)
 _server_config_path: Path | None = None
 _mcp: FastMCP | None = None
 
 
-def _rotate_log_if_needed():
-    """Rotate log file if it exists and is over the size limit."""
-    log_path = Path(LOG_FILE)
-    if log_path.exists() and log_path.stat().st_size > LOG_MAX_SIZE_BYTES:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        process_id = os.getpid()
-        rotated_name = f"mcp_{timestamp}_{process_id}.log"
-        rotated_path = log_path.parent / rotated_name
-        log_path.rename(rotated_path)
-        log_path.touch()
+class _PrivateRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """RotatingFileHandler whose files are only ever mode 0600."""
+
+    def _open(self):
+        fd = os.open(
+            self.baseFilename, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600
+        )
+        # O_CREAT does not chmod a file that already exists, so be explicit.
+        os.fchmod(fd, 0o600)
+        return os.fdopen(fd, self.mode, encoding=self.encoding)
 
 
-def _setup_logging():
+def _setup_logging(storage_dir: str | Path):
     """Configure logging for MCP server mode - file only, no stdout/stderr."""
-    _rotate_log_if_needed()
-
+    log_path = Path(storage_dir).expanduser() / LOG_FILE_NAME
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         force=True,
         handlers=[
-            logging.FileHandler(LOG_FILE, encoding="utf-8"),
+            _PrivateRotatingFileHandler(
+                log_path,
+                maxBytes=LOG_MAX_SIZE_BYTES,
+                backupCount=LOG_BACKUP_COUNT,
+                encoding="utf-8",
+            ),
         ],
     )
     logging.getLogger("llama_index.readers.confluence").setLevel(logging.WARNING)
@@ -77,9 +84,20 @@ def run_server(config_path: Path | None = None):
     """Start the MCP server."""
     global _server_config_path, _mcp
 
+    logger = logging.getLogger(__name__)
+
+    from .cfgload import load_config
+
+    # Load - and thereby activate - the configuration before importing
+    # .search/.index: index.py reads it at import time via load_config().
+    config = load_config(config_path)
     if config_path:
         _server_config_path = config_path
-        os.environ["CHUNKSILO_CONFIG"] = str(config_path)
+
+    # Logging goes to <storage_dir>/mcp.log, so it could not be configured
+    # before the config was read.
+    _setup_logging(config["storage"]["storage_dir"])
+    logger.info("Starting ChunkSilo MCP server")
 
     _mcp = _create_server()
     _mcp.run()
@@ -95,12 +113,6 @@ def main():
     )
     parser.add_argument("--config", help="Path to config.yaml")
     args = parser.parse_args()
-
-    # Configure logging BEFORE importing anything that uses logging
-    _setup_logging()
-
-    logger = logging.getLogger(__name__)
-    logger.info("Starting ChunkSilo MCP server")
 
     config_path = Path(args.config) if args.config else None
     run_server(config_path)

@@ -4,46 +4,71 @@
 import asyncio
 from unittest.mock import patch
 
-from chunksilo.server import _create_server, _rotate_log_if_needed
+from chunksilo.server import _create_server, _setup_logging
 
 # =============================================================================
-# Tests for _rotate_log_if_needed
+# Tests for _setup_logging
 # =============================================================================
 
 
-class TestRotateLogIfNeeded:
-    def test_oversized_log_rotated(self, tmp_path, monkeypatch):
-        log_file = tmp_path / "mcp.log"
-        # Write >10MB to the log file
-        log_file.write_bytes(b"x" * (11 * 1024 * 1024))
+class TestSetupLogging:
+    def _teardown(self):
+        import logging
 
-        monkeypatch.setattr("chunksilo.server.LOG_FILE", str(log_file))
-        _rotate_log_if_needed()
+        # Release the file handler so tmp_path can be removed on Windows and
+        # later tests get a clean root logger.
+        for handler in logging.getLogger().handlers[:]:
+            logging.getLogger().removeHandler(handler)
+            handler.close()
 
-        # Original file should be recreated (empty) and a rotated file should exist
-        assert log_file.exists()
-        assert log_file.stat().st_size == 0
-        rotated = [f for f in tmp_path.iterdir() if f.name.startswith("mcp_")]
-        assert len(rotated) == 1
+    def test_log_lands_in_storage_dir_with_private_mode(self, tmp_path):
+        import logging
+        import stat
 
-    def test_undersized_log_not_rotated(self, tmp_path, monkeypatch):
-        log_file = tmp_path / "mcp.log"
-        log_file.write_text("small log")
+        try:
+            _setup_logging(tmp_path / "storage")
+            logging.getLogger("chunksilo.test").info("hello")
+            log_file = tmp_path / "storage" / "mcp.log"
+            assert log_file.exists()
+            assert stat.S_IMODE(log_file.stat().st_mode) == 0o600
+            assert "hello" in log_file.read_text()
+        finally:
+            self._teardown()
 
-        monkeypatch.setattr("chunksilo.server.LOG_FILE", str(log_file))
-        _rotate_log_if_needed()
+    def test_existing_wider_mode_is_tightened(self, tmp_path):
+        import stat
 
-        assert log_file.read_text() == "small log"
-        rotated = [f for f in tmp_path.iterdir() if f.name.startswith("mcp_")]
-        assert len(rotated) == 0
+        storage = tmp_path / "storage"
+        storage.mkdir()
+        log_file = storage / "mcp.log"
+        log_file.write_text("old")
+        log_file.chmod(0o644)
+        try:
+            _setup_logging(storage)
+            assert stat.S_IMODE(log_file.stat().st_mode) == 0o600
+        finally:
+            self._teardown()
 
-    def test_nonexistent_log_no_error(self, tmp_path, monkeypatch):
-        log_file = tmp_path / "mcp.log"
-        monkeypatch.setattr("chunksilo.server.LOG_FILE", str(log_file))
+    def test_rotation_is_bounded(self, tmp_path):
+        import logging
 
-        # Should not raise
-        _rotate_log_if_needed()
-        assert not log_file.exists()
+        from chunksilo import server as server_module
+
+        storage = tmp_path / "storage"
+        try:
+            with patch.object(server_module, "LOG_MAX_SIZE_BYTES", 512), patch.object(
+                server_module, "LOG_BACKUP_COUNT", 2
+            ):
+                _setup_logging(storage)
+                log = logging.getLogger("chunksilo.test")
+                for _ in range(200):
+                    log.info("x" * 64)
+            logs = sorted(p.name for p in storage.iterdir())
+            assert "mcp.log" in logs
+            # backupCount bounds what rotation leaves behind
+            assert len(logs) <= 3
+        finally:
+            self._teardown()
 
 
 # =============================================================================
