@@ -3,6 +3,14 @@
 """
 MCP server for querying documentation using RAG.
 Returns raw document chunks for the calling LLM to synthesize.
+
+Two transports:
+- stdio (default): the MCP client starts this process itself; one user, one
+  machine.
+- streamable-http: listens on server.host:server.port for any MCP client that
+  can reach it. This server performs NO authentication of its own - keep the
+  loopback bind (the default) or put an authenticating reverse proxy in front
+  of it before exposing the port.
 """
 import argparse
 import asyncio
@@ -21,6 +29,8 @@ from pydantic import Field
 LOG_FILE_NAME = "mcp.log"
 LOG_MAX_SIZE_BYTES = 10 * 1024 * 1024
 LOG_BACKUP_COUNT = 5
+
+TRANSPORTS = ("stdio", "streamable-http")
 
 # Module-level state (set during initialization)
 _server_config_path: Path | None = None
@@ -59,11 +69,29 @@ def _setup_logging(storage_dir: str | Path):
     logging.getLogger("llama_index.readers.confluence").setLevel(logging.WARNING)
 
 
-def _create_server() -> FastMCP:
-    """Create and configure the MCP server with tools."""
+def _create_server(
+    config: dict[str, Any] | None = None, transport: str = "stdio"
+) -> FastMCP:
+    """Create and configure the MCP server with tools.
+
+    For ``streamable-http`` the bind address comes from ``config["server"]``;
+    the stdio server needs no configuration at all.
+    """
     from .search import run_search
 
-    mcp = FastMCP("llamaindex-docs-rag")
+    if transport == "streamable-http":
+        server_cfg = config["server"]
+        mcp = FastMCP(
+            "chunksilo",
+            host=server_cfg["host"],
+            port=int(server_cfg["port"]),
+            # Each POST is independent - no session affinity - so a tool call
+            # never depends on which worker served the previous one.
+            stateless_http=True,
+            json_response=True,
+        )
+    else:
+        mcp = FastMCP("chunksilo")
 
     @mcp.tool()
     async def search_docs(
@@ -80,7 +108,7 @@ def _create_server() -> FastMCP:
     return mcp
 
 
-def run_server(config_path: Path | None = None):
+def run_server(config_path: Path | None = None, transport_override: str | None = None):
     """Start the MCP server."""
     global _server_config_path, _mcp
 
@@ -98,9 +126,33 @@ def run_server(config_path: Path | None = None):
     # before the config was read.
     _setup_logging(config["storage"]["storage_dir"])
     logger.info("Starting ChunkSilo MCP server")
+    transport = transport_override or config["server"]["transport"]
 
-    _mcp = _create_server()
-    _mcp.run()
+    if transport == "stdio":
+        _mcp = _create_server(config, transport)
+        _mcp.run()
+        return
+
+    if transport != "streamable-http":
+        raise SystemExit(
+            f"Unknown server.transport: {transport!r} (expected one of {', '.join(TRANSPORTS)})"
+        )
+
+    # Pay for the index, the models and the BM25 index once, before the first
+    # request - concurrent first requests would otherwise all wait on the
+    # slowest cold start.
+    from . import search as search_module
+
+    logger.info("Warming up the search pipeline before accepting requests")
+    search_module.warm_up(config)
+
+    _mcp = _create_server(config, transport)
+    logger.info(
+        "Serving MCP over streamable-http on %s:%s (no authentication - front it with a proxy before exposing it)",
+        config["server"]["host"],
+        config["server"]["port"],
+    )
+    _mcp.run(transport="streamable-http")
 
 
 def main():
@@ -109,13 +161,18 @@ def main():
 
     parser = argparse.ArgumentParser(
         prog="chunksilo-mcp",
-        description="Run ChunkSilo MCP server (stdio transport)",
+        description="Run ChunkSilo MCP server (stdio or streamable-http transport)",
     )
     parser.add_argument("--config", help="Path to config.yaml")
+    parser.add_argument(
+        "--transport",
+        choices=list(TRANSPORTS),
+        help="Override server.transport from config",
+    )
     args = parser.parse_args()
 
     config_path = Path(args.config) if args.config else None
-    run_server(config_path)
+    run_server(config_path, transport_override=args.transport)
 
 
 if __name__ == "__main__":

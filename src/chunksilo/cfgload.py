@@ -158,6 +158,14 @@ _DEFAULTS: dict[str, Any] = {
         "storage_dir": "./storage",
         "model_cache_dir": "./models",
     },
+    "server": {
+        "transport": "stdio",  # stdio | streamable-http
+        # Loopback by default. The HTTP transport performs no authentication
+        # of its own: exposing the port is a deliberate act, taken together
+        # with TLS termination and a login layer in front of this server.
+        "host": "127.0.0.1",
+        "port": 8400,
+    },
     # Present files indexed from a mounted network share at the share's own
     # location (an smb:// URI plus the Windows UNC path) instead of the
     # server-local mount path, so a client on another machine gets a location

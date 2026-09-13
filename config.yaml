@@ -106,6 +106,15 @@ storage:
   storage_dir: "./storage"
   model_cache_dir: "./models"
 
+# MCP transport. stdio (the default) is started by the MCP client itself.
+# streamable-http listens on host:port for remote clients. It performs no
+# authentication of its own, so keep the loopback bind unless an
+# authenticating reverse proxy (TLS termination, login) sits in front of it.
+# server:
+#   transport: "stdio"             # stdio | streamable-http
+#   host: "127.0.0.1"
+#   port: 8400
+
 # Network shares (optional): present files indexed from a mounted share at the
 # share's own location - an smb:// URI plus the Windows UNC path - instead of
 # the local mount path, so clients on other machines get a location they can

@@ -4,6 +4,8 @@
 import asyncio
 from unittest.mock import patch
 
+import pytest
+
 from chunksilo.server import _create_server, _setup_logging
 
 # =============================================================================
@@ -130,3 +132,82 @@ class TestMain:
         mock_run_server.assert_called_once()
         config_arg = mock_run_server.call_args[0][0]
         assert config_arg is None
+
+    @patch("chunksilo.server.run_server")
+    def test_main_passes_transport_override(self, mock_run_server):
+        from chunksilo.server import main
+
+        with patch("sys.argv", ["chunksilo-mcp", "--transport", "streamable-http"]):
+            main()
+
+        assert mock_run_server.call_args.kwargs["transport_override"] == "streamable-http"
+
+    def test_main_rejects_unknown_transport(self):
+        from chunksilo.server import main
+
+        with patch("sys.argv", ["chunksilo-mcp", "--transport", "carrier-pigeon"]):
+            with pytest.raises(SystemExit):
+                main()
+
+
+# =============================================================================
+# Tests for the transports
+# =============================================================================
+
+
+class TestTransports:
+    HTTP_CONFIG = {
+        "server": {"transport": "streamable-http", "host": "127.0.0.1", "port": 8765},
+    }
+
+    def test_http_server_binds_the_configured_address(self):
+        mcp = _create_server(self.HTTP_CONFIG, "streamable-http")
+
+        assert mcp.settings.host == "127.0.0.1"
+        assert mcp.settings.port == 8765
+        assert mcp.settings.stateless_http is True
+        assert mcp.settings.json_response is True
+        tool_names = [t.name for t in mcp._tool_manager.list_tools()]
+        assert "search_docs" in tool_names
+
+    def _run(self, config, monkeypatch, tmp_path, transport_override=None):
+        """Run run_server with the network, logging and warm-up stubbed out."""
+        from chunksilo import search
+        from chunksilo import server as server_module
+
+        config = {**config, "storage": {"storage_dir": str(tmp_path)}}
+        calls = {"warm_up": [], "run": []}
+        monkeypatch.setattr("chunksilo.cfgload.load_config", lambda *_a, **_k: config)
+        monkeypatch.setattr(server_module, "_setup_logging", lambda _d: None)
+        monkeypatch.setattr(search, "warm_up", lambda cfg: calls["warm_up"].append(cfg))
+        monkeypatch.setattr(
+            server_module.FastMCP, "run", lambda self, **kw: calls["run"].append(kw)
+        )
+        server_module.run_server(None, transport_override=transport_override)
+        return calls
+
+    def test_http_transport_warms_up_then_serves(self, monkeypatch, tmp_path):
+        calls = self._run(self.HTTP_CONFIG, monkeypatch, tmp_path)
+
+        assert len(calls["warm_up"]) == 1
+        assert calls["run"] == [{"transport": "streamable-http"}]
+
+    def test_stdio_transport_stays_lazy(self, monkeypatch, tmp_path):
+        config = {"server": {"transport": "stdio", "host": "127.0.0.1", "port": 8400}}
+
+        calls = self._run(config, monkeypatch, tmp_path)
+
+        assert calls["warm_up"] == []
+        assert calls["run"] == [{}]
+
+    def test_override_wins_over_config(self, monkeypatch, tmp_path):
+        calls = self._run(self.HTTP_CONFIG, monkeypatch, tmp_path, transport_override="stdio")
+
+        assert calls["warm_up"] == []
+        assert calls["run"] == [{}]
+
+    def test_unknown_transport_exits(self, monkeypatch, tmp_path):
+        config = {"server": {"transport": "carrier-pigeon", "host": "127.0.0.1", "port": 1}}
+
+        with pytest.raises(SystemExit):
+            self._run(config, monkeypatch, tmp_path)
