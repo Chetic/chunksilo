@@ -37,7 +37,7 @@ from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
 # Load configuration from config.yaml
 from . import cfgload
-from .cfgload import load_config
+from .cfgload import DEFAULT_EXCLUDE_PATTERNS, DEFAULT_INCLUDE_PATTERNS, load_config
 from .docx_utils import _convert_doc_to_docx, split_docx_into_heading_documents
 from .models import _get_cached_model_path, configure_offline_mode, resolve_flashrank_model_name
 from .ui import FileProcessingContext, FileProcessingTimeoutError, GracefulAbort, IndexingUI
@@ -89,23 +89,12 @@ EXCLUDED_LLM_METADATA_KEYS = [
 logger = logging.getLogger(__name__)
 
 
-# Default file type patterns
-DEFAULT_INCLUDE_PATTERNS = ["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx", "**/*.doc"]
-
-# Default directory/file exclusion patterns — skip common noise directories
-DEFAULT_EXCLUDE_PATTERNS = [
-    "**/.git/**",
-    "**/node_modules/**",
-    "**/__pycache__/**",
-    "**/.venv/**",
-    "**/venv/**",
-    "**/.tox/**",
-    "**/.mypy_cache/**",
-    "**/.pytest_cache/**",
-    "**/.eggs/**",
-    "**/*.egg-info/**",
-    "**/.DS_Store",
-]
+# Internal tuning that used to be configuration. The adaptive batch sizer works
+# against this memory budget, the heartbeat drives the per-file progress
+# animation, and .doc conversion gets its own LibreOffice budget.
+_MAX_MEMORY_MB = 2048
+_HEARTBEAT_INTERVAL_SECONDS = 2.0
+_DOC_CONVERSION_TIMEOUT_SECONDS = 90.0
 
 
 @dataclass
@@ -614,7 +603,7 @@ class LocalFileSystemSource(DataSource):
 
         Runs with a timeout to avoid hanging on unresponsive network mounts.
         """
-        timeout = cfgload.get("indexing.timeout.scan_item_seconds", 30)
+        timeout = cfgload.get("indexing.scan_item_seconds")
 
         def _check():
             try:
@@ -704,7 +693,7 @@ class LocalFileSystemSource(DataSource):
         If no result arrives within scan_item_seconds, the walk is considered
         stalled and iteration stops.
         """
-        timeout = cfgload.get("indexing.timeout.scan_item_seconds", 30)
+        timeout = cfgload.get("indexing.scan_item_seconds")
         q: queue.Queue = queue.Queue()
         _sentinel = None  # signals end of iteration
 
@@ -787,7 +776,7 @@ class LocalFileSystemSource(DataSource):
 
         Raises TimeoutError if the operation exceeds scan_item_seconds.
         """
-        timeout = cfgload.get("indexing.timeout.scan_item_seconds", 30)
+        timeout = cfgload.get("indexing.scan_item_seconds")
         result = _run_with_timeout(
             lambda: self._create_file_info_inner(file_path, tracked_files),
             timeout_seconds=timeout,
@@ -844,7 +833,7 @@ class LocalFileSystemSource(DataSource):
         ctx: "FileProcessingContext | None" = None
     ) -> list[LlamaIndexDocument]:
         file_path = Path(file_info.path)
-        exists_timeout = cfgload.get("indexing.timeout.scan_item_seconds", 30)
+        exists_timeout = cfgload.get("indexing.scan_item_seconds")
         exists_result = _run_with_timeout(
             file_path.exists, timeout_seconds=exists_timeout, default=False,
         )
@@ -884,9 +873,9 @@ class LocalFileSystemSource(DataSource):
             if ctx:
                 ctx.set_phase("Converting .doc to .docx")
 
-            # Use specialized timeout for .doc conversion
-            doc_timeout = cfgload.get("indexing.timeout.doc_conversion_seconds", 90)
-            docx_path = _convert_doc_to_docx(file_path, timeout=doc_timeout)
+            docx_path = _convert_doc_to_docx(
+                file_path, timeout=_DOC_CONVERSION_TIMEOUT_SECONDS
+            )
 
             if docx_path is None:
                 logger.warning(f"Skipping {file_path}: could not convert .doc to .docx")
@@ -1549,28 +1538,23 @@ def build_index(
 
         # Process New/Modified Files
         if files_to_process:
-            # Get configuration
-            timeout_enabled = cfgload.get("indexing.timeout.enabled", True)
-            per_file_timeout = cfgload.get("indexing.timeout.per_file_seconds", 300)
-            heartbeat_interval = cfgload.get("indexing.timeout.heartbeat_interval_seconds", 2)
+            # Get configuration (0 disables the per-file timeout)
+            per_file_timeout = cfgload.get("indexing.per_file_seconds")
+            timeout_enabled = bool(per_file_timeout)
+            heartbeat_interval = _HEARTBEAT_INTERVAL_SECONDS
 
             # Checkpointing configuration (controls how often we persist to disk)
-            checkpoint_interval_files = cfgload.get("indexing.checkpoint_interval_files", 500)
-            checkpoint_interval_seconds = cfgload.get("indexing.checkpoint_interval_seconds", 300)
+            checkpoint_interval_files = cfgload.get("indexing.checkpoint_interval_files")
+            checkpoint_interval_seconds = cfgload.get("indexing.checkpoint_interval_seconds")
 
-            # Batch sizing (controls how many files are loaded/embedded together)
-            configured_batch_size = cfgload.get("indexing.batch_size", 200)
-            enable_adaptive_batching = cfgload.get("indexing.enable_adaptive_batching", True)
-            max_memory_mb = cfgload.get("indexing.max_memory_mb", 2048)
-
-            if enable_adaptive_batching:
-                optimal_batch_size = calculate_optimal_batch_size(
-                    num_files=len(files_to_process),
-                    max_memory_mb=max_memory_mb
-                )
-                batch_size = min(configured_batch_size, optimal_batch_size)
-            else:
-                batch_size = configured_batch_size
+            # Batch sizing: the configured size is an upper bound; the adaptive
+            # sizer shrinks it to fit the memory budget.
+            configured_batch_size = cfgload.get("indexing.batch_size")
+            optimal_batch_size = calculate_optimal_batch_size(
+                num_files=len(files_to_process),
+                max_memory_mb=_MAX_MEMORY_MB,
+            )
+            batch_size = min(configured_batch_size, optimal_batch_size)
 
             # Delete old versions of modified files
             ui.step_start("Removing old versions of modified files")
@@ -1591,9 +1575,8 @@ def build_index(
 
             ui.progress_start(total_files, desc="Processing files", unit="file")
 
-            # Get parallel loading configuration
-            max_workers = cfgload.get("indexing.parallel_workers", 4)
-            enable_parallel = cfgload.get("indexing.enable_parallel_loading", True)
+            # Parallel loading configuration (1 = serial)
+            max_workers = max(1, int(cfgload.get("indexing.parallel_workers")))
 
             batch_num = 0
             total_batches = (total_files + batch_size - 1) // batch_size
@@ -1609,7 +1592,7 @@ def build_index(
                 doc_to_file_mapping = {}
                 file_doc_ids = {}
 
-                workers = max_workers if enable_parallel else 1
+                workers = max_workers
                 file_docs = load_files_parallel(
                     batch,
                     data_source,

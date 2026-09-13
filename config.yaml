@@ -1,14 +1,14 @@
 # ChunkSilo configuration
-# See all options and defaults: chunksilo --dump-defaults
+# All options and their defaults: chunksilo --dump-defaults
 
-# Indexing settings - used by chunksilo --build-index
+# What to index - used by: chunksilo --build-index
 indexing:
   directories:
     - "./data"
   # chunk_size: 512
   # chunk_overlap: 50
 
-  ## Per-directory defaults (applied to all directories unless overridden)
+  ## Per-directory defaults (applied to every directory unless overridden per entry)
   # defaults:
   #   include: ["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx", "**/*.doc"]
   #   exclude:
@@ -26,26 +26,18 @@ indexing:
   #   recursive: true
   #   case_sensitive: false
 
-  ## Performance tuning
-  # batch_size: 200
-  # parallel_workers: 8
-  # enable_parallel_loading: true
-  # enable_adaptive_batching: true
-  # max_memory_mb: 2048
+  ## Performance
+  # batch_size: 200               # embedding batch size (adapts down under memory pressure)
+  # parallel_workers: 8           # 1 = load files serially
   # checkpoint_interval_files: 500
   # checkpoint_interval_seconds: 300
 
-  ## Timeout protection
-  # timeout:
-  #   enabled: true
-  #   per_file_seconds: 300
-  #   doc_conversion_seconds: 90
-  #   heartbeat_interval_seconds: 2
+  ## Timeouts, in seconds
+  # per_file_seconds: 300         # give up on a single file after this long (0 disables)
+  # scan_item_seconds: 30         # stat/hash/walk operations while scanning
 
-  ## Logging
-  # logging:
-  #   log_slow_files: true
-  #   slow_file_threshold_seconds: 30
+  ## Diagnostics
+  # slow_file_threshold_seconds: 30   # warn when one file takes longer than this
 
 # Confluence integration (optional) - enables live search of Confluence pages
 # Installed by default; set the values below to enable.
@@ -95,7 +87,6 @@ retrieval:
   # score_threshold: 0.1
   # recency_boost: 0.3
   # recency_half_life_days: 365
-  # bm25_similarity_top_k: 10
 
 # Storage paths
 storage:

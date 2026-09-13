@@ -48,7 +48,7 @@ def _is_heading_style(style_name: str) -> bool:
 
 def _get_doc_temp_dir() -> Path:
     """Get the temporary directory for .doc conversion, creating it if needed."""
-    storage_dir = Path(cfgload.get("storage.storage_dir", "./storage"))
+    storage_dir = Path(cfgload.get("storage.storage_dir"))
     temp_dir = storage_dir / "doc_temp"
     temp_dir.mkdir(parents=True, exist_ok=True)
     return temp_dir

@@ -151,22 +151,17 @@ All settings are optional and have sensible defaults.
 | `indexing.defaults.exclude` | Default exclude patterns for all directories |
 | `indexing.defaults.recursive` | Default recursive setting for all directories |
 
-**Advanced indexing options** — performance tuning, timeouts, and logging:
+**Advanced indexing options** — performance tuning, timeouts, and diagnostics:
 
 | Setting | Description |
 | :--- | :--- |
-| `indexing.parallel_workers` | Number of threads for parallel file loading |
-| `indexing.enable_parallel_loading` | Enable/disable parallel file loading |
-| `indexing.enable_adaptive_batching` | Enable memory-aware adaptive batch sizing |
-| `indexing.max_memory_mb` | Memory budget (MB) for adaptive batch sizing |
+| `indexing.parallel_workers` | Threads for parallel file loading (1 = serial) |
+| `indexing.batch_size` | Upper bound on the embedding batch size; sizing adapts down under memory pressure |
 | `indexing.checkpoint_interval_files` | Files processed between index checkpoints |
 | `indexing.checkpoint_interval_seconds` | Seconds between index checkpoints |
-| `indexing.timeout.enabled` | Enable per-file processing timeout |
-| `indexing.timeout.per_file_seconds` | Timeout in seconds for processing each file |
-| `indexing.timeout.doc_conversion_seconds` | Timeout in seconds for .doc to .docx conversion |
-| `indexing.timeout.heartbeat_interval_seconds` | Interval (seconds) between progress animation updates during file processing |
-| `indexing.logging.log_slow_files` | Warn when files take unusually long to process |
-| `indexing.logging.slow_file_threshold_seconds` | Seconds before a file is considered slow |
+| `indexing.per_file_seconds` | Give up on a single file after this many seconds (0 disables) |
+| `indexing.scan_item_seconds` | Timeout for stat/hash/walk operations while scanning |
+| `indexing.slow_file_threshold_seconds` | Warn when one file takes longer than this |
 
 #### Retrieval Settings
 
@@ -180,7 +175,7 @@ All settings are optional and have sensible defaults.
 | `retrieval.score_threshold` | Minimum score (0.0-1.0) for results |
 | `retrieval.recency_boost` | Recency boost weight (0.0-1.0) |
 | `retrieval.recency_half_life_days` | Days until recency boost halves |
-| `retrieval.bm25_similarity_top_k` | Files returned by BM25 filename search |
+
 | `retrieval.offline` | Prevent ML library network requests |
 
 #### Confluence Settings (optional)

@@ -65,11 +65,15 @@ def main():
 
     config_path = Path(args.config) if args.config else None
 
+    # Activate --config for the whole process before importing .index or
+    # .search, which read module-level settings from the active configuration.
+    from .cfgload import load_config
+
+    cfg = load_config(config_path)
+
     if args.list_files:
-        from .cfgload import load_config
         from .index import IngestionState
 
-        cfg = load_config(config_path)
         state_db = Path(cfg["storage"]["storage_dir"]) / "ingestion_state.db"
         if not state_db.exists():
             print("No index found. Run chunksilo --build-index first.", file=sys.stderr)

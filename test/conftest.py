@@ -139,3 +139,18 @@ def patched_search_globals(test_env):
     search._config = original_config
     search._index_cache = original_index_cache
     search._embed_model_initialized = original_initialized
+
+
+@pytest.fixture(autouse=True)
+def _reset_active_config():
+    """Isolate the process-wide active config between tests.
+
+    An explicit-path load_config() call becomes the active configuration for
+    the whole process; without this reset, one test's tmp config would answer
+    every later test's no-argument load.
+    """
+    yield
+    from chunksilo import cfgload
+
+    cfgload._config_cache = None
+    cfgload._active_path = None

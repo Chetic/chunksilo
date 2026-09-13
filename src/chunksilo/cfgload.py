@@ -3,7 +3,11 @@
 """
 Shared configuration loading for ChunkSilo.
 
-Loads configuration from config.yaml, searching in standard locations.
+Loads configuration from config.yaml, searching in standard locations. The
+first load with an explicit path (``--config``) becomes the process-wide
+active configuration: every later no-argument ``load_config()`` or ``get()``
+call answers from it, so a path given on the command line governs the whole
+process rather than only the call sites it was threaded through.
 """
 import copy
 import logging
@@ -46,47 +50,41 @@ def _find_config() -> Path:
 
 CONFIG_PATH = _find_config()
 
+# Default file type patterns - the single definition; index.py imports these.
+DEFAULT_INCLUDE_PATTERNS = ["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx", "**/*.doc"]
+
+DEFAULT_EXCLUDE_PATTERNS = [
+    "**/.git/**",
+    "**/node_modules/**",
+    "**/__pycache__/**",
+    "**/.venv/**",
+    "**/venv/**",
+    "**/.tox/**",
+    "**/.mypy_cache/**",
+    "**/.pytest_cache/**",
+    "**/.eggs/**",
+    "**/*.egg-info/**",
+    "**/.DS_Store",
+]
+
 _DEFAULTS: dict[str, Any] = {
     "indexing": {
         "directories": ["./data"],
         "defaults": {
-            "include": ["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx", "**/*.doc"],
-            "exclude": [
-                "**/.git/**",
-                "**/node_modules/**",
-                "**/__pycache__/**",
-                "**/.venv/**",
-                "**/venv/**",
-                "**/.tox/**",
-                "**/.mypy_cache/**",
-                "**/.pytest_cache/**",
-                "**/.eggs/**",
-                "**/*.egg-info/**",
-                "**/.DS_Store",
-            ],
+            "include": DEFAULT_INCLUDE_PATTERNS,
+            "exclude": DEFAULT_EXCLUDE_PATTERNS,
             "recursive": True,
             "case_sensitive": False,
         },
         "chunk_size": 512,
         "chunk_overlap": 50,
-        "batch_size": 200,
+        "batch_size": 200,  # upper bound; adaptive sizing may shrink a batch
+        "parallel_workers": 8,  # 1 = load files serially
         "checkpoint_interval_files": 500,
         "checkpoint_interval_seconds": 300,
-        "parallel_workers": 8,
-        "enable_parallel_loading": True,
-        "enable_adaptive_batching": True,
-        "max_memory_mb": 2048,
-        "timeout": {
-            "enabled": True,
-            "per_file_seconds": 300,  # 5 minutes per file
-            "doc_conversion_seconds": 90,  # 90 seconds for .doc conversion
-            "heartbeat_interval_seconds": 2,
-            "scan_item_seconds": 30,  # timeout for stat/hash/walk during scanning
-        },
-        "logging": {
-            "log_slow_files": True,
-            "slow_file_threshold_seconds": 30,
-        },
+        "per_file_seconds": 300,  # give up on a single file; 0 disables
+        "scan_item_seconds": 30,  # timeout for stat/hash/walk during scanning
+        "slow_file_threshold_seconds": 30,  # warn when one file takes longer
     },
     "retrieval": {
         "embed_model_name": "BAAI/bge-small-en-v1.5",
@@ -97,7 +95,6 @@ _DEFAULTS: dict[str, Any] = {
         "score_threshold": 0.1,
         "recency_boost": 0.3,
         "recency_half_life_days": 365,
-        "bm25_similarity_top_k": 10,
         "offline": False,
     },
     "confluence": {
@@ -118,6 +115,8 @@ _DEFAULTS: dict[str, Any] = {
         "include_custom_fields": False,
     },
     "ssl": {
+        # CA bundle for environments with TLS interception or a private CA:
+        # used for model downloads and for the Confluence/Jira APIs.
         "ca_bundle_path": "",
     },
     "storage": {
@@ -126,15 +125,44 @@ _DEFAULTS: dict[str, Any] = {
     },
 }
 
+# Options that no longer exist, mapped to what replaced them. A config file
+# that still sets one gets a warning instead of silently falling back to the
+# built-in default.
+_REMOVED_KEYS = {
+    "indexing.timeout": "indexing.per_file_seconds (0 disables) and indexing.scan_item_seconds",
+    "indexing.logging": "indexing.slow_file_threshold_seconds",
+    "indexing.enable_parallel_loading": "indexing.parallel_workers (1 = serial)",
+    "indexing.enable_adaptive_batching": "indexing.batch_size (an upper bound; sizing adapts automatically)",
+    "indexing.max_memory_mb": "indexing.batch_size (an upper bound; sizing adapts automatically)",
+    "retrieval.bm25_similarity_top_k": "nothing; the number of file-name matches is fixed",
+}
+
+# The active configuration: the merged result of the last load, plus the path
+# it came from. An explicit-path load replaces it; no-argument loads reuse it.
 _config_cache: dict[str, Any] | None = None
+_active_path: Path | None = None
+
+
+def _warn_removed_keys(user_config: dict[str, Any], path: Path) -> None:
+    """Warn about options the file sets that the schema no longer has."""
+    for dotted, replacement in _REMOVED_KEYS.items():
+        section, _, key = dotted.partition(".")
+        block = user_config.get(section)
+        if isinstance(block, dict) and key in block:
+            logger.warning(
+                "%s: '%s' is no longer used and is ignored; use %s instead",
+                path, dotted, replacement,
+            )
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """Deep merge override into base, returning a new dict."""
     result = base.copy()
     for key, value in override.items():
-        if value is None and key in result and isinstance(result[key], dict):
-            continue  # Skip None overrides for dict sections (e.g., commented-out YAML)
+        if value is None and key in result:
+            # An empty YAML value ("chunk_size:" or a commented-out section)
+            # parses as None; keep the default instead of poisoning it.
+            continue
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
             result[key] = _deep_merge(result[key], value)
         else:
@@ -182,45 +210,49 @@ def _resolve_bundled_models(config: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def load_config(config_path: Path | None = None) -> dict[str, Any]:
+def load_config(config_path: Path | str | None = None) -> dict[str, Any]:
     """Load configuration from YAML file with defaults.
 
     Args:
-        config_path: Optional path to config file. If None, uses default CONFIG_PATH.
-                    Results are cached only when using the default path.
+        config_path: Optional path to config file. When given, the result
+                    becomes the process-wide active configuration that
+                    no-argument calls (and :func:`get`) answer from. When
+                    None, returns the active configuration, loading from the
+                    auto-discovered CONFIG_PATH on first use.
 
     Returns:
         Configuration dictionary with defaults merged in.
     """
-    global _config_cache
+    global _config_cache, _active_path
 
-    # Return cached config if available (only for default path)
-    if _config_cache is not None and config_path is None:
+    if _config_cache is not None and (
+        config_path is None or Path(config_path) == _active_path
+    ):
         return _config_cache
 
-    path = config_path or CONFIG_PATH
+    path = Path(config_path) if config_path else CONFIG_PATH
+
+    # Callers may mutate the returned dict; never hand out the defaults themselves.
+    defaults = copy.deepcopy(_DEFAULTS)
 
     if not path.exists():
         logger.info("Config file not found at %s; using built-in defaults", path)
-        return _resolve_bundled_models(_DEFAULTS.copy())
+        result = _resolve_bundled_models(defaults)
+    else:
+        logger.info("Using config: %s", path)
+        with open(path, encoding="utf-8") as f:
+            user_config = yaml.safe_load(f) or {}
+        _warn_removed_keys(user_config, path)
+        result = _deep_merge(defaults, user_config)
+        result = _resolve_bundled_models(result)
 
-    logger.info("Using config: %s", path)
-
-    with open(path, encoding="utf-8") as f:
-        user_config = yaml.safe_load(f) or {}
-
-    result = _deep_merge(_DEFAULTS, user_config)
-    result = _resolve_bundled_models(result)
-
-    # Cache result only for default path
-    if config_path is None:
-        _config_cache = result
-
+    _config_cache = result
+    _active_path = path
     return result
 
 
 def get(key: str, default: Any = None) -> Any:
-    """Get a config value by dot-notation key.
+    """Get a value from the active configuration by dot-notation key.
 
     Args:
         key: Dot-separated key path (e.g., 'retrieval.embed_top_k')
@@ -247,7 +279,8 @@ def get(key: str, default: Any = None) -> Any:
 
 
 def reload_config() -> dict[str, Any]:
-    """Force reload configuration from disk, clearing the cache."""
-    global _config_cache
+    """Force reload configuration from disk, clearing the active config."""
+    global _config_cache, _active_path
     _config_cache = None
+    _active_path = None
     return load_config()
