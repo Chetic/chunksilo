@@ -4,7 +4,6 @@
 Indexing pipeline for building a RAG index from PDF, DOCX, DOC, Markdown, and TXT documents.
 Supports incremental indexing using a local SQLite database to track file states.
 """
-import argparse
 import hashlib
 import itertools
 import json
@@ -1378,7 +1377,6 @@ def load_files_parallel(
 def build_index(
     download_only: bool = False,
     config_path: Path | None = None,
-    model_cache_dir: Path | None = None,
     verbose: bool = False,
 ) -> None:
     """Build and persist the vector index incrementally."""
@@ -1396,9 +1394,6 @@ def build_index(
         RETRIEVAL_EMBED_MODEL_NAME = cfg["retrieval"]["embed_model_name"]
         RETRIEVAL_RERANK_MODEL_NAME = cfg["retrieval"]["rerank_model_name"]
 
-    # Override model cache dir if specified via CLI
-    if model_cache_dir:
-        RETRIEVAL_MODEL_CACHE_DIR = model_cache_dir
 
     # Read offline setting from config; force online when downloading models
     offline = False if download_only else _config["retrieval"].get("offline", False)
@@ -1692,36 +1687,3 @@ def build_index(
         abort_ctl.uninstall()
         ui.success(f"\nIndexing complete. {len(files_to_process)} files processed.")
 
-
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
-    parser = argparse.ArgumentParser(description="Build the document index")
-    parser.add_argument(
-        "--download-models",
-        action="store_true",
-        help="Download the retrieval models and exit",
-    )
-    parser.add_argument(
-        "--config",
-        type=str,
-        help="Path to config.yaml (overrides auto-discovery)",
-    )
-    parser.add_argument(
-        "--model-cache-dir",
-        type=str,
-        help="Directory to download/cache models (overrides config)",
-    )
-    args = parser.parse_args()
-
-    try:
-        build_index(
-            download_only=args.download_models,
-            config_path=Path(args.config) if args.config else None,
-            model_cache_dir=Path(args.model_cache_dir) if args.model_cache_dir else None,
-        )
-    except Exception as e:
-        logger.error(f"Indexing failed: {e}", exc_info=True)
-        raise

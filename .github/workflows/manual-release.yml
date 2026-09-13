@@ -286,8 +286,10 @@ jobs:
           # Install the exact dependency set the release used; no upgrades.
           pip install --no-deps -r "$LOCK_FILE"
           BUNDLE=src/chunksilo/_bundled_models
-          PYTHONPATH=src python -m chunksilo.index --download-models \
-            --model-cache-dir "$BUNDLE"
+          DL_CONFIG=$(mktemp)
+          printf 'storage:\n  model_cache_dir: "%s"\n' "$BUNDLE" > "$DL_CONFIG"
+          PYTHONPATH=src python -m chunksilo --download-models --config "$DL_CONFIG"
+          rm -f "$DL_CONFIG"
           # Belt-and-suspenders: materialize any remaining symlinks into real files
           # (independent of the hf_hub version honoring HF_HUB_DISABLE_SYMLINKS),
           # then drop the now-redundant blob store. exclude-package-data also keeps
