@@ -10,7 +10,7 @@
 #
 # Requirements:
 #   - Python 3.11
-#   - Dependencies from requirements.txt and test/requirements.txt
+#   - The package installed with its test extra: pip install -e '.[test]'
 
 set -e
 
@@ -29,7 +29,7 @@ else
     echo "Error: Python 3.11 is required but not found."
     echo "Please create a virtual environment:"
     echo "  python3.11 -m venv .venv311"
-    echo "  .venv311/bin/pip install -r requirements.txt -r test/requirements.txt"
+    echo "  .venv311/bin/pip install -e '.[test]'"
     exit 1
 fi
 
