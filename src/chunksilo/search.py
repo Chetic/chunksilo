@@ -10,6 +10,7 @@ import logging
 import math
 import os
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
@@ -71,10 +72,20 @@ def _get_config() -> dict[str, Any]:
 
 
 # Global caches
+# Global caches. Each is guarded by its own lock: an HTTP server dispatches
+# every tool call into a thread pool with no session affinity, so concurrent
+# first requests would otherwise each cold-start their own index load, ONNX
+# session and reranker - three times the work and three times the memory, with
+# two of each thrown away. Loading a model takes seconds, so the second caller
+# waiting on the lock is far cheaper than duplicating it.
 _index_cache = None
+_index_lock = threading.Lock()
 _embed_model_initialized = False
+_embed_model_lock = threading.Lock()
 _reranker_model = None
+_reranker_lock = threading.Lock()
 _bm25_retriever_cache = None
+_bm25_lock = threading.Lock()
 _configured_directories_cache: list[Path] | None = None
 
 # Common English stopwords to filter from Confluence CQL queries
@@ -257,91 +268,106 @@ def _char_offset_to_line(char_offset: int | None, line_offsets: list[int] | None
 
 
 def _ensure_embed_model(config: dict[str, Any]) -> None:
-    """Ensure the embedding model is initialized."""
+    """Ensure the embedding model is initialized (once, even under concurrency)."""
     global _embed_model_initialized
 
     if _embed_model_initialized:
         return
 
-    model_name = config["retrieval"]["embed_model_name"]
-    cache_dir = Path(config["storage"]["model_cache_dir"])
-    offline_mode = config["retrieval"]["offline"]
+    with _embed_model_lock:
+        if _embed_model_initialized:
+            return
 
-    cached_model_path = _get_cached_model_path(cache_dir, model_name)
-    if cached_model_path and offline_mode:
-        logger.info(f"Loading embedding model from cache: {cached_model_path}")
-        embed_model = FastEmbedEmbedding(
-            model_name=model_name,
-            cache_dir=str(cache_dir),
-            specific_model_path=str(cached_model_path)
-        )
-    else:
-        embed_model = FastEmbedEmbedding(
-            model_name=model_name,
-            cache_dir=str(cache_dir),
-        )
-    logger.info("Embedding model initialized successfully")
-    Settings.embed_model = embed_model
-    _embed_model_initialized = True
+        model_name = config["retrieval"]["embed_model_name"]
+        cache_dir = Path(config["storage"]["model_cache_dir"])
+        offline_mode = config["retrieval"]["offline"]
+
+        cached_model_path = _get_cached_model_path(cache_dir, model_name)
+        if cached_model_path and offline_mode:
+            logger.info(f"Loading embedding model from cache: {cached_model_path}")
+            embed_model = FastEmbedEmbedding(
+                model_name=model_name,
+                cache_dir=str(cache_dir),
+                specific_model_path=str(cached_model_path)
+            )
+        else:
+            embed_model = FastEmbedEmbedding(
+                model_name=model_name,
+                cache_dir=str(cache_dir),
+            )
+        logger.info("Embedding model initialized successfully")
+        Settings.embed_model = embed_model
+        _embed_model_initialized = True
 
 
 def _ensure_reranker(config: dict[str, Any]):
-    """Load the FlashRank reranking model."""
+    """Load the FlashRank reranking model (once, even under concurrency)."""
     global _reranker_model
 
     if _reranker_model is not None:
         return _reranker_model
 
-    try:
-        from flashrank import Ranker
-    except ImportError as exc:
-        raise ImportError(
-            "flashrank is required for reranking. Install with: pip install chunksilo"
-        ) from exc
+    with _reranker_lock:
+        if _reranker_model is not None:
+            return _reranker_model
 
-    raw_model_name = config["retrieval"]["rerank_model_name"]
-    cache_dir = Path(config["storage"]["model_cache_dir"])
-    offline_mode = config["retrieval"]["offline"]
-
-    model_name = resolve_flashrank_model_name(raw_model_name)
-
-    try:
-        _reranker_model = Ranker(model_name=model_name, cache_dir=str(cache_dir))
-    except Exception as exc:
-        if offline_mode:
-            raise FileNotFoundError(
-                f"Rerank model '{model_name}' not available in cache directory {cache_dir}. "
-                "Download it before running in offline mode."
+        try:
+            from flashrank import Ranker
+        except ImportError as exc:
+            raise ImportError(
+                "flashrank is required for reranking. Install with: pip install chunksilo"
             ) from exc
-        raise
 
-    logger.info(f"Rerank model '{model_name}' loaded successfully")
-    return _reranker_model
+        raw_model_name = config["retrieval"]["rerank_model_name"]
+        cache_dir = Path(config["storage"]["model_cache_dir"])
+        offline_mode = config["retrieval"]["offline"]
+
+        model_name = resolve_flashrank_model_name(raw_model_name)
+
+        try:
+            ranker = Ranker(model_name=model_name, cache_dir=str(cache_dir))
+        except Exception as exc:
+            if offline_mode:
+                raise FileNotFoundError(
+                    f"Rerank model '{model_name}' not available in cache directory "
+                    f"{cache_dir}. Download it before running in offline mode."
+                ) from exc
+            raise
+
+        logger.info(f"Rerank model '{model_name}' loaded successfully")
+        _reranker_model = ranker
+        return _reranker_model
 
 
 def _ensure_bm25_retriever(config: dict[str, Any]):
-    """Load the BM25 retriever for file name matching."""
+    """Load the BM25 retriever for file name matching (once, even concurrently)."""
     global _bm25_retriever_cache
 
     if _bm25_retriever_cache is not None:
         return _bm25_retriever_cache
 
-    storage_dir = Path(config["storage"]["storage_dir"])
-    bm25_index_dir = storage_dir / "bm25_index"
+    with _bm25_lock:
+        if _bm25_retriever_cache is not None:
+            return _bm25_retriever_cache
 
-    if not bm25_index_dir.exists():
-        logger.warning(f"BM25 index not found at {bm25_index_dir}. Run indexing to create it.")
-        return None
+        storage_dir = Path(config["storage"]["storage_dir"])
+        bm25_index_dir = storage_dir / "bm25_index"
 
-    try:
-        from llama_index.retrievers.bm25 import BM25Retriever
-        logger.info(f"Loading BM25 index from {bm25_index_dir}")
-        _bm25_retriever_cache = BM25Retriever.from_persist_dir(str(bm25_index_dir))
-        logger.info("BM25 retriever loaded successfully")
-        return _bm25_retriever_cache
-    except Exception as e:
-        logger.error(f"Failed to load BM25 retriever: {e}")
-        return None
+        if not bm25_index_dir.exists():
+            logger.warning(
+                f"BM25 index not found at {bm25_index_dir}. Run indexing to create it."
+            )
+            return None
+
+        try:
+            from llama_index.retrievers.bm25 import BM25Retriever
+            logger.info(f"Loading BM25 index from {bm25_index_dir}")
+            _bm25_retriever_cache = BM25Retriever.from_persist_dir(str(bm25_index_dir))
+            logger.info("BM25 retriever loaded successfully")
+            return _bm25_retriever_cache
+        except Exception as e:
+            logger.error(f"Failed to load BM25 retriever: {e}")
+            return None
 
 
 def _format_bm25_matches(bm25_nodes: list[NodeWithScore], config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1019,7 +1045,7 @@ def _search_jira(query: str, config: dict[str, Any]) -> list[NodeWithScore]:
 
 
 def load_llamaindex_index(config: dict[str, Any] | None = None):
-    """Load the LlamaIndex from storage."""
+    """Load the LlamaIndex from storage (once, even under concurrency)."""
     if config is None:
         config = _get_config()
     global _index_cache
@@ -1027,19 +1053,56 @@ def load_llamaindex_index(config: dict[str, Any] | None = None):
     if _index_cache is not None:
         return _index_cache
 
-    storage_dir = Path(config["storage"]["storage_dir"])
-    if not storage_dir.exists():
-        raise FileNotFoundError(
-            f"Storage directory {storage_dir} does not exist. "
-            "Please run indexing first."
-        )
+    with _index_lock:
+        if _index_cache is not None:
+            return _index_cache
 
-    logger.info("Loading LlamaIndex from storage...")
-    _ensure_embed_model(config)
-    storage_context = StorageContext.from_defaults(persist_dir=str(storage_dir))
-    index = load_index_from_storage(storage_context)
-    _index_cache = index
-    return index
+        storage_dir = Path(config["storage"]["storage_dir"])
+        if not storage_dir.exists():
+            raise FileNotFoundError(
+                f"Storage directory {storage_dir} does not exist. "
+                "Please run indexing first."
+            )
+
+        logger.info("Loading LlamaIndex from storage...")
+        _ensure_embed_model(config)
+        storage_context = StorageContext.from_defaults(persist_dir=str(storage_dir))
+        index = load_index_from_storage(storage_context)
+        _index_cache = index
+        return index
+
+
+def warm_up(config: dict[str, Any] | None = None) -> None:
+    """Load everything a query needs, before any query arrives.
+
+    A server can call this at startup. Without it the first requests pay for
+    the index load, the embedding ONNX session, the reranker and the BM25 index -
+    and concurrent first requests all wait on whichever of them got there first,
+    which is how a few parallel tool calls end up past a client's timeout.
+    Failures are logged, not raised: a server that cannot preload is still
+    worth starting, and the same error will surface per query.
+    """
+    if config is None:
+        config = _get_config()
+
+    configure_offline_mode(
+        config["retrieval"]["offline"],
+        Path(config["storage"]["model_cache_dir"]),
+    )
+
+    started = time.time()
+    for name, load in (
+        ("index", lambda: load_llamaindex_index(config)),
+        ("embedding model", lambda: _ensure_embed_model(config)),
+        ("reranker", lambda: _ensure_reranker(config)),
+        ("BM25 index", lambda: _ensure_bm25_retriever(config)),
+        ("heading store", get_heading_store),
+    ):
+        try:
+            load()
+        except Exception as exc:
+            logger.error("Warm-up of the %s failed: %s", name, exc)
+    logger.info("Warm-up finished in %.1fs", time.time() - started)
 
 
 def _parse_iso8601_to_date(iso_string: str) -> str | None:
@@ -1431,17 +1494,32 @@ def run_search(
     _setup_ssl(config)
 
     start_time = time.time()
+    # Per-stage timings: without them, "the query took 56 seconds" is
+    # unactionable. Logged rather than returned, so the tool response shape
+    # is unchanged.
+    stage_times: dict[str, float] = {}
+    stage_start = start_time
+
+    def _mark(stage: str) -> None:
+        nonlocal stage_start
+        now = time.time()
+        stage_times[stage] = now - stage_start
+        stage_start = now
 
     try:
         required_phrases, clean_query = _extract_quoted_phrases(query)
         enhanced_query = _preprocess_query(clean_query)
 
         index = load_llamaindex_index(config)
+        _mark("load")
 
         # Retrieval
         nodes = _retrieve_vector_nodes(index, enhanced_query, required_phrases, config)
+        _mark("vector")
         matched_files = _retrieve_bm25_matches(enhanced_query, required_phrases, config)
+        _mark("bm25")
         nodes.extend(_retrieve_remote_sources(enhanced_query, config))
+        _mark("remote")
 
         # Date filtering and recency boost
         if date_from or date_to:
@@ -1460,8 +1538,11 @@ def run_search(
             logger.info(f"Capping rerank candidates: {len(nodes)} -> {rerank_candidates}")
             nodes = nodes[:rerank_candidates]
 
+        _mark("filter")
+
         # Rerank
         nodes, rerank_scores = _rerank_nodes(nodes, enhanced_query, config)
+        _mark("rerank")
 
         # Post-rerank filtering
         score_threshold = config["retrieval"]["score_threshold"]
@@ -1482,7 +1563,13 @@ def run_search(
 
         # Format results
         chunks = _format_search_results(nodes, rerank_scores, config)
+        _mark("format")
         elapsed = time.time() - start_time
+        logger.info(
+            "Search took %.2fs (%s)",
+            elapsed,
+            " ".join(f"{name}={secs:.2f}s" for name, secs in stage_times.items()),
+        )
 
         return {
             "matched_files": matched_files,
