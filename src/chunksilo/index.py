@@ -37,7 +37,7 @@ from llama_index.embeddings.fastembed import FastEmbedEmbedding
 # Load configuration from config.yaml
 from . import cfgload
 from .cfgload import DEFAULT_EXCLUDE_PATTERNS, DEFAULT_INCLUDE_PATTERNS, load_config
-from .docx_utils import _convert_doc_to_docx, split_docx_into_heading_documents
+from .docx_utils import _convert_doc_to_docx, cleanup_conversion_dir, split_docx_into_heading_documents
 from .models import _get_cached_model_path, configure_offline_mode, resolve_flashrank_model_name
 from .ui import FileProcessingContext, FileProcessingTimeoutError, GracefulAbort, IndexingUI
 
@@ -888,6 +888,7 @@ class LocalFileSystemSource(DataSource):
                         lambda: split_docx_into_heading_documents(
                             docx_path, ctx,
                             heading_store=get_heading_store(),
+                            heading_store_key=str(file_path),
                             excluded_embed_metadata_keys=EXCLUDED_EMBED_METADATA_KEYS,
                             excluded_llm_metadata_keys=EXCLUDED_LLM_METADATA_KEYS,
                         ),
@@ -903,6 +904,7 @@ class LocalFileSystemSource(DataSource):
                     docs = split_docx_into_heading_documents(
                         docx_path, ctx,
                         heading_store=get_heading_store(),
+                        heading_store_key=str(file_path),
                         excluded_embed_metadata_keys=EXCLUDED_EMBED_METADATA_KEYS,
                         excluded_llm_metadata_keys=EXCLUDED_LLM_METADATA_KEYS,
                     )
@@ -914,9 +916,9 @@ class LocalFileSystemSource(DataSource):
                         doc.metadata["source"] = str(file_path)
                 return docs
             finally:
-                # Clean up temp file
-                if docx_path.exists():
-                    docx_path.unlink()
+                # The whole private conversion directory goes: converted
+                # .docx, the copied .doc, and the LibreOffice profile.
+                cleanup_conversion_dir(docx_path.parent)
         else:
             reader = SimpleDirectoryReader(
                 input_files=[str(file_path)],

@@ -82,6 +82,25 @@ class TestIsHeadingStyle:
 
 
 class TestConvertDocToDocx:
+    """The conversion contract: each conversion runs in a private directory
+    under storage, on a *copy* of the source, with its own LibreOffice
+    profile - so parallel same-stem conversions cannot collide (a collision
+    would index one file's content under another file's path) and nothing is
+    ever written next to the source document."""
+
+    @staticmethod
+    def _fake_soffice(mock_run, produce_output=True):
+        """Simulate LibreOffice: write <stem>.docx into the --outdir."""
+
+        def run(argv, **kwargs):
+            if produce_output:
+                outdir = Path(argv[argv.index("--outdir") + 1])
+                source = Path(argv[-1])
+                (outdir / (source.stem + ".docx")).write_bytes(b"converted")
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = run
+
     @patch("chunksilo.docx_utils._get_doc_temp_dir")
     @patch("shutil.which", return_value=None)
     def test_libreoffice_not_found(self, mock_which, mock_temp_dir):
@@ -93,15 +112,53 @@ class TestConvertDocToDocx:
     @patch("shutil.which")
     def test_conversion_success(self, mock_which, mock_run, mock_temp_dir, tmp_path):
         mock_which.side_effect = lambda p: "/usr/bin/soffice" if p == "/usr/bin/soffice" else None
-        mock_run.return_value = MagicMock(returncode=0)
-        mock_temp_dir.return_value = tmp_path
+        self._fake_soffice(mock_run)
+        temp_root = tmp_path / "doc_temp"
+        temp_root.mkdir()
+        mock_temp_dir.return_value = temp_root
+        source = tmp_path / "src" / "test.doc"
+        source.parent.mkdir()
+        source.write_bytes(b"legacy doc")
 
-        # Create the expected output file
-        output_file = tmp_path / "test.docx"
-        output_file.touch()
+        result = _convert_doc_to_docx(source)
 
-        result = _convert_doc_to_docx(Path("/fake/test.doc"))
-        assert result == output_file
+        assert result is not None and result.name == "test.docx"
+        assert result.read_bytes() == b"converted"
+        # Converted inside a private work dir under the storage temp root
+        assert result.parent.parent == temp_root
+        # ...from a copy of the source, not the source itself
+        argv = mock_run.call_args[0][0]
+        assert str(source) not in argv
+        assert str(result.parent / "test.doc") in argv
+        # ...with a private LibreOffice profile inside the work dir
+        assert any(a.startswith("-env:UserInstallation=") for a in argv)
+
+    @patch("chunksilo.docx_utils._get_doc_temp_dir")
+    @patch("subprocess.run")
+    @patch("shutil.which")
+    def test_parallel_same_stem_sources_do_not_collide(
+        self, mock_which, mock_run, mock_temp_dir, tmp_path
+    ):
+        mock_which.side_effect = lambda p: "/usr/bin/soffice" if p == "/usr/bin/soffice" else None
+        self._fake_soffice(mock_run)
+        temp_root = tmp_path / "doc_temp"
+        temp_root.mkdir()
+        mock_temp_dir.return_value = temp_root
+        source_a = tmp_path / "a" / "report.doc"
+        source_b = tmp_path / "b" / "report.doc"
+        for src, content in ((source_a, b"content A"), (source_b, b"content B")):
+            src.parent.mkdir()
+            src.write_bytes(content)
+
+        result_a = _convert_doc_to_docx(source_a)
+        result_b = _convert_doc_to_docx(source_b)
+
+        assert result_a is not None and result_b is not None
+        assert result_a != result_b
+        assert result_a.parent != result_b.parent
+        # Each work dir holds the copy it converted, untouched by the other
+        assert (result_a.parent / "report.doc").read_bytes() == b"content A"
+        assert (result_b.parent / "report.doc").read_bytes() == b"content B"
 
     @patch("chunksilo.docx_utils._get_doc_temp_dir")
     @patch("subprocess.run")
@@ -110,9 +167,13 @@ class TestConvertDocToDocx:
         mock_which.side_effect = lambda p: "soffice" if p == "soffice" else None
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="soffice", timeout=60)
         mock_temp_dir.return_value = tmp_path
+        source = tmp_path / "test.doc"
+        source.write_bytes(b"legacy doc")
 
-        result = _convert_doc_to_docx(Path("/fake/test.doc"))
+        result = _convert_doc_to_docx(source)
         assert result is None
+        # The failed conversion's work dir is cleaned up
+        assert list(tmp_path.iterdir()) == [source]
 
     @patch("chunksilo.docx_utils._get_doc_temp_dir")
     @patch("subprocess.run")
@@ -121,9 +182,12 @@ class TestConvertDocToDocx:
         mock_which.side_effect = lambda p: "/usr/bin/soffice" if p == "/usr/bin/soffice" else None
         mock_run.return_value = MagicMock(returncode=1, stderr=b"error")
         mock_temp_dir.return_value = tmp_path
+        source = tmp_path / "test.doc"
+        source.write_bytes(b"legacy doc")
 
-        result = _convert_doc_to_docx(Path("/fake/test.doc"))
+        result = _convert_doc_to_docx(source)
         assert result is None
+        assert list(tmp_path.iterdir()) == [source]
 
 
 # =============================================================================
@@ -228,6 +292,20 @@ class TestSplitDocxIntoHeadingDocuments:
         assert headings[0]["level"] == 1
         assert headings[1]["text"] == "H2"
         assert headings[1]["level"] == 2
+
+    def test_heading_store_key_overrides_the_parsed_path(self, tmp_path):
+        """A converted .doc is parsed from a temp copy but looked up at query
+        time under the original path; the caller's key must win."""
+        docx_path = _create_docx([("Heading 1", "H1"), ("Normal", "Body.")], tmp_path)
+
+        mock_store = MagicMock()
+        split_docx_into_heading_documents(
+            docx_path,
+            heading_store=mock_store,
+            heading_store_key="/data/original.doc",
+        )
+
+        assert mock_store.set_headings.call_args[0][0] == "/data/original.doc"
 
     def test_excluded_metadata_keys_passed_through(self, tmp_path):
         docx_path = _create_docx([
