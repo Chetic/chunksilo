@@ -165,6 +165,21 @@ _DEFAULTS: dict[str, Any] = {
         # with TLS termination and a login layer in front of this server.
         "host": "127.0.0.1",
         "port": 8400,
+        # The URL clients reach this server on when a reverse proxy sits in
+        # front, e.g. "https://search.example.com". The MCP transport rejects
+        # any Host header other than the bind address unless it is allowed
+        # here, and a proxy forwards the public hostname. Empty = only the
+        # bind address is accepted.
+        "public_url": "",
+        # Further Host header values and Origins to accept ("host:*" = any port).
+        "allowed_hosts": [],
+        "allowed_origins": [],
+        # Issuer URLs of the authorization servers (e.g. a KeyCloak realm) MCP
+        # clients should obtain a token from. Published as RFC 9728
+        # protected-resource metadata at /.well-known/oauth-protected-resource
+        # so clients can discover them; this server never verifies tokens -
+        # that is the reverse proxy's job. Empty = the metadata is not served.
+        "authorization_servers": [],
     },
     # Present files indexed from a mounted network share at the share's own
     # location (an smb:// URI plus the Windows UNC path) instead of the

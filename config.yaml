@@ -114,6 +114,10 @@ storage:
 #   transport: "stdio"             # stdio | streamable-http
 #   host: "127.0.0.1"
 #   port: 8400
+#   public_url: "https://search.example.com"   # the URL the proxy serves this instance on
+#   allowed_hosts: []              # further Host values to accept ("host:*" = any port)
+#   allowed_origins: []            # further Origin values to accept
+#   authorization_servers: []      # e.g. ["https://keycloak.example.com/realms/docs"]
 
 # Network shares (optional): present files indexed from a mounted share at the
 # share's own location - an smb:// URI plus the Windows UNC path - instead of

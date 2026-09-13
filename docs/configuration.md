@@ -217,13 +217,19 @@ under `storage.storage_dir`.
 | `server.transport` | `stdio` (default; the MCP client starts the server itself) or `streamable-http` (listen for remote clients) |
 | `server.host` | Bind address for the HTTP transport (default `127.0.0.1`) |
 | `server.port` | Port for the HTTP transport (default `8400`) |
+| `server.public_url` | The URL a reverse proxy serves this instance on, e.g. `https://search.example.com`. Required behind a proxy: the transport rejects any `Host` header it does not expect with `421`, and this adds the public hostname (and origin) to what it accepts |
+| `server.allowed_hosts` | Further `Host` header values to accept (`host` or `host:port`; `host:*` for any port) |
+| `server.allowed_origins` | Further `Origin` values to accept (`scheme://host[:port]`; `scheme://host:*` for any port) |
+| `server.authorization_servers` | Issuer URLs (e.g. a KeyCloak realm) published as RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource`, so MCP clients can discover where to obtain a token. Requires `public_url`. ChunkSilo never verifies tokens itself |
 
 The HTTP transport performs **no authentication of its own**: anyone who can
 reach the port can search everything in the index. Keep the loopback bind, or
 put a reverse proxy that terminates TLS and authenticates users in front of
-the server before exposing it. `chunksilo-mcp --transport streamable-http`
-overrides the config for one run, and the HTTP server warms up the index and
-models before it accepts its first request.
+the server before exposing it — see [reverse-proxy.md](reverse-proxy.md) for
+an oauth2-proxy and KeyCloak setup. `chunksilo-mcp --transport streamable-http`
+overrides the config for one run, the HTTP server warms up the index and
+models before it accepts its first request, and `GET /health` answers once it
+is listening.
 
 ### Share Locations (optional)
 

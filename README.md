@@ -17,7 +17,7 @@ ChunkSilo is like a local Google for your documents. It uses semantic search —
 - Heading-aware results with source links back to the original file, spread across documents instead of one document's every chunk
 - Date filtering and recency boosting
 - Files indexed from a mounted network share can be presented at the share's own location (an `smb://` URI plus the Windows UNC path)
-- Serves MCP over stdio to a local client, or over streamable-http behind a reverse proxy of your own
+- Serves MCP over stdio to a local client, or over streamable-http behind a reverse proxy of your own (oauth2-proxy + KeyCloak walkthrough included)
 - Optional Confluence and Jira integrations (supports Cloud and Server/Data Center)
 
 ## Installation
@@ -124,6 +124,7 @@ mounted network share are presented.
 - [docs/cli.md](docs/cli.md) — `chunksilo` and `chunksilo-mcp` options, including `--check-files` for explaining why a file is or is not indexed.
 - [docs/tools.md](docs/tools.md) — the `search_docs` result shape.
 - [docs/mcp-clients.md](docs/mcp-clients.md) — client setup for Claude Code, Claude Desktop, Cline, Roo Code and opencode, over stdio or HTTP.
+- [docs/reverse-proxy.md](docs/reverse-proxy.md) — sharing an instance behind an authenticating reverse proxy, with oauth2-proxy and KeyCloak group-based access.
 - [docs/troubleshooting.md](docs/troubleshooting.md) — indexing surprises, network mounts, offline mode and more.
 
 ## License

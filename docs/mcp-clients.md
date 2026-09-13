@@ -165,8 +165,9 @@ With `server.transport: streamable-http` (or `chunksilo-mcp --transport
 streamable-http`) the server listens on `server.host:server.port` — by default
 `http://127.0.0.1:8400/mcp` — and any MCP client that speaks streamable HTTP
 can connect to it. ChunkSilo authenticates nobody on this transport, so expose
-it only behind a reverse proxy that does; the examples below use the loopback
-address.
+it only behind a reverse proxy that does — [reverse-proxy.md](reverse-proxy.md)
+walks through an oauth2-proxy and KeyCloak setup. The examples below use the
+loopback address.
 
 **Claude Code:**
 ```bash
