@@ -217,5 +217,21 @@ class TestIngestionStateEdgeCases:
         assert isinstance(files, dict)
 
 
+class TestSearchErrorResponses:
+    def test_internal_errors_are_not_leaked_to_the_caller(self, monkeypatch):
+        """Exception text can name filesystem paths; the caller gets a generic
+        message and the detail stays in the server log."""
+        from chunksilo import search
+
+        def boom(config):
+            raise FileNotFoundError("/srv/secret-storage/docstore.json is missing")
+
+        monkeypatch.setattr(search, "load_llamaindex_index", boom)
+        result = search.run_search("anything")
+
+        assert result["error"] == "internal error during search (see server log)"
+        assert "secret-storage" not in str(result)
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main(["-v", __file__]))

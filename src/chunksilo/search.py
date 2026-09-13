@@ -1585,6 +1585,8 @@ def run_search(
         return {
             "matched_files": [],
             "chunks": [],
-            "error": str(e),
+            # The exception text can name filesystem paths; the caller gets a
+            # generic message and the operator gets the detail in the log.
+            "error": "internal error during search (see server log)",
             "query": query,
         }
