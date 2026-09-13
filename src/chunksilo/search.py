@@ -16,6 +16,7 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from llama_index.core import Settings, StorageContext, load_index_from_storage
 from llama_index.core.schema import NodeWithScore, TextNode
@@ -130,22 +131,50 @@ def _get_configured_directories(config: dict[str, Any]) -> list[Path]:
     return _configured_directories_cache
 
 
+def _normalize_result_path(file_path: str, config: dict[str, Any]) -> str | None:
+    """The stored path of a result, normalised - without touching the disk.
+
+    This runs for every result of every query, so it must not hit the
+    filesystem. It used to call ``exists()`` and ``resolve()``, which on a
+    network mount (CIFS, or worse a GVFS/FUSE one) costs a stat plus a readlink
+    per path component - tens of round trips per result, serialized through one
+    userspace daemon, and the dominant cost of a query.
+
+    Resolving was also wrong: it rewrote a path the user recognises into the
+    mount's internal form (``/run/user/1000/gvfs/smb-share:server=...``), which
+    no application will open. The stored path is what the indexer walked, so it
+    is used verbatim.
+    """
+    raw = str(file_path)
+    if not raw:
+        return None
+
+    if os.path.isabs(raw):
+        absolute = raw
+    else:
+        # Relative paths only appear for metadata written by older index
+        # versions. Attribute them to the first configured directory rather
+        # than probing the filesystem for the one that happens to hold them.
+        directories = _get_configured_directories(config)
+        base = str(directories[0]) if directories else ""
+        absolute = os.path.join(base, raw) if base else raw
+
+    return os.path.normpath(absolute)
+
+
+def _file_uri(normalized: str) -> str:
+    # quote() must keep the separators; everything else (spaces, '#', '?',
+    # non-ASCII) has to be escaped or the URI silently truncates.
+    return "file://" + quote(normalized, safe="/")
+
+
 def _resolve_file_uri(file_path: str, config: dict[str, Any]) -> str | None:
-    """Resolve a file path to a file:// URI."""
+    """Build a ``file://`` URI for an indexed path, without touching the disk."""
     try:
-        file_path_obj = Path(str(file_path))
-
-        if file_path_obj.is_absolute():
-            if file_path_obj.exists():
-                return f"file://{file_path_obj.resolve()}"
-            return f"file://{file_path_obj}"
-
-        for data_dir in _get_configured_directories(config):
-            candidate = data_dir / file_path_obj
-            if candidate.exists():
-                return f"file://{candidate.resolve()}"
-
-        return f"file://{file_path_obj.resolve()}"
+        normalized = _normalize_result_path(file_path, config)
+        if normalized is None:
+            return None
+        return _file_uri(normalized)
     except Exception:
         logger.debug("Failed to resolve file URI for %r", file_path, exc_info=True)
         return None

@@ -14,6 +14,11 @@ from unittest.mock import patch
 
 import pytest
 
+from chunksilo import search
+from chunksilo.search import _resolve_file_uri
+
+_NO_DIRS = {"indexing": {"directories": []}}
+
 
 
 # =============================================================================
@@ -179,37 +184,77 @@ class TestBuildHeadingPath:
 # =============================================================================
 
 class TestURIBuilding:
-    """Tests for URI building logic in chunk processing"""
+    """Tests for the real URI builder used by the search pipeline.
+
+    These exercise chunksilo.search._resolve_file_uri directly rather than a
+    copy of its logic, because the contract that matters cannot be restated:
+    it must not touch the filesystem. Every query formats up to fifteen result
+    paths, and on a network mount a stat plus a readlink per path component was
+    the dominant cost of a search.
+    """
+
+    CONFIG = {"indexing": {"directories": ["/Users/test/data"]}}
+
+    @pytest.fixture(autouse=True)
+    def _fresh_directory_cache(self, monkeypatch):
+        # The configured-directory list is cached module-wide; a test must not
+        # inherit another test's config.
+        monkeypatch.setattr(search, "_configured_directories_cache", None)
 
     def test_absolute_file_path(self):
-        """Test file:// URI generation for absolute paths"""
-        file_path = Path("/Users/test/data/document.pdf")
-        expected_uri = f"file://{file_path.resolve()}"
-
-        # Simulate the URI building logic
-        file_path_obj = Path(str(file_path))
-        if file_path_obj.is_absolute():
-            source_uri = f"file://{file_path_obj.resolve()}"
-        else:
-            source_uri = None
-
-        assert source_uri == expected_uri
+        """An absolute path is used verbatim, not canonicalised."""
+        assert (
+            _resolve_file_uri("/Users/test/data/document.pdf", self.CONFIG)
+            == "file:///Users/test/data/document.pdf"
+        )
 
     def test_relative_file_path(self):
-        """Test file:// URI generation for relative paths"""
-        with patch.dict(os.environ, {"DATA_DIR": "/Users/test/data"}):
-            file_path = "docs/readme.md"
-            data_dir = Path(os.getenv("DATA_DIR", "./data"))
+        """A relative path is joined to the first configured directory."""
+        assert (
+            _resolve_file_uri("docs/readme.md", self.CONFIG)
+            == "file:///Users/test/data/docs/readme.md"
+        )
 
-            file_path_obj = Path(str(file_path))
-            if file_path_obj.is_absolute():
-                source_uri = f"file://{file_path_obj.resolve()}"
-            else:
-                resolved_path = (data_dir / file_path_obj).resolve()
-                source_uri = f"file://{resolved_path}"
+    def test_no_filesystem_access(self, monkeypatch):
+        """Nothing in URI building may stat, readlink or resolve."""
+        def explode(*_args, **_kwargs):
+            raise AssertionError("URI building must not touch the filesystem")
 
-            assert source_uri.startswith("file://")
-            assert "docs/readme.md" in source_uri or "readme.md" in source_uri
+        monkeypatch.setattr(os, "stat", explode)
+        monkeypatch.setattr(os, "lstat", explode)
+        monkeypatch.setattr(os.path, "realpath", explode)
+        monkeypatch.setattr(Path, "exists", explode)
+        monkeypatch.setattr(Path, "resolve", explode)
+
+        assert (
+            _resolve_file_uri("/mnt/docs/spec.pdf", self.CONFIG)
+            == "file:///mnt/docs/spec.pdf"
+        )
+
+    def test_spaces_and_reserved_characters_are_encoded(self):
+        """Real document paths are full of spaces; an unencoded URI is broken."""
+        uri = _resolve_file_uri(
+            "/srv/docs/Widget Project/10 - Design Notes/Rev A/a#b.docx",
+            self.CONFIG,
+        )
+        assert uri == (
+            "file:///srv/docs/Widget%20Project/10%20-%20Design%20Notes/"
+            "Rev%20A/a%23b.docx"
+        )
+
+    def test_mount_internal_path_is_not_substituted(self):
+        """A symlinked mount must keep the name the user knows it by.
+
+        resolve() used to rewrite ~/nas/... into
+        /run/user/1000/gvfs/smb-share:server=..., which no application opens.
+        """
+        assert (
+            _resolve_file_uri("/home/alice/nas/Projects/spec.docx", self.CONFIG)
+            == "file:///home/alice/nas/Projects/spec.docx"
+        )
+
+    def test_empty_path(self):
+        assert _resolve_file_uri("", self.CONFIG) is None
 
     def test_confluence_uri_with_page_id(self):
         """Test Confluence URL generation with page_id"""
@@ -300,8 +345,7 @@ class TestLocationIntegration:
         headings = metadata.get("document_headings", [])
 
         # Build URI
-        file_path_obj = Path(str(file_path))
-        source_uri = f"file://{file_path_obj.resolve()}"
+        source_uri = _resolve_file_uri(str(file_path), _NO_DIRS)
 
         # Get page
         page = metadata.get("page_label") or metadata.get("page_number") or metadata.get("page")
@@ -341,8 +385,7 @@ class TestLocationIntegration:
         line_offsets = metadata.get("line_offsets")
 
         # Build URI
-        file_path_obj = Path(str(file_path))
-        source_uri = f"file://{file_path_obj.resolve()}"
+        source_uri = _resolve_file_uri(str(file_path), _NO_DIRS)
 
         # Get page (None for markdown)
         page = None
