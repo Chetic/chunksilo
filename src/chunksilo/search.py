@@ -169,7 +169,11 @@ def _normalize_result_path(file_path: str, config: dict[str, Any]) -> str | None
         # than probing the filesystem for the one that happens to hold them.
         directories = _get_configured_directories(config)
         base = str(directories[0]) if directories else ""
-        absolute = os.path.join(base, raw) if base else raw
+        joined = os.path.join(base, raw) if base else raw
+        # A relative configured directory ("./data") would otherwise leave the
+        # result relative, and file://data/... reads "data" as a host. abspath
+        # is string arithmetic against the CWD: no stat, no readlink.
+        absolute = os.path.abspath(joined)
 
     return os.path.normpath(absolute)
 

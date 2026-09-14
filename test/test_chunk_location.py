@@ -215,6 +215,16 @@ class TestURIBuilding:
             == "file:///Users/test/data/docs/readme.md"
         )
 
+    def test_relative_path_under_relative_directory(self, monkeypatch):
+        """With a relative configured directory the result must still be
+        absolute: file://data/x.pdf would read "data" as a host."""
+        monkeypatch.setattr(os, "getcwd", lambda: "/srv/chunksilo")
+        config = {"indexing": {"directories": ["./data"]}}
+        assert (
+            _resolve_file_uri("docs/readme.md", config)
+            == "file:///srv/chunksilo/data/docs/readme.md"
+        )
+
     def test_no_filesystem_access(self, monkeypatch):
         """Nothing in URI building may stat, readlink or resolve."""
         def explode(*_args, **_kwargs):
