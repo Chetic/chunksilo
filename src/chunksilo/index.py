@@ -306,7 +306,7 @@ class FileCandidate:
 class ScanEvent:
     """A file or directory the scan saw but will not index. Diagnostic only."""
 
-    kind: str  # "excluded_file" | "pruned_dir" | "unreadable_file"
+    kind: str  # "excluded_file" | "pruned_dir" | "unreadable_file" | "unreadable_dir"
     path: str  # absolute
     pattern: str | None = None  # deciding pattern, when one exists
 
@@ -326,6 +326,10 @@ class ScanStatus:
     complete: bool = True
     reason: str = ""
     unreadable: set[str] = field(default_factory=set)
+    # Subdirectories os.walk could not list -> reason. The walk carries on
+    # past them, so the scan as a whole is still complete; only what lies
+    # under these is withheld from deletion.
+    unreadable_dirs: dict[str, str] = field(default_factory=dict)
 
     def fail(self, reason: str) -> None:
         self.complete = False
@@ -467,6 +471,11 @@ class DataSource(ABC):
         ctx: "FileProcessingContext | None" = None
     ) -> list[LlamaIndexDocument]:
         """Load and return documents for a given file.
+
+        An empty list means the file was read and holds no text. A file that
+        could not be read or converted must raise (FileLoadError,
+        FileProcessingTimeoutError, OSError, ...) rather than return [] - the
+        caller then records no state for it and retries it next run.
 
         Args:
             file_info: File information
@@ -643,6 +652,14 @@ def _extract_pdf_headings_from_outline(
 _SCAN_TIMEOUT_SENTINEL = object()
 
 
+class FileLoadError(Exception):
+    """A file could not be read or converted.
+
+    Distinct from a file that loads cleanly and holds no text: a load that
+    raises gets no state row, so the next run tries the file again.
+    """
+
+
 def _run_with_timeout(fn, timeout_seconds: float, default=_SCAN_TIMEOUT_SENTINEL):
     """Run *fn* in a background thread, returning *default* on timeout.
 
@@ -797,14 +814,31 @@ class LocalFileSystemSource(DataSource):
 
         on_event, when given, receives a ScanEvent per pruned directory. It
         may be invoked from the walker thread.
+
+        A directory os.walk cannot list is recorded on
+        scan_status.unreadable_dirs - os.walk itself would skip it silently
+        and finish as if the tree were complete - or fails the scan when it
+        is the root itself.
         """
         timeout = cfgload.get("indexing.scan_item_seconds")
         q: queue.Queue = queue.Queue()
         _sentinel = None  # signals end of iteration
 
+        base_abs = str(self.base_dir.absolute())
+
+        def _on_error(exc: OSError) -> None:
+            failed = str(Path(exc.filename).absolute()) if exc.filename else base_abs
+            logger.warning(f"Could not list directory {failed}: {exc}")
+            if failed == base_abs:
+                self.scan_status.fail(f"could not be listed: {exc}")
+            else:
+                self.scan_status.unreadable_dirs[failed] = f"could not be listed: {exc}"
+            if on_event is not None:
+                on_event(ScanEvent("unreadable_dir", failed))
+
         def _producer():
             try:
-                for root, dirs, files in os.walk(self.base_dir):
+                for root, dirs, files in os.walk(self.base_dir, onerror=_on_error):
                     kept_dirs = []
                     for d in dirs:
                         skip_pattern = self._directory_skip_pattern(d)
@@ -1020,9 +1054,11 @@ class LocalFileSystemSource(DataSource):
         )
 
     def unscanned_roots(self) -> dict[str, str]:
-        if self.scan_status.complete:
-            return {}
-        return {str(self.base_dir.absolute()): self.scan_status.reason}
+        roots: dict[str, str] = {}
+        if not self.scan_status.complete:
+            roots[str(self.base_dir.absolute())] = self.scan_status.reason
+        roots.update(self.scan_status.unreadable_dirs)
+        return roots
 
     def unreadable_paths(self) -> set[str]:
         return set(self.scan_status.unreadable)
@@ -1035,12 +1071,14 @@ class LocalFileSystemSource(DataSource):
         file_path = Path(file_info.path)
         exists_timeout = cfgload.get("indexing.scan_item_seconds")
         exists_result = _run_with_timeout(
-            file_path.exists, timeout_seconds=exists_timeout, default=False,
+            file_path.exists, timeout_seconds=exists_timeout,
         )
+        if exists_result is _SCAN_TIMEOUT_SENTINEL:
+            raise FileProcessingTimeoutError(
+                f"existence check timed out after {exists_timeout}s"
+            )
         if not exists_result:
-            if exists_result is False:
-                logger.warning(f"Skipping disappeared file: {file_path}")
-            return []
+            raise FileLoadError("file disappeared before it could be read")
         if file_path.suffix.lower() == ".docx":
             if ctx:
                 ctx.set_phase("Parsing DOCX")
@@ -1057,10 +1095,9 @@ class LocalFileSystemSource(DataSource):
                     default=None,
                 )
                 if result is None:
-                    logger.warning(
-                        f"DOCX processing timed out after {remaining:.0f}s: {file_path}"
+                    raise FileProcessingTimeoutError(
+                        f"DOCX processing timed out after {remaining:.0f}s"
                     )
-                    return []
                 return result
             return split_docx_into_heading_documents(
                         file_path, ctx,
@@ -1078,8 +1115,7 @@ class LocalFileSystemSource(DataSource):
             )
 
             if docx_path is None:
-                logger.warning(f"Skipping {file_path}: could not convert .doc to .docx")
-                return []
+                raise FileLoadError("could not convert .doc to .docx")
             try:
                 if ctx:
                     ctx.set_phase("Parsing converted DOCX")
@@ -1097,10 +1133,10 @@ class LocalFileSystemSource(DataSource):
                         default=None,
                     )
                     if result is None:
-                        logger.warning(
-                            f"DOCX processing timed out after {remaining:.0f}s: {docx_path}"
+                        raise FileProcessingTimeoutError(
+                            f"DOCX processing timed out after {remaining:.0f}s"
                         )
-                    docs = result if result is not None else []
+                    docs = result
                 else:
                     docs = split_docx_into_heading_documents(
                         docx_path, ctx,
@@ -1132,10 +1168,10 @@ class LocalFileSystemSource(DataSource):
                     default=None,
                 )
                 if result is None:
-                    logger.warning(
+                    raise FileProcessingTimeoutError(
                         f"load_data() timed out after {remaining:.0f}s"
                     )
-                docs = result if result is not None else []
+                docs = result
             else:
                 docs = reader.load_data()
             # Ensure dates are visible to LLM (remove from exclusion list)
@@ -1244,13 +1280,13 @@ class MultiDirectoryDataSource(DataSource):
         """Directory roots that were not fully enumerated, mapped to the reason.
 
         A root lands here when it was unavailable at startup or when its walk
-        stalled or could not be listed. Callers must not prune tracked files
-        under these roots.
+        stalled or could not be listed; a subdirectory lands here when the walk
+        could not list it. Callers must not prune tracked files under any of
+        them.
         """
         roots = dict(self._unavailable_reasons)
         for source in self.sources:
-            if not source.scan_status.complete:
-                roots[str(source.base_dir.absolute())] = source.scan_status.reason
+            roots.update(source.unscanned_roots())
         return roots
 
     def unreadable_paths(self) -> set[str]:

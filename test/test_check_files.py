@@ -196,6 +196,26 @@ class TestScanEvents:
         assert [e.kind for e in events] == ["unreadable_file"]
         assert events[0].path == str((tmp_path / "a.pdf").absolute())
 
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root can list a directory without read permission")
+    def test_unreadable_dir_event(self, tmp_path):
+        sub = tmp_path / "locked"
+        sub.mkdir()
+        (sub / "a.pdf").write_text("x")
+        source = _make_source(tmp_path, include=["**/*.pdf"], exclude=[])
+        events = []
+        sub.chmod(0)
+        try:
+            candidates = list(source.iter_candidates(on_event=events.append))
+        finally:
+            sub.chmod(0o755)
+        assert candidates == []
+        assert [e.kind for e in events] == ["unreadable_dir"]
+        assert events[0].path == str(sub.absolute())
+        # The rest of the tree was walked: the scan is complete, only this
+        # subtree is withheld from deletion.
+        assert source.scan_status.complete
+        assert list(source.unscanned_roots()) == [str(sub.absolute())]
+
     def test_non_recursive_events(self, tmp_path):
         (tmp_path / "a.pdf").write_text("x")
         (tmp_path / "b.xlsx").write_text("x")

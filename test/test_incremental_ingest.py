@@ -326,3 +326,74 @@ def test_reprocess_reason_is_logged(test_env):
         build_index()
     assert "Reprocessing" in log.text
     assert "content changed" in log.text
+
+
+def test_doc_conversion_failure_is_retried(test_env):
+    """A .doc that could not be converted gets no state row, so it is tried
+    again next run (for instance once LibreOffice is installed). Persisting it
+    as a file that holds no text would silence it for ever."""
+    data_dir, _storage_dir, db_path = test_env
+    create_file(data_dir, "legacy.doc", "not really a doc")
+
+    with patch("chunksilo.index._convert_doc_to_docx", return_value=None), \
+         capture_index_log() as log:
+        build_index()
+    assert str((data_dir / "legacy.doc").absolute()) not in _tracked(db_path)
+    assert "could not convert" in log.text
+
+    with patch("chunksilo.index._convert_doc_to_docx", return_value=None) as convert:
+        build_index()
+    assert convert.called, "the failed .doc must be attempted again"
+
+
+def test_timed_out_load_is_retried(test_env):
+    """A file whose reader timed out gets no state row, so it is retried."""
+    data_dir, _storage_dir, db_path = test_env
+    create_file(data_dir, "slow.txt", "some text")
+    real_run = index._run_with_timeout
+
+    def timing_out(fn, timeout_seconds, default=index._SCAN_TIMEOUT_SENTINEL):
+        if getattr(fn, "__name__", "") == "load_data":
+            return default  # exactly what a timeout returns
+        return real_run(fn, timeout_seconds, default)
+
+    with patch.object(index, "_run_with_timeout", timing_out), capture_index_log() as log:
+        build_index()
+    assert str((data_dir / "slow.txt").absolute()) not in _tracked(db_path)
+    assert "timed out" in log.text
+
+    with capture_index_log() as log:
+        build_index()
+    assert "Indexing new file" in log.text
+    assert str((data_dir / "slow.txt").absolute()) in _tracked(db_path)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can list a directory without read permission")
+def test_unlistable_subdirectory_does_not_delete_its_files(test_env):
+    """A subdirectory the walk cannot list must not have its files pruned.
+
+    os.walk skips a directory it cannot open and carries on, so without an
+    error callback the walk ends "cleanly" and everything indexed under that
+    directory looks deleted - and is re-indexed once it is readable again.
+    """
+    data_dir, _storage_dir, db_path = test_env
+    sub = data_dir / "sub"
+    sub.mkdir()
+    create_file(data_dir, "doc1.txt", "This is document 1.")
+    create_file(sub, "doc2.txt", "This is document 2.")
+    build_index()
+    assert len(_tracked(db_path)) == 2
+
+    sub.chmod(0)
+    try:
+        with capture_index_log() as log:
+            build_index()
+    finally:
+        sub.chmod(0o755)
+    assert len(_tracked(db_path)) == 2, "the directory was unlistable, not emptied"
+    assert "did not see" in log.text
+
+    with capture_index_log() as log:
+        build_index()
+    assert len(_tracked(db_path)) == 2
+    assert "Indexing new file" not in log.text

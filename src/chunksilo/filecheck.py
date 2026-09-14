@@ -64,6 +64,7 @@ class DirectoryReport:
     scan_complete: bool = True
     scan_incomplete_reason: str | None = None
     pruned_dirs: list[PrunedDir] = field(default_factory=list)
+    unreadable_dirs: list[str] = field(default_factory=list)  # absolute
     files: list[FileVerdict] = field(default_factory=list)
     counts: dict[str, int] = field(default_factory=dict)
 
@@ -170,6 +171,8 @@ def run_check(config: dict[str, Any], target: str | None = None) -> CheckReport:
                     reason="could not stat (error or timeout); "
                            "would be skipped and its deletion withheld",
                 ))
+            elif event.kind == "unreadable_dir":
+                dir_report.unreadable_dirs.append(event.path)
 
     # Revision partitioning across ALL sources at once, exactly like
     # build_index - doc-ID groups can span directories.
@@ -230,13 +233,16 @@ def run_check(config: dict[str, Any], target: str | None = None) -> CheckReport:
     for dir_report in report.directories:
         dir_report.files.sort(key=lambda v: v.path)
         dir_report.pruned_dirs.sort(key=lambda p: p.path)
+        dir_report.unreadable_dirs.sort()
         dir_report.counts = {status: 0 for status in STATUSES}
         for verdict in dir_report.files:
             dir_report.counts[verdict.status] += 1
         dir_report.counts["pruned_dirs"] = len(dir_report.pruned_dirs)
+        dir_report.counts["unreadable_dirs"] = len(dir_report.unreadable_dirs)
 
     report.totals = {status: 0 for status in STATUSES}
     report.totals["pruned_dirs"] = 0
+    report.totals["unreadable_dirs"] = 0
     for dir_report in report.directories:
         for key, count in dir_report.counts.items():
             report.totals[key] += count
@@ -278,6 +284,14 @@ def _resolve_target(target, report, data_source):
                     reason=f"ancestor directory {pruned.path} pruned "
                            f"by pattern {pruned.pattern!r}",
                     pattern=pruned.pattern,
+                )
+        for unreadable_dir in dir_report.unreadable_dirs:
+            if _under(path, unreadable_dir):
+                return FileVerdict(
+                    path=path,
+                    status="unreadable",
+                    reason=f"ancestor directory {unreadable_dir} could not be "
+                           "listed; files under it are kept, not re-indexed",
                 )
 
     for dir_report in report.directories:
@@ -386,6 +400,10 @@ def render_text(report: CheckReport, out: TextIO | None = None) -> None:
                   file=out)
         for pruned in dir_report.pruned_dirs:
             print(f"  pruned dir    {pruned.path}  [by {pruned.pattern!r}]", file=out)
+        for unreadable_dir in dir_report.unreadable_dirs:
+            print(f"  WARNING: could not list {unreadable_dir}; files under it are "
+                  "missing from this report and their deletion is withheld",
+                  file=out)
         for verdict in dir_report.files:
             label = _STATUS_LABELS[verdict.status].ljust(13)
             suffix = ""
@@ -435,6 +453,7 @@ def _summary_line(totals: dict[str, int]) -> str:
         "unreadable": "unreadable",
         "duplicate": "duplicates",
         "pruned_dirs": "directories pruned",
+        "unreadable_dirs": "directories unlistable",
     }
     for key, name in names.items():
         if totals.get(key):
