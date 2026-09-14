@@ -27,6 +27,7 @@ cp -r src "$COMMON_ROOT/"
 cp pyproject.toml "$COMMON_ROOT/"
 cp requirements.txt "$COMMON_ROOT/"
 cp README.md "$COMMON_ROOT/"
+cp -r docs "$COMMON_ROOT/"
 cp LICENSE "$COMMON_ROOT/"
 cp NOTICE "$COMMON_ROOT/"
 cp config.yaml "$COMMON_ROOT/"
@@ -34,8 +35,31 @@ cp setup.sh "$COMMON_ROOT/"
 
 echo "$VERSION" > "$COMMON_ROOT/VERSION"
 
-# Download the embedding + rerank models once (they're the same for all platforms)
-PYTHONPATH=src python3.11 -m chunksilo.index --download-models --model-cache-dir "$COMMON_ROOT/models"
+# Stamp the release version into the COPIED sources. The checkout still carries
+# the previous release's number here, because the version bump on main only
+# happens after a release completes - so without this the bundle would install
+# as the previous version even though the tarball and VERSION file say otherwise.
+# Done on the copies (not the checkout) so the script is safe to run by hand.
+sed -i.bak "s/^version = .*/version = \"$VERSION\"/" "$COMMON_ROOT/pyproject.toml"
+sed -i.bak "s/^__version__ = .*/__version__ = \"$VERSION\"/" "$COMMON_ROOT/src/chunksilo/__init__.py"
+rm -f "$COMMON_ROOT/pyproject.toml.bak" "$COMMON_ROOT/src/chunksilo/__init__.py.bak"
+
+# Fail loudly rather than ship a bundle whose metadata disagrees with its name.
+STAMPED_PROJECT=$(grep -m1 '^version = ' "$COMMON_ROOT/pyproject.toml" | cut -d'"' -f2)
+STAMPED_INIT=$(grep -m1 '^__version__ = ' "$COMMON_ROOT/src/chunksilo/__init__.py" | cut -d'"' -f2)
+if [ "$STAMPED_PROJECT" != "$VERSION" ] || [ "$STAMPED_INIT" != "$VERSION" ]; then
+  echo "Error: version stamping failed (pyproject=$STAMPED_PROJECT, __init__=$STAMPED_INIT, expected $VERSION)" >&2
+  exit 1
+fi
+echo "Stamped version $VERSION into pyproject.toml and __init__.py"
+
+# Download the embedding + rerank models once (they're the same for all
+# platforms). The cache location comes from a throwaway config: the CLI has no
+# cache-dir flag, and the config given here becomes the active one.
+DL_CONFIG=$(mktemp)
+printf 'storage:\n  model_cache_dir: "%s"\n' "$COMMON_ROOT/models" > "$DL_CONFIG"
+PYTHONPATH=src python3.11 -m chunksilo --download-models --config "$DL_CONFIG"
+rm -f "$DL_CONFIG"
 
 # Write model license information
 cat > "$COMMON_ROOT/models/MODEL-LICENSES.txt" << 'MODLICEOF'

@@ -17,6 +17,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from chunksilo.ui import FileProcessingTimeoutError
+
 from chunksilo.index import (
     _run_with_timeout,
     _SCAN_TIMEOUT_SENTINEL,
@@ -339,9 +341,9 @@ class TestMultiDirectorySourceTimeout:
 
 class TestLoadFileExistsTimeout:
     @patch("chunksilo.index.cfgload")
-    def test_exists_hang_skips_file(self, mock_cfg, tmp_path):
-        """When Path.exists blocks on a file, load_file returns [] rather
-        than hanging."""
+    def test_exists_hang_fails_file(self, mock_cfg, tmp_path):
+        """When Path.exists blocks on a file, load_file raises a timeout - so
+        the file gets no state row and is retried - rather than hanging."""
         mock_cfg.get.return_value = 2  # 2s timeout
 
         f = tmp_path / "test.txt"
@@ -362,8 +364,8 @@ class TestLoadFileExistsTimeout:
 
         with patch.object(Path, "exists", _blocking_exists):
             start = time.monotonic()
-            result = source.load_file(fi)
+            with pytest.raises(FileProcessingTimeoutError):
+                source.load_file(fi)
             elapsed = time.monotonic() - start
 
-        assert result == []
         assert elapsed < 10, f"load_file() took {elapsed:.1f}s, expected < 10s"

@@ -4,7 +4,6 @@
 Indexing pipeline for building a RAG index from PDF, DOCX, DOC, Markdown, and TXT documents.
 Supports incremental indexing using a local SQLite database to track file states.
 """
-import argparse
 import hashlib
 import itertools
 import json
@@ -15,7 +14,7 @@ import sqlite3
 import threading
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,9 +35,9 @@ from llama_index.core.schema import MetadataMode
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
 # Load configuration from config.yaml
-from . import cfgload
-from .cfgload import load_config
-from .docx_utils import _convert_doc_to_docx, split_docx_into_heading_documents
+from . import cfgload, revisions
+from .cfgload import DEFAULT_EXCLUDE_PATTERNS, DEFAULT_INCLUDE_PATTERNS, load_config
+from .docx_utils import _convert_doc_to_docx, cleanup_conversion_dir, split_docx_into_heading_documents
 from .models import _get_cached_model_path, configure_offline_mode, resolve_flashrank_model_name
 from .ui import FileProcessingContext, FileProcessingTimeoutError, GracefulAbort, IndexingUI
 
@@ -75,6 +74,9 @@ EXCLUDED_EMBED_METADATA_KEYS = [
     "last_modified_date",# temporal, not semantic
     "doc_ids",           # internal tracking
     "hash",              # internal tracking
+    "doc_group",         # revision-group key, not semantic
+    "doc_id",            # document ID, not semantic
+    "superseded",        # revision status, not semantic
 ]
 
 # These keys are excluded from the LLM context to save context window
@@ -84,28 +86,20 @@ EXCLUDED_LLM_METADATA_KEYS = [
     "doc_ids",           # internal tracking
     "file_path",         # usually redundant if file_name is present
     "source",            # usually redundant
+    "doc_group",         # revision-group key, not for the LLM
+    "doc_id",            # document ID, surfaced via result formatting instead
+    "superseded",        # revision status, not for the LLM
 ]
 
 logger = logging.getLogger(__name__)
 
 
-# Default file type patterns
-DEFAULT_INCLUDE_PATTERNS = ["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx", "**/*.doc"]
-
-# Default directory/file exclusion patterns — skip common noise directories
-DEFAULT_EXCLUDE_PATTERNS = [
-    "**/.git/**",
-    "**/node_modules/**",
-    "**/__pycache__/**",
-    "**/.venv/**",
-    "**/venv/**",
-    "**/.tox/**",
-    "**/.mypy_cache/**",
-    "**/.pytest_cache/**",
-    "**/.eggs/**",
-    "**/*.egg-info/**",
-    "**/.DS_Store",
-]
+# Internal tuning that used to be configuration. The adaptive batch sizer works
+# against this memory budget, the heartbeat drives the per-file progress
+# animation, and .doc conversion gets its own LibreOffice budget.
+_MAX_MEMORY_MB = 2048
+_HEARTBEAT_INTERVAL_SECONDS = 2.0
+_DOC_CONVERSION_TIMEOUT_SECONDS = 90.0
 
 
 @dataclass
@@ -292,6 +286,57 @@ class FileInfo:
     source_dir: str = ""  # Tracks which configured directory this file came from
 
 
+@dataclass
+class FileCandidate:
+    """A discovered file before hashing.
+
+    Revision grouping needs every file's mtime before it can decide which
+    files to index at all, and hashing is far too expensive to spend on
+    files that grouping will then discard - they have no state row, so no
+    mtime fast path saves them.
+    Hence the scan runs in two phases: stat-only candidates first, full
+    FileInfo only for the keepers.
+    """
+    path: str
+    mtime: float
+    source_dir: str = ""
+
+
+@dataclass
+class ScanEvent:
+    """A file or directory the scan saw but will not index. Diagnostic only."""
+
+    kind: str  # "excluded_file" | "pruned_dir" | "unreadable_file" | "unreadable_dir"
+    path: str  # absolute
+    pattern: str | None = None  # deciding pattern, when one exists
+
+
+@dataclass
+class ScanStatus:
+    """Health of one directory scan.
+
+    A file missing from a scan means one of two very different things: it was
+    deleted, or the scan could not look. Pruning on the second is destructive -
+    the file's chunks are dropped from the index and its state row removed, so
+    the next run re-indexes it from scratch, and a laggy network mount turns
+    that into a permanent re-index loop. Deletions are therefore withheld
+    whenever a scan was not clean.
+    """
+
+    complete: bool = True
+    reason: str = ""
+    unreadable: set[str] = field(default_factory=set)
+    # Subdirectories os.walk could not list -> reason. The walk carries on
+    # past them, so the scan as a whole is still complete; only what lies
+    # under these is withheld from deletion.
+    unreadable_dirs: dict[str, str] = field(default_factory=dict)
+
+    def fail(self, reason: str) -> None:
+        self.complete = False
+        if not self.reason:
+            self.reason = reason
+
+
 class IngestionState:
     """Manages the state of ingested files using a SQLite database."""
 
@@ -427,11 +472,37 @@ class DataSource(ABC):
     ) -> list[LlamaIndexDocument]:
         """Load and return documents for a given file.
 
+        An empty list means the file was read and holds no text. A file that
+        could not be read or converted must raise (FileLoadError,
+        FileProcessingTimeoutError, OSError, ...) rather than return [] - the
+        caller then records no state for it and retries it next run.
+
         Args:
             file_info: File information
             ctx: Optional processing context for progress updates and timeout
         """
         pass
+
+    def unscanned_roots(self) -> dict[str, str]:
+        """Directory roots not fully enumerated by the last scan -> reason."""
+        return {}
+
+    def unreadable_paths(self) -> set[str]:
+        """Paths the last scan could not stat or hash."""
+        return set()
+
+
+def _owning_root(path: str, roots: dict[str, str]) -> str | None:
+    """The root in ``roots`` that contains ``path``, or None.
+
+    Plain prefix matching on the absolute paths the state DB stores; a trailing
+    separator is required so ``/data`` does not claim ``/data-archive``.
+    """
+    for root in roots:
+        if path == root or path.startswith(root.rstrip(os.sep) + os.sep):
+            return root
+    return None
+
 
 
 def _compute_line_offsets(text: str) -> list[int]:
@@ -581,6 +652,14 @@ def _extract_pdf_headings_from_outline(
 _SCAN_TIMEOUT_SENTINEL = object()
 
 
+class FileLoadError(Exception):
+    """A file could not be read or converted.
+
+    Distinct from a file that loads cleanly and holds no text: a load that
+    raises gets no state row, so the next run tries the file again.
+    """
+
+
 def _run_with_timeout(fn, timeout_seconds: float, default=_SCAN_TIMEOUT_SENTINEL):
     """Run *fn* in a background thread, returning *default* on timeout.
 
@@ -608,13 +687,16 @@ class LocalFileSystemSource(DataSource):
     def __init__(self, config: DirectoryConfig):
         self.config = config
         self.base_dir = config.path
+        self.scan_status = ScanStatus()
 
     def is_available(self) -> bool:
         """Check if the directory is available and accessible.
 
         Runs with a timeout to avoid hanging on unresponsive network mounts.
+        A timeout is recorded on ``scan_status`` so callers can tell it apart
+        from a directory that is genuinely gone.
         """
-        timeout = cfgload.get("indexing.timeout.scan_item_seconds", 30)
+        timeout = cfgload.get("indexing.scan_item_seconds")
 
         def _check():
             try:
@@ -625,23 +707,38 @@ class LocalFileSystemSource(DataSource):
                 # Try to list directory to verify access (important for network mounts)
                 next(self.base_dir.iterdir(), None)
                 return True
-            except (OSError, PermissionError):
-                return False
+            except (OSError, PermissionError) as exc:
+                return exc
 
-        result = _run_with_timeout(_check, timeout_seconds=timeout, default=False)
-        if result is False and timeout > 0:
-            # Distinguish genuine "not a dir" from timeout — log only for timeout
-            # (the sentinel default=False means we can't distinguish here, but
-            # _run_with_timeout already logged nothing; let callers log.)
-            pass
-        return result
+        result = _run_with_timeout(_check, timeout_seconds=timeout)
+        if result is _SCAN_TIMEOUT_SENTINEL:
+            logger.warning(
+                "Availability check for %s timed out after %ss", self.base_dir, timeout
+            )
+            self.scan_status.fail(f"availability check timed out after {timeout}s")
+            return False
+        if isinstance(result, BaseException):
+            logger.warning("Cannot access %s: %s", self.base_dir, result)
+            self.scan_status.fail(f"not accessible: {result}")
+            return False
+        return bool(result)
 
     def _matches_patterns(self, file_path: Path) -> bool:
-        """Check if file matches include patterns and doesn't match exclude patterns.
+        """Check if file matches include patterns and doesn't match exclude patterns."""
+        return self._match_decision(file_path)[0]
+
+    def _match_decision(self, file_path: Path) -> tuple[bool, str | None]:
+        """Match verdict plus the pattern that decided it.
 
         Uses PurePosixPath.match() for glob pattern matching.
         For directory exclusion patterns like **/*venv*/**, checks each path component.
         When case_sensitive is False (default), matching is case-insensitive.
+
+        Returns:
+            (False, pattern) - excluded by that pattern (as written in config)
+            (True, pattern)  - matched that include pattern
+            (True, None)     - no include patterns configured, everything passes
+            (False, None)    - no include pattern matched
         """
         import fnmatch
         from pathlib import PurePosixPath
@@ -666,27 +763,33 @@ class LocalFileSystemSource(DataSource):
                 dir_pattern = pat[3:-3]  # Remove **/ prefix and /** suffix
                 for part in rel_path.parts[:-1]:  # Check all directory components (not filename)
                     if fnmatch.fnmatch(part.lower() if ci else part, dir_pattern):
-                        return False
+                        return False, pattern
             else:
                 # Standard pattern matching
                 if PurePosixPath(rel_str).match(pat) or name == pat:
-                    return False
+                    return False, pattern
 
         # Check include patterns
         if not self.config.include:
-            return True
+            return True, None
 
         for pattern in self.config.include:
             pat = pattern.lower() if ci else pattern
             if PurePosixPath(rel_str).match(pat) or PurePosixPath(abs_str).match(pat):
-                return True
+                return True, pattern
 
-        return False
+        return False, None
 
     def _should_skip_directory(self, dir_name: str) -> bool:
-        """Check if a directory should be pruned from os.walk traversal.
+        """Check if a directory should be pruned from os.walk traversal."""
+        return self._directory_skip_pattern(dir_name) is not None
 
-        Handles patterns of the form **/<pattern>/** by checking the directory name.
+    def _directory_skip_pattern(self, dir_name: str) -> str | None:
+        """The exclude pattern that prunes this directory from os.walk, or None.
+
+        Handles patterns of the form **/<pattern>/** by checking the directory
+        name. Unlike file matching, this has always been case-sensitive
+        regardless of the case_sensitive setting.
         """
         import fnmatch
 
@@ -694,24 +797,62 @@ class LocalFileSystemSource(DataSource):
             if pattern.startswith('**/') and pattern.endswith('/**'):
                 dir_pattern = pattern[3:-3]  # e.g., "node_modules", ".git", "*venv*"
                 if fnmatch.fnmatch(dir_name, dir_pattern):
-                    return True
-        return False
+                    return pattern
+        return None
 
-    def _walk_with_timeout(self):
+    def _walk_with_timeout(
+        self, on_event: Callable[["ScanEvent"], None] | None = None
+    ):
         """Yield (root, dirs, files) tuples from os.walk with per-iteration timeout.
 
         Runs os.walk in a daemon thread, feeding results through a queue.
+        Excluded directories are pruned inside the walker thread, before
+        os.walk descends - pruning from the consumer side would race the
+        producer, which walks ahead of consumption.
         If no result arrives within scan_item_seconds, the walk is considered
         stalled and iteration stops.
+
+        on_event, when given, receives a ScanEvent per pruned directory. It
+        may be invoked from the walker thread.
+
+        A directory os.walk cannot list is recorded on
+        scan_status.unreadable_dirs - os.walk itself would skip it silently
+        and finish as if the tree were complete - or fails the scan when it
+        is the root itself.
         """
-        timeout = cfgload.get("indexing.timeout.scan_item_seconds", 30)
+        timeout = cfgload.get("indexing.scan_item_seconds")
         q: queue.Queue = queue.Queue()
         _sentinel = None  # signals end of iteration
 
+        base_abs = str(self.base_dir.absolute())
+
+        def _on_error(exc: OSError) -> None:
+            failed = str(Path(exc.filename).absolute()) if exc.filename else base_abs
+            logger.warning(f"Could not list directory {failed}: {exc}")
+            if failed == base_abs:
+                self.scan_status.fail(f"could not be listed: {exc}")
+            else:
+                self.scan_status.unreadable_dirs[failed] = f"could not be listed: {exc}"
+            if on_event is not None:
+                on_event(ScanEvent("unreadable_dir", failed))
+
         def _producer():
             try:
-                for entry in os.walk(self.base_dir):
-                    q.put(entry)
+                for root, dirs, files in os.walk(self.base_dir, onerror=_on_error):
+                    kept_dirs = []
+                    for d in dirs:
+                        skip_pattern = self._directory_skip_pattern(d)
+                        if skip_pattern is None:
+                            kept_dirs.append(d)
+                        elif on_event is not None:
+                            on_event(ScanEvent(
+                                "pruned_dir",
+                                str((Path(root) / d).absolute()),
+                                skip_pattern,
+                            ))
+                    # Prune in-place to prevent descent
+                    dirs[:] = kept_dirs
+                    q.put((root, dirs, files))
                 q.put(_sentinel)
             except Exception as exc:
                 q.put(exc)
@@ -727,6 +868,9 @@ class LocalFileSystemSource(DataSource):
                     f"os.walk() stalled for {timeout}s on {self.base_dir}, "
                     "aborting directory scan"
                 )
+                # The rest of the tree was never visited: anything already
+                # indexed under it must not be mistaken for deleted.
+                self.scan_status.fail(f"directory walk stalled after {timeout}s")
                 return
             if item is _sentinel:
                 return
@@ -741,21 +885,45 @@ class LocalFileSystemSource(DataSource):
             tracked_files: Optional dict of previously tracked file states,
                 keyed by absolute path. Used for mtime-based fast pre-check.
         """
-        if self.config.recursive:
-            for root, dirs, files in self._walk_with_timeout():
-                # Prune excluded directories in-place to prevent descent
-                dirs[:] = [d for d in dirs if not self._should_skip_directory(d)]
+        for candidate in self.iter_candidates():
+            try:
+                yield self.file_info_for(candidate, tracked_files)
+            except (OSError, TimeoutError):
+                continue
 
+    def iter_candidates(
+        self, *, on_event: Callable[[ScanEvent], None] | None = None
+    ) -> Iterator[FileCandidate]:
+        """Yield a stat-only FileCandidate for each matching file.
+
+        Resets scan_status; file_info_for failures accumulate into the same
+        status afterwards, so together the two phases report one scan.
+
+        on_event, when given, receives a ScanEvent for every file or directory
+        the scan saw but skipped. Diagnostics only; the indexing path never
+        sets it.
+        """
+        self.scan_status = ScanStatus()
+
+        if self.config.recursive:
+            for root, dirs, files in self._walk_with_timeout(on_event=on_event):
                 root_path = Path(root)
                 for file in files:
                     file_path = root_path / file
-                    if not self._matches_patterns(file_path):
+                    matched, pattern = self._match_decision(file_path)
+                    if not matched:
+                        if on_event is not None:
+                            on_event(ScanEvent(
+                                "excluded_file", str(file_path.absolute()), pattern
+                            ))
                         continue
-                    try:
-                        yield self._create_file_info(file_path, tracked_files)
-                    except (OSError, TimeoutError) as e:
-                        logger.warning(f"Could not access file {file_path}: {e}")
-                        continue
+                    candidate = self._stat_candidate(file_path)
+                    if candidate is not None:
+                        yield candidate
+                    elif on_event is not None:
+                        on_event(ScanEvent(
+                            "unreadable_file", str(file_path.absolute())
+                        ))
         else:
             # Non-recursive: only top-level files
             try:
@@ -764,16 +932,63 @@ class LocalFileSystemSource(DataSource):
                 ]
             except OSError as e:
                 logger.warning(f"Could not list directory {self.base_dir}: {e}")
+                self.scan_status.fail(f"could not be listed: {e}")
                 return
 
             for f in top_files:
-                if not self._matches_patterns(f):
+                matched, pattern = self._match_decision(f)
+                if not matched:
+                    if on_event is not None:
+                        on_event(ScanEvent(
+                            "excluded_file", str(f.absolute()), pattern
+                        ))
                     continue
-                try:
-                    yield self._create_file_info(f, tracked_files)
-                except (OSError, TimeoutError) as e:
-                    logger.warning(f"Could not access file {f}: {e}")
-                    continue
+                candidate = self._stat_candidate(f)
+                if candidate is not None:
+                    yield candidate
+                elif on_event is not None:
+                    on_event(ScanEvent("unreadable_file", str(f.absolute())))
+
+    def _stat_candidate(self, file_path: Path) -> FileCandidate | None:
+        """Stat a file with timeout protection; None marks it unreadable."""
+        timeout = cfgload.get("indexing.scan_item_seconds")
+        try:
+            mtime = _run_with_timeout(
+                lambda: file_path.stat().st_mtime, timeout_seconds=timeout
+            )
+        except OSError as e:
+            logger.warning(f"Could not access file {file_path}: {e}")
+            self.scan_status.unreadable.add(str(file_path.absolute()))
+            return None
+        if mtime is _SCAN_TIMEOUT_SENTINEL:
+            logger.warning(
+                f"Timed out after {timeout}s accessing file {file_path}, skipping"
+            )
+            self.scan_status.unreadable.add(str(file_path.absolute()))
+            return None
+        return FileCandidate(
+            path=str(file_path.absolute()),
+            mtime=mtime,
+            source_dir=str(self.base_dir.absolute()),
+        )
+
+    def file_info_for(
+        self,
+        candidate: FileCandidate,
+        tracked_files: dict[str, dict] | None = None,
+    ) -> FileInfo:
+        """Full FileInfo (with content hash) for a candidate.
+
+        Records the file as unreadable and re-raises on failure, so a file
+        that vanishes or stalls between the two scan phases is withheld from
+        deletion exactly as if the walk had not seen it.
+        """
+        try:
+            return self._create_file_info(Path(candidate.path), tracked_files)
+        except (OSError, TimeoutError) as e:
+            logger.warning(f"Could not access file {candidate.path}: {e}")
+            self.scan_status.unreadable.add(candidate.path)
+            raise
 
     def _create_file_info(
         self,
@@ -787,7 +1002,7 @@ class LocalFileSystemSource(DataSource):
 
         Raises TimeoutError if the operation exceeds scan_item_seconds.
         """
-        timeout = cfgload.get("indexing.timeout.scan_item_seconds", 30)
+        timeout = cfgload.get("indexing.scan_item_seconds")
         result = _run_with_timeout(
             lambda: self._create_file_info_inner(file_path, tracked_files),
             timeout_seconds=timeout,
@@ -838,20 +1053,32 @@ class LocalFileSystemSource(DataSource):
             source_dir=str(self.base_dir.absolute()),
         )
 
+    def unscanned_roots(self) -> dict[str, str]:
+        roots: dict[str, str] = {}
+        if not self.scan_status.complete:
+            roots[str(self.base_dir.absolute())] = self.scan_status.reason
+        roots.update(self.scan_status.unreadable_dirs)
+        return roots
+
+    def unreadable_paths(self) -> set[str]:
+        return set(self.scan_status.unreadable)
+
     def load_file(
         self,
         file_info: FileInfo,
         ctx: "FileProcessingContext | None" = None
     ) -> list[LlamaIndexDocument]:
         file_path = Path(file_info.path)
-        exists_timeout = cfgload.get("indexing.timeout.scan_item_seconds", 30)
+        exists_timeout = cfgload.get("indexing.scan_item_seconds")
         exists_result = _run_with_timeout(
-            file_path.exists, timeout_seconds=exists_timeout, default=False,
+            file_path.exists, timeout_seconds=exists_timeout,
         )
+        if exists_result is _SCAN_TIMEOUT_SENTINEL:
+            raise FileProcessingTimeoutError(
+                f"existence check timed out after {exists_timeout}s"
+            )
         if not exists_result:
-            if exists_result is False:
-                logger.warning(f"Skipping disappeared file: {file_path}")
-            return []
+            raise FileLoadError("file disappeared before it could be read")
         if file_path.suffix.lower() == ".docx":
             if ctx:
                 ctx.set_phase("Parsing DOCX")
@@ -868,10 +1095,9 @@ class LocalFileSystemSource(DataSource):
                     default=None,
                 )
                 if result is None:
-                    logger.warning(
-                        f"DOCX processing timed out after {remaining:.0f}s: {file_path}"
+                    raise FileProcessingTimeoutError(
+                        f"DOCX processing timed out after {remaining:.0f}s"
                     )
-                    return []
                 return result
             return split_docx_into_heading_documents(
                         file_path, ctx,
@@ -884,13 +1110,12 @@ class LocalFileSystemSource(DataSource):
             if ctx:
                 ctx.set_phase("Converting .doc to .docx")
 
-            # Use specialized timeout for .doc conversion
-            doc_timeout = cfgload.get("indexing.timeout.doc_conversion_seconds", 90)
-            docx_path = _convert_doc_to_docx(file_path, timeout=doc_timeout)
+            docx_path = _convert_doc_to_docx(
+                file_path, timeout=_DOC_CONVERSION_TIMEOUT_SECONDS
+            )
 
             if docx_path is None:
-                logger.warning(f"Skipping {file_path}: could not convert .doc to .docx")
-                return []
+                raise FileLoadError("could not convert .doc to .docx")
             try:
                 if ctx:
                     ctx.set_phase("Parsing converted DOCX")
@@ -900,6 +1125,7 @@ class LocalFileSystemSource(DataSource):
                         lambda: split_docx_into_heading_documents(
                             docx_path, ctx,
                             heading_store=get_heading_store(),
+                            heading_store_key=str(file_path),
                             excluded_embed_metadata_keys=EXCLUDED_EMBED_METADATA_KEYS,
                             excluded_llm_metadata_keys=EXCLUDED_LLM_METADATA_KEYS,
                         ),
@@ -907,14 +1133,15 @@ class LocalFileSystemSource(DataSource):
                         default=None,
                     )
                     if result is None:
-                        logger.warning(
-                            f"DOCX processing timed out after {remaining:.0f}s: {docx_path}"
+                        raise FileProcessingTimeoutError(
+                            f"DOCX processing timed out after {remaining:.0f}s"
                         )
-                    docs = result if result is not None else []
+                    docs = result
                 else:
                     docs = split_docx_into_heading_documents(
                         docx_path, ctx,
                         heading_store=get_heading_store(),
+                        heading_store_key=str(file_path),
                         excluded_embed_metadata_keys=EXCLUDED_EMBED_METADATA_KEYS,
                         excluded_llm_metadata_keys=EXCLUDED_LLM_METADATA_KEYS,
                     )
@@ -926,9 +1153,9 @@ class LocalFileSystemSource(DataSource):
                         doc.metadata["source"] = str(file_path)
                 return docs
             finally:
-                # Clean up temp file
-                if docx_path.exists():
-                    docx_path.unlink()
+                # The whole private conversion directory goes: converted
+                # .docx, the copied .doc, and the LibreOffice profile.
+                cleanup_conversion_dir(docx_path.parent)
         else:
             reader = SimpleDirectoryReader(
                 input_files=[str(file_path)],
@@ -941,10 +1168,10 @@ class LocalFileSystemSource(DataSource):
                     default=None,
                 )
                 if result is None:
-                    logger.warning(
+                    raise FileProcessingTimeoutError(
                         f"load_data() timed out after {remaining:.0f}s"
                     )
-                docs = result if result is not None else []
+                docs = result
             else:
                 docs = reader.load_data()
             # Ensure dates are visible to LLM (remove from exclusion list)
@@ -993,6 +1220,9 @@ class MultiDirectoryDataSource(DataSource):
         self.config = config
         self.sources: list[LocalFileSystemSource] = []
         self.unavailable_dirs: list[DirectoryConfig] = []
+        # Roots whose contents were not fully enumerated this run, with the
+        # reason. Deletions under them are withheld (see unscanned_roots).
+        self._unavailable_reasons: dict[str, str] = {}
 
         for dir_config in config.directories:
             if not dir_config.enabled:
@@ -1006,18 +1236,65 @@ class MultiDirectoryDataSource(DataSource):
                 logger.info(f"Added directory source: {dir_config.path}")
             else:
                 self.unavailable_dirs.append(dir_config)
+                self._unavailable_reasons[str(dir_config.path.absolute())] = (
+                    source.scan_status.reason or "directory unavailable"
+                )
                 logger.warning(f"Directory unavailable, skipping: {dir_config.path}")
 
     def iter_files(self, tracked_files: dict[str, dict] | None = None) -> Iterator[FileInfo]:
         """Iterate over files from all available sources."""
+        for candidate in self.iter_candidates():
+            try:
+                yield self.file_info_for(candidate, tracked_files)
+            except (OSError, TimeoutError):
+                continue
+
+    def iter_candidates(self) -> Iterator[FileCandidate]:
+        """Stat-only candidates from all available sources."""
         seen_paths: set[str] = set()
 
         for source in self.sources:
-            for file_info in source.iter_files(tracked_files=tracked_files):
+            for candidate in source.iter_candidates():
                 # Deduplicate in case of overlapping mounts
-                if file_info.path not in seen_paths:
-                    seen_paths.add(file_info.path)
-                    yield file_info
+                if candidate.path not in seen_paths:
+                    seen_paths.add(candidate.path)
+                    yield candidate
+
+    def file_info_for(
+        self,
+        candidate: FileCandidate,
+        tracked_files: dict[str, dict] | None = None,
+    ) -> FileInfo:
+        """Full FileInfo via the source that owns the candidate."""
+        for source in self.sources:
+            if candidate.source_dir == str(source.base_dir.absolute()):
+                return source.file_info_for(candidate, tracked_files)
+
+        # Fallback: use first source (shouldn't happen normally)
+        if self.sources:
+            return self.sources[0].file_info_for(candidate, tracked_files)
+
+        raise ValueError(f"No source available for file: {candidate.path}")
+
+    def unscanned_roots(self) -> dict[str, str]:
+        """Directory roots that were not fully enumerated, mapped to the reason.
+
+        A root lands here when it was unavailable at startup or when its walk
+        stalled or could not be listed; a subdirectory lands here when the walk
+        could not list it. Callers must not prune tracked files under any of
+        them.
+        """
+        roots = dict(self._unavailable_reasons)
+        for source in self.sources:
+            roots.update(source.unscanned_roots())
+        return roots
+
+    def unreadable_paths(self) -> set[str]:
+        """Files that exist but could not be stat'd or hashed during this scan."""
+        paths: set[str] = set()
+        for source in self.sources:
+            paths |= source.scan_status.unreadable
+        return paths
 
     def load_file(
         self,
@@ -1241,9 +1518,15 @@ def build_bm25_index(index, storage_dir: Path) -> None:
         seen_files.add(file_path)
 
         tokens = tokenize_filename(file_name)
+        node_metadata = {"file_name": file_name, "file_path": file_path}
+        # Revision metadata, so filename matches can be deduped per document
+        # and superseded revisions dropped from the matched-files list.
+        node_metadata.update(
+            {key: metadata[key] for key in ("doc_group", "superseded") if key in metadata}
+        )
         filename_nodes.append(TextNode(
             text=" ".join(tokens),
-            metadata={"file_name": file_name, "file_path": file_path},
+            metadata=node_metadata,
             id_=f"bm25_{file_path}"
         ))
 
@@ -1313,6 +1596,22 @@ def calculate_optimal_batch_size(
         return min(batch_size, num_files)
 
 
+@dataclass
+class LoadOutcome:
+    """Result of attempting to load one file.
+
+    ``failed`` separates "extracted nothing" from "could not be read". An empty
+    but successful load is a final answer and gets a state row (with no doc ids)
+    so the file is not retried until it changes; a failure gets none, so the
+    next run tries again.
+    """
+
+    file_info: FileInfo
+    docs: list[Any] = field(default_factory=list)
+    failed: bool = False
+
+
+
 def load_files_parallel(
     files: list[FileInfo],
     data_source: DataSource,
@@ -1322,7 +1621,7 @@ def load_files_parallel(
     per_file_timeout: float = 300,
     heartbeat_interval: float = 2.0,
     abort_ctl: "GracefulAbort | None" = None,
-) -> dict[str, tuple[FileInfo, list[Any]]]:
+) -> dict[str, LoadOutcome]:
     """Load files in parallel using ThreadPoolExecutor.
 
     Args:
@@ -1336,11 +1635,13 @@ def load_files_parallel(
         abort_ctl: Optional GracefulAbort instance for Ctrl-C handling
 
     Returns:
-        Dict mapping file path to (FileInfo, list[LlamaIndexDocument])
+        Dict mapping file path to :class:`LoadOutcome`. Every attempted file is
+        present, including ones that extracted no text and ones that failed -
+        the caller needs both to decide whether to record state.
     """
-    file_docs = {}
+    file_docs: dict[str, LoadOutcome] = {}
 
-    def load_single_file(file_info: FileInfo):
+    def load_single_file(file_info: FileInfo) -> LoadOutcome:
         """Load a single file (executed in thread pool)."""
         try:
             with FileProcessingContext(
@@ -1351,13 +1652,13 @@ def load_files_parallel(
             ) as ctx:
                 ctx.set_phase("Loading file")
                 docs = data_source.load_file(file_info, ctx)
-                return file_info, docs
+                return LoadOutcome(file_info=file_info, docs=docs)
         except FileProcessingTimeoutError as e:
             logger.error(f"Timeout loading {file_info.path}: {e}")
-            return file_info, []
+            return LoadOutcome(file_info=file_info, failed=True)
         except Exception as e:
             logger.error(f"Error loading {file_info.path}: {e}")
-            return file_info, []
+            return LoadOutcome(file_info=file_info, failed=True)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all file loading tasks
@@ -1375,11 +1676,11 @@ def load_files_parallel(
 
             file_info = future_to_file[future]
             try:
-                result_file_info, docs = future.result(timeout=per_file_timeout + 10)
-                if docs:  # Only add if we got documents
-                    file_docs[result_file_info.path] = (result_file_info, docs)
+                outcome = future.result(timeout=per_file_timeout + 10)
+                file_docs[outcome.file_info.path] = outcome
             except Exception as e:
                 logger.error(f"Error retrieving result for {file_info.path}: {e}")
+                file_docs[file_info.path] = LoadOutcome(file_info=file_info, failed=True)
             finally:
                 ui.progress_update()
 
@@ -1389,7 +1690,6 @@ def load_files_parallel(
 def build_index(
     download_only: bool = False,
     config_path: Path | None = None,
-    model_cache_dir: Path | None = None,
     verbose: bool = False,
 ) -> None:
     """Build and persist the vector index incrementally."""
@@ -1407,9 +1707,6 @@ def build_index(
         RETRIEVAL_EMBED_MODEL_NAME = cfg["retrieval"]["embed_model_name"]
         RETRIEVAL_RERANK_MODEL_NAME = cfg["retrieval"]["rerank_model_name"]
 
-    # Override model cache dir if specified via CLI
-    if model_cache_dir:
-        RETRIEVAL_MODEL_CACHE_DIR = model_cache_dir
 
     # Read offline setting from config; force online when downloading models
     offline = False if download_only else _config["retrieval"].get("offline", False)
@@ -1494,22 +1791,93 @@ def build_index(
         new_count = 0
         modified_count = 0
 
+        # Phase 1: enumerate cheaply (stat only), so revision grouping can
+        # discard files before they cost a hash - skipped files never get a
+        # state row, so no mtime fast path would save them. A file that fails
+        # either phase is recorded as unreadable so its deletion is withheld.
         ui.step_start("Scanning for changes")
         scan_count = 0
-        for file_info in data_source.iter_files(tracked_files=tracked_files):
+        candidates: list[FileCandidate] = []
+        for candidate in data_source.iter_candidates():
             if abort_ctl.abort_requested:
                 break
             scan_count += 1
             if scan_count % 100 == 0:
                 ui.step_update(f"Scanning for changes ({scan_count:,} files)")
+            candidates.append(candidate)
+
+        if abort_ctl.abort_requested:
+            ui.step_done("interrupted")
+            abort_ctl.uninstall()
+            ui.print(f"{ui.YELLOW}Interrupted during scan. No changes made.{ui.RESET}")
+            return
+
+        revision_policy = revisions.RevisionPolicy.from_config(_config)
+        grouping = revisions.partition(
+            [(c.path, c.mtime) for c in candidates], revision_policy
+        )
+        for path, pattern in sorted(grouping.review_copies.items()):
+            logger.info("Skipping review copy %s (matched %r)", path, pattern)
+        if not revision_policy.index_superseded:
+            for path in sorted(grouping.superseded):
+                group = grouping.group_of.get(path, "")
+                logger.info(
+                    "Skipping superseded revision %s (latest in group: %s)",
+                    path,
+                    grouping.latest_of_group.get(group, "?"),
+                )
+        skipped_superseded = (
+            0 if revision_policy.index_superseded else len(grouping.superseded)
+        )
+
+        # Files whose chunks carry a superseded stamp from a previous run.
+        # Comparing the stamp against this scan's verdict lets flag flips
+        # (index_superseded toggled, a newer sibling arriving or vanishing,
+        # versioning disabled) propagate without a state-schema change.
+        currently_flagged: set[str] = set()
+        for doc in index.docstore.docs.values():
+            metadata = doc.metadata or {}
+            if metadata.get("superseded") == "true" and metadata.get("file_path"):
+                currently_flagged.add(metadata["file_path"])
+
+        # Phase 2: hash only the keepers.
+        kept = set(grouping.keep)
+        hashed_count = 0
+        for candidate in candidates:
+            if abort_ctl.abort_requested:
+                break
+            if candidate.path not in kept:
+                continue
+            hashed_count += 1
+            if hashed_count % 100 == 0:
+                ui.step_update(
+                    f"Scanning for changes ({hashed_count:,}/{len(kept):,} files)"
+                )
+            try:
+                file_info = data_source.file_info_for(candidate, tracked_files)
+            except (OSError, TimeoutError):
+                continue  # recorded as unreadable; its deletion is withheld
             found_files.add(file_info.path)
             existing_state = tracked_files.get(file_info.path)
 
             if existing_state:
+                # Say why. A file that keeps reappearing here with no reason a
+                # human recognises is the signature of an indexing bug, and
+                # without this line there is nothing to go on.
                 if existing_state["hash"] != file_info.hash:
+                    reason = "content changed"
+                elif (file_info.path in grouping.superseded) != (
+                    file_info.path in currently_flagged
+                ):
+                    reason = "revision status changed"
+                else:
+                    reason = ""
+                if reason:
+                    logger.info("Reprocessing %s: %s", file_info.path, reason)
                     modified_count += 1
                     files_to_process.append(file_info)
             else:
+                logger.debug("Indexing new file %s", file_info.path)
                 new_count += 1
                 files_to_process.append(file_info)
 
@@ -1519,8 +1887,30 @@ def build_index(
             ui.print(f"{ui.YELLOW}Interrupted during scan. No changes made.{ui.RESET}")
             return
 
-        # Identify Deleted Files
-        deleted_files = set(tracked_files.keys()) - found_files
+        # Identify Deleted Files. A path missing from the scan is only deleted
+        # if the scan could actually see where it lives; otherwise a stalled
+        # mount would wipe the whole tree from the index and force a full
+        # re-index on the next run.
+        missing = set(tracked_files.keys()) - found_files
+        unreadable = data_source.unreadable_paths()
+        unscanned = data_source.unscanned_roots()
+        withheld: dict[str, str] = {}
+        for path in missing:
+            if path in unreadable:
+                withheld[path] = "could not be read during this scan"
+                continue
+            root = _owning_root(path, unscanned)
+            if root is not None:
+                withheld[path] = f"{root} was not fully scanned ({unscanned[root]})"
+        deleted_files = missing - withheld.keys()
+
+        if withheld:
+            reasons = sorted(set(withheld.values()))
+            logger.warning(
+                "Keeping %d indexed file(s) that this scan did not see: %s",
+                len(withheld),
+                "; ".join(reasons),
+            )
 
         # Build summary suffix
         parts = []
@@ -1530,6 +1920,12 @@ def build_index(
             parts.append(f"{modified_count} modified")
         if deleted_files:
             parts.append(f"{len(deleted_files)} deleted")
+        if withheld:
+            parts.append(f"{len(withheld)} unseen (kept)")
+        if skipped_superseded:
+            parts.append(f"{skipped_superseded} superseded (skipped)")
+        if grouping.review_copies:
+            parts.append(f"{len(grouping.review_copies)} review copies (skipped)")
         ui.step_done(", ".join(parts) if parts else "no changes")
 
         # Process deletions
@@ -1548,29 +1944,26 @@ def build_index(
             return
 
         # Process New/Modified Files
+        empty_files: list[str] = []
+        failed_files: list[str] = []
         if files_to_process:
-            # Get configuration
-            timeout_enabled = cfgload.get("indexing.timeout.enabled", True)
-            per_file_timeout = cfgload.get("indexing.timeout.per_file_seconds", 300)
-            heartbeat_interval = cfgload.get("indexing.timeout.heartbeat_interval_seconds", 2)
+            # Get configuration (0 disables the per-file timeout)
+            per_file_timeout = cfgload.get("indexing.per_file_seconds")
+            timeout_enabled = bool(per_file_timeout)
+            heartbeat_interval = _HEARTBEAT_INTERVAL_SECONDS
 
             # Checkpointing configuration (controls how often we persist to disk)
-            checkpoint_interval_files = cfgload.get("indexing.checkpoint_interval_files", 500)
-            checkpoint_interval_seconds = cfgload.get("indexing.checkpoint_interval_seconds", 300)
+            checkpoint_interval_files = cfgload.get("indexing.checkpoint_interval_files")
+            checkpoint_interval_seconds = cfgload.get("indexing.checkpoint_interval_seconds")
 
-            # Batch sizing (controls how many files are loaded/embedded together)
-            configured_batch_size = cfgload.get("indexing.batch_size", 200)
-            enable_adaptive_batching = cfgload.get("indexing.enable_adaptive_batching", True)
-            max_memory_mb = cfgload.get("indexing.max_memory_mb", 2048)
-
-            if enable_adaptive_batching:
-                optimal_batch_size = calculate_optimal_batch_size(
-                    num_files=len(files_to_process),
-                    max_memory_mb=max_memory_mb
-                )
-                batch_size = min(configured_batch_size, optimal_batch_size)
-            else:
-                batch_size = configured_batch_size
+            # Batch sizing: the configured size is an upper bound; the adaptive
+            # sizer shrinks it to fit the memory budget.
+            configured_batch_size = cfgload.get("indexing.batch_size")
+            optimal_batch_size = calculate_optimal_batch_size(
+                num_files=len(files_to_process),
+                max_memory_mb=_MAX_MEMORY_MB,
+            )
+            batch_size = min(configured_batch_size, optimal_batch_size)
 
             # Delete old versions of modified files
             ui.step_start("Removing old versions of modified files")
@@ -1591,9 +1984,8 @@ def build_index(
 
             ui.progress_start(total_files, desc="Processing files", unit="file")
 
-            # Get parallel loading configuration
-            max_workers = cfgload.get("indexing.parallel_workers", 4)
-            enable_parallel = cfgload.get("indexing.enable_parallel_loading", True)
+            # Parallel loading configuration (1 = serial)
+            max_workers = max(1, int(cfgload.get("indexing.parallel_workers")))
 
             batch_num = 0
             total_batches = (total_files + batch_size - 1) // batch_size
@@ -1606,10 +1998,9 @@ def build_index(
 
                 # Load files in this batch
                 accumulated_docs = []
-                doc_to_file_mapping = {}
                 file_doc_ids = {}
 
-                workers = max_workers if enable_parallel else 1
+                workers = max_workers
                 file_docs = load_files_parallel(
                     batch,
                     data_source,
@@ -1621,11 +2012,21 @@ def build_index(
                     abort_ctl=abort_ctl,
                 )
 
-                for file_path, (file_info, docs) in file_docs.items():
+                for file_path, outcome in file_docs.items():
                     file_doc_ids[file_path] = []
-                    for doc in docs:
+                    group = grouping.group_of.get(file_path)
+                    doc_id = grouping.doc_id_of.get(file_path)
+                    superseded = file_path in grouping.superseded
+                    for doc in outcome.docs:
+                        if group:
+                            doc.metadata["doc_group"] = group
+                        if doc_id:
+                            doc.metadata["doc_id"] = doc_id
+                        if superseded:
+                            # Stored as a string: node metadata is flattened
+                            # into the BM25 corpus and the docstore.
+                            doc.metadata["superseded"] = "true"
                         accumulated_docs.append(doc)
-                        doc_to_file_mapping[doc.doc_id] = file_info
                         file_doc_ids[file_path].append(doc.doc_id)
 
                 # Batch embedding
@@ -1651,12 +2052,20 @@ def build_index(
                     index.insert_nodes(nodes)
                     ui.progress_substep_done()
 
-                # Batch update state
+                # Batch update state. A file that yielded no documents still
+                # gets a row (with no doc ids): that is a final answer for this
+                # content, and skipping it would make the file look new on every
+                # subsequent run and be reprocessed forever. Failures get no row
+                # so that they are retried.
                 state_updates = []
-                for file_path, doc_ids in file_doc_ids.items():
-                    if doc_ids:
-                        file_info = doc_to_file_mapping[doc_ids[0]]
-                        state_updates.append((file_info, doc_ids))
+                for file_path, outcome in file_docs.items():
+                    if outcome.failed:
+                        failed_files.append(file_path)
+                        continue
+                    doc_ids = file_doc_ids.get(file_path, [])
+                    if not doc_ids:
+                        empty_files.append(file_path)
+                    state_updates.append((outcome.file_info, doc_ids))
 
                 if state_updates:
                     ingestion_state.update_file_states_batch(state_updates)
@@ -1709,36 +2118,34 @@ def build_index(
         abort_ctl.uninstall()
         ui.success(f"\nIndexing complete. {len(files_to_process)} files processed.")
 
+        if empty_files:
+            logger.info("Files that yielded no text: %s", ", ".join(empty_files[:20]))
+            ui.print(
+                f"{ui.YELLOW}{len(empty_files)} file(s) contained no extractable "
+                f"text and were recorded as empty; they will not be retried until "
+                f"they change. Re-run with --verbose to list them.{ui.RESET}"
+            )
+        if failed_files:
+            logger.warning("Files that failed to load: %s", ", ".join(failed_files[:20]))
+            ui.print(
+                f"{ui.YELLOW}{len(failed_files)} file(s) could not be read and will "
+                f"be retried on the next run. Re-run with --verbose to list them.{ui.RESET}"
+            )
+        if withheld:
+            ui.print(
+                f"{ui.YELLOW}{len(withheld)} indexed file(s) were kept even though "
+                f"this scan did not see them, because the scan was incomplete. They "
+                f"were NOT removed from the index. Re-run with --verbose to see why.{ui.RESET}"
+            )
+        if skipped_superseded or grouping.review_copies:
+            details = []
+            if skipped_superseded:
+                details.append(f"{skipped_superseded} superseded revision(s)")
+            if grouping.review_copies:
+                details.append(f"{len(grouping.review_copies)} review copy file(s)")
+            ui.print(
+                f"{ui.YELLOW}{' and '.join(details)} were not indexed. Re-run with "
+                f"--verbose to list them; see indexing.versioning in config.yaml "
+                f"to adjust.{ui.RESET}"
+            )
 
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
-    parser = argparse.ArgumentParser(description="Build the document index")
-    parser.add_argument(
-        "--download-models",
-        action="store_true",
-        help="Download the retrieval models and exit",
-    )
-    parser.add_argument(
-        "--config",
-        type=str,
-        help="Path to config.yaml (overrides auto-discovery)",
-    )
-    parser.add_argument(
-        "--model-cache-dir",
-        type=str,
-        help="Directory to download/cache models (overrides config)",
-    )
-    args = parser.parse_args()
-
-    try:
-        build_index(
-            download_only=args.download_models,
-            config_path=Path(args.config) if args.config else None,
-            model_cache_dir=Path(args.model_cache_dir) if args.model_cache_dir else None,
-        )
-    except Exception as e:
-        logger.error(f"Indexing failed: {e}", exc_info=True)
-        raise

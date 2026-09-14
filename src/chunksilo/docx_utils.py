@@ -48,25 +48,35 @@ def _is_heading_style(style_name: str) -> bool:
 
 def _get_doc_temp_dir() -> Path:
     """Get the temporary directory for .doc conversion, creating it if needed."""
-    storage_dir = Path(cfgload.get("storage.storage_dir", "./storage"))
+    storage_dir = Path(cfgload.get("storage.storage_dir"))
     temp_dir = storage_dir / "doc_temp"
     temp_dir.mkdir(parents=True, exist_ok=True)
     return temp_dir
 
 
-def _convert_doc_to_docx(doc_path: Path, timeout: float = 60) -> Path | None:
+def _convert_doc_to_docx(doc_path: Path, timeout: float = 90) -> Path | None:
     """Convert a .doc file to .docx using LibreOffice.
+
+    Each conversion gets a private directory under storage: parallel workers
+    converting two files with the same stem must never share an output path,
+    or one file's content would be indexed under the other file's path. The
+    source is copied in first and the copy converted, so LibreOffice never
+    opens - or drops a ``.~lock.*#`` file next to - anything inside an indexed
+    directory, and its user profile is pointed into the same private directory
+    rather than at ``$HOME``.
 
     Args:
         doc_path: Path to .doc file
         timeout: Timeout in seconds for conversion process
 
     Returns:
-        Path to temporary .docx file, or None if conversion fails.
-        Caller is responsible for cleaning up the temp file.
+        Path to the converted .docx inside a private work directory, or None
+        if conversion fails. The caller cleans up with
+        :func:`cleanup_conversion_dir` on the returned path's parent.
     """
     import shutil
     import subprocess
+    import tempfile
 
     # Find LibreOffice executable
     soffice_paths = [
@@ -86,23 +96,35 @@ def _convert_doc_to_docx(doc_path: Path, timeout: float = 60) -> Path | None:
         logger.warning(f"LibreOffice not found. Cannot convert {doc_path}")
         return None
 
-    # Use storage directory for temp files (more reliable space than /tmp)
-    temp_dir = _get_doc_temp_dir()
+    # Private per-conversion directory under storage (more reliable space
+    # than /tmp, and no filename collisions between parallel workers).
+    work_dir = Path(tempfile.mkdtemp(prefix="conv-", dir=_get_doc_temp_dir()))
 
     try:
+        local_copy = work_dir / doc_path.name
+        shutil.copyfile(doc_path, local_copy)
+
         result = subprocess.run(
-            [soffice, "--headless", "--convert-to", "docx",
-             "--outdir", str(temp_dir), str(doc_path)],
+            [
+                soffice,
+                "--headless",
+                # A separate profile per conversion: soffice instances sharing
+                # one profile serialize on its lock, and a profile under $HOME
+                # is a write outside the storage directory.
+                f"-env:UserInstallation={work_dir.joinpath('lo-profile').as_uri()}",
+                "--convert-to", "docx",
+                "--outdir", str(work_dir),
+                str(local_copy),
+            ],
             capture_output=True,
             timeout=timeout,
         )
         if result.returncode != 0:
             logger.warning(f"LibreOffice conversion failed for {doc_path}: {result.stderr}")
+            cleanup_conversion_dir(work_dir)
             return None
 
-        # Find the converted file
-        docx_name = doc_path.stem + ".docx"
-        docx_path = temp_dir / docx_name
+        docx_path = work_dir / (doc_path.stem + ".docx")
         if docx_path.exists():
             return docx_path
 
@@ -112,7 +134,15 @@ def _convert_doc_to_docx(doc_path: Path, timeout: float = 60) -> Path | None:
     except Exception as e:
         logger.warning(f"Error converting {doc_path}: {e}")
 
+    cleanup_conversion_dir(work_dir)
     return None
+
+
+def cleanup_conversion_dir(work_dir: Path) -> None:
+    """Remove a private conversion directory and everything in it."""
+    import shutil
+
+    shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def split_docx_into_heading_documents(
@@ -120,6 +150,7 @@ def split_docx_into_heading_documents(
     ctx: FileProcessingContext | None = None,
     *,
     heading_store: Any = None,
+    heading_store_key: str | None = None,
     excluded_embed_metadata_keys: list[str] | None = None,
     excluded_llm_metadata_keys: list[str] | None = None,
 ) -> list[LlamaIndexDocument]:
@@ -129,6 +160,9 @@ def split_docx_into_heading_documents(
         docx_path: Path to DOCX file
         ctx: Optional processing context for progress updates and timeout
         heading_store: HeadingStore instance for persisting heading metadata
+        heading_store_key: Path to store headings under; defaults to docx_path.
+            A converted .doc is parsed from a temp copy but looked up at query
+            time under its original path, so the caller must pass that path.
         excluded_embed_metadata_keys: Keys to exclude from embedding text
         excluded_llm_metadata_keys: Keys to exclude from LLM context
     """
@@ -188,7 +222,7 @@ def split_docx_into_heading_documents(
     if heading_store is not None:
         if ctx:
             ctx.set_phase("Storing heading metadata")
-        heading_store.set_headings(str(docx_path), all_headings)
+        heading_store.set_headings(heading_store_key or str(docx_path), all_headings)
 
     # Second pass: Split by heading (existing logic)
     if ctx:

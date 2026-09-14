@@ -1,14 +1,14 @@
 # ChunkSilo configuration
-# See all options and defaults: chunksilo --dump-defaults
+# All options and their defaults: chunksilo --dump-defaults
 
-# Indexing settings - used by chunksilo --build-index
+# What to index - used by: chunksilo --build-index
 indexing:
   directories:
     - "./data"
   # chunk_size: 512
   # chunk_overlap: 50
 
-  ## Per-directory defaults (applied to all directories unless overridden)
+  ## Per-directory defaults (applied to every directory unless overridden per entry)
   # defaults:
   #   include: ["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx", "**/*.doc"]
   #   exclude:
@@ -26,26 +26,30 @@ indexing:
   #   recursive: true
   #   case_sensitive: false
 
-  ## Performance tuning
-  # batch_size: 200
-  # parallel_workers: 8
-  # enable_parallel_loading: true
-  # enable_adaptive_batching: true
-  # max_memory_mb: 2048
+  ## Performance
+  # batch_size: 200               # embedding batch size (adapts down under memory pressure)
+  # parallel_workers: 8           # 1 = load files serially
   # checkpoint_interval_files: 500
   # checkpoint_interval_seconds: 300
 
-  ## Timeout protection
-  # timeout:
-  #   enabled: true
-  #   per_file_seconds: 300
-  #   doc_conversion_seconds: 90
-  #   heartbeat_interval_seconds: 2
+  ## Timeouts, in seconds
+  # per_file_seconds: 300         # give up on a single file after this long (0 disables)
+  # scan_item_seconds: 30         # stat/hash/walk operations while scanning
 
-  ## Logging
-  # logging:
-  #   log_slow_files: true
-  #   slow_file_threshold_seconds: 30
+  ## Diagnostics
+  # slow_file_threshold_seconds: 30   # warn when one file takes longer than this
+
+  ## Revision handling: group ad-hoc document revisions (".../PB3/Spec.docx",
+  ## "Spec PB3.docx", "Spec_v2.pdf") and index only the newest per group,
+  ## by file modification time. Review-comment copies are never indexed.
+  # versioning:
+  #   enabled: true
+  #   doc_id_patterns: []           # e.g. ['\b(DOC-\d{5})\b'] - files sharing an
+  #                                 # extracted document ID group together
+  #   review_copy_patterns: ['\breview\b']  # replaces the defaults (review, comments,
+  #                                 # kommentarer, granskning, copy, kopia); [] disables
+  #   extra_revision_tokens: []     # extra token regex fragments, e.g. ['draft\d+']
+  #   index_superseded: false       # index older revisions too, demoted in results
 
 # Confluence integration (optional) - enables live search of Confluence pages
 # Installed by default; set the values below to enable.
@@ -95,9 +99,30 @@ retrieval:
   # score_threshold: 0.1
   # recency_boost: 0.3
   # recency_half_life_days: 365
-  # bm25_similarity_top_k: 10
+  # max_chunks_per_doc: 2         # cap per document in the final results (0 disables)
 
 # Storage paths
 storage:
   storage_dir: "./storage"
   model_cache_dir: "./models"
+
+# MCP transport. stdio (the default) is started by the MCP client itself.
+# streamable-http listens on host:port for remote clients. It performs no
+# authentication of its own, so keep the loopback bind unless an
+# authenticating reverse proxy (TLS termination, login) sits in front of it.
+# server:
+#   transport: "stdio"             # stdio | streamable-http
+#   host: "127.0.0.1"
+#   port: 8400
+#   public_url: "https://search.example.com"   # the URL the proxy serves this instance on
+#   allowed_hosts: []              # further Host values to accept ("host:*" = any port)
+#   allowed_origins: []            # further Origin values to accept
+#   authorization_servers: []      # e.g. ["https://keycloak.example.com/realms/docs"]
+
+# Network shares (optional): present files indexed from a mounted share at the
+# share's own location - an smb:// URI plus the Windows UNC path - instead of
+# the local mount path, so clients on other machines get a location they can
+# open. Longest matching prefix wins; files under no prefix keep file:// URIs.
+# shares:
+#   - prefix: "/mnt/docs"          # local mount point as listed in indexing.directories
+#     unc: "//nas/docs"            # the same tree as clients reach it

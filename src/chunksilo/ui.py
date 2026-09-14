@@ -510,9 +510,7 @@ class FileProcessingContext:
         # Warn about slow files (warnings still pass through)
         if self._start_time:
             duration = time.time() - self._start_time
-            slow_threshold = cfgload.get(
-                "indexing.logging.slow_file_threshold_seconds", 30
-            )
+            slow_threshold = cfgload.get("indexing.slow_file_threshold_seconds")
             if duration > slow_threshold:
                 logger.warning(
                     f"Slow file processing: {self.file_path} took {duration:.1f}s"
